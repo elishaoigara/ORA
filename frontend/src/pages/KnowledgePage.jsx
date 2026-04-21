@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react"
-
-const API = "http://localhost:8000"
+import API from "../api"
 
 export default function KnowledgePage() {
   const [docs, setDocs] = useState([])

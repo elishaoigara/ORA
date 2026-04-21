@@ -1,4 +1,5 @@
 ﻿import { useState, useEffect } from "react"
+import API from "../api"
 
 const nav = [
   { id: "dashboard", icon: "◈", label: "Dashboard" },
@@ -25,7 +26,7 @@ export default function Sidebar({ current, onNavigate }) {
   useEffect(() => {
     const check = async () => {
       try {
-        await fetch("http://localhost:8000/api/health")
+        await fetch(`${API}/api/health`)
         setOnline(true)
       } catch {
         setOnline(false)

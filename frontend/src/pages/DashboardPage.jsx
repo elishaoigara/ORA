@@ -1,6 +1,5 @@
 ﻿import { useState, useEffect } from "react"
-
-const API = "http://localhost:8000"
+import API from "../api"
 
 function Meter({ label, value, unit = "%" }) {
   const color = value > 80 ? "var(--red)" : value > 60 ? "var(--amber)" : "var(--green)"
@@ -80,7 +79,7 @@ export default function DashboardPage() {
             <>
               <Meter label="CPU_LOAD" value={status.cpu} />
               <Meter label="RAM_USED" value={status.ram} />
-              <Meter label="DISK_FREE" value={Math.round((status.disk_free_gb / 100) * 100)} unit="GB" />
+              <Meter label="DISK_FREE" value={Math.round(status.disk_free_gb)} unit="GB" />
               <div style={{ fontFamily: "Share Tech Mono, monospace", fontSize: "0.65rem", color: "var(--text3)", marginTop: 8 }}>
                 LAST_SYNC: {status.last_updated ? new Date(status.last_updated).toLocaleTimeString() : "—"}
               </div>
