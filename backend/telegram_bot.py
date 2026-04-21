@@ -96,6 +96,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/alerts — recent alerts\n"
         "/ack [id] — acknowledge alert\n"
         "/task — manage tasks\n"
+        "/brief — morning briefing\n"
         "/memory — what ORA remembers\n"
         "/help — show commands\n\n"
         "Or just talk to me normally.",
@@ -136,7 +137,10 @@ async def cmd_ack(update: Update, context: ContextTypes.DEFAULT_TYPE):
         alert_id = int(context.args[0])
         feedback = " ".join(context.args[1:]) if len(context.args) > 1 else None
         acknowledge_alert(alert_id, feedback)
-        await update.message.reply_text(f"✅ Alert `{alert_id}` acknowledged.", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"✅ Alert `{alert_id}` acknowledged.",
+            parse_mode="Markdown"
+        )
     except Exception:
         await update.message.reply_text("Usage: /ack [id] [optional note]")
 
@@ -166,6 +170,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/task list — see pending tasks\n"
         "/task done [id] — complete task\n"
         "/task delete [id] — delete task\n"
+        "/brief — morning briefing on demand\n"
         "/memory — ORA profile\n"
         "/help — this message",
         parse_mode="Markdown"
@@ -239,6 +244,16 @@ async def cmd_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -----------------------------
+# BRIEFING
+# -----------------------------
+async def cmd_brief(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📋 Generating your briefing...")
+    from briefing import generate_briefing
+    briefing = generate_briefing()
+    await update.message.reply_text(briefing, parse_mode="Markdown")
+
+
+# -----------------------------
 # AI CONVERSATION
 # -----------------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -294,6 +309,7 @@ def run_telegram_bot():
     app.add_handler(CommandHandler("memory", cmd_memory))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("task", cmd_task))
+    app.add_handler(CommandHandler("brief", cmd_brief))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("[ORA] Telegram bot running...")
     app.run_polling()

@@ -10,6 +10,8 @@ from action_engine import execute
 from telegram_bot import notify, run_telegram_bot, check_due_tasks
 from memory.profile import init_profile
 from memory.events import log_memory_event
+from briefing import send_morning_briefing
+from scheduler import start_scheduler
 
 
 def collect_data():
@@ -72,8 +74,23 @@ def main():
     init_profile()
     log_memory_event("system", "ORA started", importance=6)
 
+    # Start API
     safe_thread(start_api, "API")
+
+    # Start Telegram bot
     safe_thread(run_telegram_bot, "TELEGRAM")
+
+    # Start scheduler with jobs
+    jobs = [
+        {
+            "hour": 7,
+            "minute": 0,
+            "fn": send_morning_briefing,
+            "name": "morning_briefing"
+        }
+    ]
+    start_scheduler(jobs)
+    print("[ORA] Scheduler started — morning briefing at 07:00")
 
     notify("👁 ORA is online. Good to see you, Elisha.")
 
