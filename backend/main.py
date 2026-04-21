@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import asyncio
 import psutil
 from datetime import datetime
 
@@ -22,7 +23,6 @@ def collect_data():
         return {
             "cpu_percent": psutil.cpu_percent(interval=1),
             "ram_percent": psutil.virtual_memory().percent,
-            # Fixed: use "/" (Linux root) instead of "C:/"
             "disk_free_gb": psutil.disk_usage("/").free / (1024 ** 3),
             "timestamp": datetime.now().isoformat()
         }
@@ -68,20 +68,28 @@ def run_cycle():
 
 
 # -----------------------------
-# SAFE THREAD WRAPPER
+# TELEGRAM BOT THREAD
+# Runs in its own thread with its own event loop
+# so it doesn't conflict with uvicorn's async loop
 # -----------------------------
-def safe_thread(target, name):
-    def wrapper():
-        while True:
-            try:
-                target()
-            except Exception as e:
-                print(f"[{name} ERROR] {e}")
-                time.sleep(5)
+def run_telegram_thread():
+    from config import TELEGRAM_BOT_TOKEN
+    if not TELEGRAM_BOT_TOKEN:
+        print("[TELEGRAM] No token set, skipping.")
+        return
 
-    t = threading.Thread(target=wrapper, daemon=True)
-    t.start()
-    return t
+    print("[TELEGRAM] Starting bot in dedicated thread...")
+
+    # Fresh event loop for this thread — critical on Render
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        from telegram_bot import run_telegram_bot
+        run_telegram_bot()
+    except Exception as e:
+        print(f"[TELEGRAM ERROR] {e}")
+        time.sleep(10)
 
 
 # -----------------------------
@@ -101,31 +109,9 @@ def start_intelligence_layer():
 
 
 # -----------------------------
-# BACKGROUND LOOP (runs in thread)
+# MONITORING LOOP
 # -----------------------------
-def run_background():
-    """
-    ORA's monitoring loop — runs as a daemon thread alongside the API.
-    On Render free tier this keeps the intelligence layer alive as long
-    as the web service is up.
-    """
-    # Init systems
-    init_db()
-    init_tasks_table()
-    init_profile()
-    log_memory_event("system", "ORA started", importance=6)
-
-    # Start intelligence layer (Telegram + scheduler)
-    try:
-        from telegram_bot import notify, run_telegram_bot
-        safe_thread(run_telegram_bot, "TELEGRAM")
-        notify("👁 ORA is online. Systems stable.")
-    except Exception as e:
-        print(f"[TELEGRAM INIT] Skipped: {e}")
-
-    start_intelligence_layer()
-
-    # Main monitoring loop
+def run_monitoring_loop():
     while True:
         try:
             run_cycle()
@@ -138,6 +124,21 @@ def run_background():
 # STARTUP — called by api.py lifespan
 # -----------------------------
 def startup():
-    t = threading.Thread(target=run_background, daemon=True)
-    t.start()
-    print("[ORA] Background thread started")
+    # Init DB and profile
+    init_db()
+    init_tasks_table()
+    init_profile()
+    log_memory_event("system", "ORA started", importance=6)
+
+    # Telegram in its own thread with its own event loop
+    t_telegram = threading.Thread(target=run_telegram_thread, daemon=True)
+    t_telegram.start()
+
+    # Intelligence scheduler
+    start_intelligence_layer()
+
+    # System monitoring loop
+    t_monitor = threading.Thread(target=run_monitoring_loop, daemon=True)
+    t_monitor.start()
+
+    print("[ORA] All systems started.")
