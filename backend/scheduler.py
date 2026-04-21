@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def run_scheduler(jobs):
@@ -13,37 +13,58 @@ def run_scheduler(jobs):
         "name": "morning_briefing"
     }
     """
+
     fired_today = set()
 
     print("[ORA Scheduler] Running...")
 
     while True:
-        now = datetime.now()
-        today_key = now.strftime("%Y-%m-%d")
+        try:
+            now = datetime.now()
+            today = now.strftime("%Y-%m-%d")
 
-        for job in jobs:
-            job_key = f"{today_key}_{job['name']}"
+            for job in jobs:
+                job_id = f"{today}_{job['name']}"
 
-            if (
-                now.hour == job["hour"]
-                and now.minute == job["minute"]
-                and job_key not in fired_today
-            ):
-                fired_today.add(job_key)
-                print(f"[Scheduler] Running job: {job['name']}")
-                try:
-                    job["fn"]()
-                except Exception as e:
-                    print(f"[Scheduler ERROR] {job['name']}: {e}")
+                # Create scheduled time
+                scheduled_time = now.replace(
+                    hour=job["hour"],
+                    minute=job["minute"],
+                    second=0,
+                    microsecond=0
+                )
 
-        # Clean up yesterday's fired jobs at midnight
-        if now.hour == 0 and now.minute == 0:
-            fired_today = set()
+                # Allow small window (±60 seconds)
+                time_diff = (now - scheduled_time).total_seconds()
 
-        time.sleep(30)  # check every 30 seconds
+                if 0 <= time_diff < 60:
+                    if job_id not in fired_today:
+                        fired_today.add(job_id)
 
+                        print(f"[Scheduler] Running: {job['name']}")
+
+                        try:
+                            job["fn"]()
+                        except Exception as e:
+                            print(f"[Scheduler ERROR] {job['name']}: {e}")
+
+            # Cleanup old entries (keep only today)
+            fired_today = {
+                jid for jid in fired_today
+                if jid.startswith(today)
+            }
+
+        except Exception as e:
+            print(f"[Scheduler LOOP ERROR] {e}")
+
+        time.sleep(20)  # more responsive than 30s
+        
 
 def start_scheduler(jobs):
-    t = threading.Thread(target=run_scheduler, args=(jobs,), daemon=True)
+    t = threading.Thread(
+        target=run_scheduler,
+        args=(jobs,),
+        daemon=True
+    )
     t.start()
     return t
