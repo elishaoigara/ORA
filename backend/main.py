@@ -4,8 +4,9 @@ import threading
 from datetime import datetime
 
 from config import LOOP_INTERVAL
-from database import init_db, log_event, log_alert
-from engine import run_rules
+from database import init_db, log_event
+from decision_engine import decide
+from action_engine import execute
 from telegram_bot import notify, run_telegram_bot
 from memory.profile import init_profile
 from memory.events import log_memory_event
@@ -19,17 +20,21 @@ def collect_data():
     }
 
 def run_cycle():
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ORA cycle...")
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ORA thinking...")
     data = collect_data()
     print(f"  CPU: {data['cpu_percent']}% | RAM: {data['ram_percent']}% | Disk: {data['disk_free_gb']:.1f}GB")
     log_event("system", data)
-    triggered = run_rules(data)
-    for rule_name, message, severity in triggered:
-        print(f"  ⚠️  [{severity.upper()}] {message}")
-        log_alert(rule_name, message, severity)
-        notify(message, is_alert=True)
-    if not triggered:
-        print("  ✅ All clear.")
+
+    context = {
+        "cpu": data["cpu_percent"],
+        "ram": data["ram_percent"],
+        "disk_free_gb": data["disk_free_gb"],
+        "input": "system check"
+    }
+    decision = decide(context)
+    print(f"  Reasoning: {', '.join(decision['reasoning'])}")
+    execute(decision)
+
 
 def start_api():
     import uvicorn
