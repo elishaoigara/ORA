@@ -6,26 +6,33 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from database import (
+# ========================
+# FIXED IMPORTS (RENDER SAFE)
+# ========================
+from backend.database import (
     get_recent_alerts, get_system_stats,
     acknowledge_alert, get_tasks,
     get_conversation_history, save_conversation
 )
 
-from memory.profile import get_all_profile
-from memory.events import get_recent_events
-from memory.preferences import get_preferences
+from backend.memory.profile import get_all_profile
+from backend.memory.events import get_recent_events, log_memory_event
+from backend.memory.preferences import get_preferences
 
-from context import build_system_prompt
-from knowledge import store_document, get_all_documents, delete_document, UPLOADS_PATH
+from backend.context import build_system_prompt
+from backend.knowledge import store_document, get_all_documents, delete_document, UPLOADS_PATH
 
-from memory.events import log_memory_event
-
-from groq import Groq
+# ========================
+# OPTIONAL IMPORT SAFETY
+# ========================
+try:
+    from groq import Groq
+except Exception:
+    Groq = None
 
 
 # ========================
-# ENVIRONMENT VARIABLES
+# ENV VARIABLES
 # ========================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
@@ -38,18 +45,19 @@ app = FastAPI()
 
 
 # ========================
-# CORS (PRODUCTION SAFE)
+# CORS CONFIG
 # ========================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[FRONTEND_URL],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 # ========================
-# STATIC FILES (UPLOADS)
+# STATIC FILES
 # ========================
 os.makedirs(UPLOADS_PATH, exist_ok=True)
 
@@ -172,7 +180,7 @@ def get_all_tasks():
 
 
 # ========================
-# CONVERSATION HISTORY
+# CONVERSATIONS
 # ========================
 @app.get("/api/conversations")
 def get_conversations():
@@ -181,7 +189,7 @@ def get_conversations():
 
 
 # ========================
-# CHAT (CORE ORA ENGINE)
+# CHAT ENGINE
 # ========================
 @app.post("/api/chat")
 async def chat(payload: dict):
@@ -193,8 +201,8 @@ async def chat(payload: dict):
     save_conversation("user", user_text)
     log_memory_event("conversation", user_text[:80], importance=4)
 
-    if not GROQ_API_KEY:
-        return {"reply": "GROQ_API_KEY not set."}
+    if not GROQ_API_KEY or Groq is None:
+        return {"reply": "Groq API not configured or missing dependency."}
 
     try:
         client = Groq(api_key=GROQ_API_KEY)
@@ -235,7 +243,7 @@ async def chat(payload: dict):
 
 
 # ========================
-# KNOWLEDGE UPLOAD SYSTEM
+# KNOWLEDGE UPLOAD
 # ========================
 @app.post("/api/knowledge/upload")
 async def upload_document(
