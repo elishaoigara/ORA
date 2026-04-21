@@ -18,6 +18,10 @@ from database import (
     acknowledge_alert,
     save_conversation,
     get_conversation_history,
+    add_task,
+    get_tasks,
+    complete_task,
+    delete_task,
 )
 from memory.events import log_memory_event
 from context import build_system_prompt
@@ -125,6 +129,42 @@ def run_telegram_bot():
     app.add_handler(CommandHandler("alerts", cmd_alerts))
     app.add_handler(CommandHandler("ack", cmd_ack))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("task", cmd_task))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("[ORA] Telegram bot running...")
     app.run_polling()
+
+async def cmd_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text("Task commands:\n/task add [title]\n/task list\n/task done [id]\n/task delete [id]")
+        return
+    sub = args[0].lower()
+    if sub == "add":
+        if len(args) < 2:
+            await update.message.reply_text("Usage: /task add [title]")
+            return
+        title = " ".join(args[1:])
+        add_task(title)
+        await update.message.reply_text(f"? Task added: {title}")
+    elif sub == "list":
+        tasks = get_tasks("pending")
+        if not tasks:
+            await update.message.reply_text("? No pending tasks.")
+            return
+        msg = "?? Pending Tasks:\n\n"
+        for t in tasks:
+            msg += f"[{t[0]}] {t[1]} ({t[2]})\n"
+        await update.message.reply_text(msg)
+    elif sub == "done":
+        try:
+            complete_task(int(args[1]))
+            await update.message.reply_text(f"? Task {args[1]} completed.")
+        except:
+            await update.message.reply_text("Usage: /task done [id]")
+    elif sub == "delete":
+        try:
+            delete_task(int(args[1]))
+            await update.message.reply_text(f"?? Task {args[1]} deleted.")
+        except:
+            await update.message.reply_text("Usage: /task delete [id]")

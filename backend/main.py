@@ -47,6 +47,8 @@ def main():
     print("=" * 40)
 
     init_db()
+    from database import init_tasks_table
+    init_tasks_table()
     init_profile()
     log_memory_event("system", "ORA started", importance=6)
 
