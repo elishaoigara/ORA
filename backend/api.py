@@ -1,14 +1,12 @@
 import os
-import ast
+import json
 import shutil
 
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-# ========================
-# FIXED IMPORTS (RENDER SAFE)
-# ========================
+# 🔥 SAFE IMPORTS (IMPORTANT FOR RENDER DEPLOY)
 from backend.database import (
     get_recent_alerts, get_system_stats,
     acknowledge_alert, get_tasks,
@@ -20,36 +18,35 @@ from backend.memory.events import get_recent_events, log_memory_event
 from backend.memory.preferences import get_preferences
 
 from backend.context import build_system_prompt
-from backend.knowledge import store_document, get_all_documents, delete_document, UPLOADS_PATH
+from backend.knowledge import (
+    store_document,
+    get_all_documents,
+    delete_document,
+    UPLOADS_PATH
+)
+
+from groq import Groq
+
 
 # ========================
-# OPTIONAL IMPORT SAFETY
-# ========================
-try:
-    from groq import Groq
-except Exception:
-    Groq = None
-
-
-# ========================
-# ENV VARIABLES
+# ENV
 # ========================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
 
 
 # ========================
-# FASTAPI APP
+# APP
 # ========================
-app = FastAPI()
+app = FastAPI(title="ORA Backend")
 
 
 # ========================
-# CORS CONFIG
+# CORS
 # ========================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
+    allow_origins=[FRONTEND_URL] if FRONTEND_URL != "*" else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -69,7 +66,7 @@ app.mount(
 
 
 # ========================
-# HEALTH CHECK
+# HEALTH
 # ========================
 @app.get("/api/health")
 def health():
@@ -77,7 +74,7 @@ def health():
 
 
 # ========================
-# SYSTEM STATUS
+# STATUS
 # ========================
 @app.get("/api/status")
 def get_status():
@@ -86,7 +83,10 @@ def get_status():
     if not row:
         return {"status": "warming_up"}
 
-    data = ast.literal_eval(row[0])
+    try:
+        data = json.loads(row[0])
+    except Exception:
+        data = {}
 
     return {
         "cpu": data.get("cpu_percent"),
@@ -100,8 +100,8 @@ def get_status():
 # ALERTS
 # ========================
 @app.get("/api/alerts")
-def get_alerts():
-    alerts = get_recent_alerts(20)
+def alerts():
+    data = get_recent_alerts(20)
 
     return [
         {
@@ -112,12 +112,12 @@ def get_alerts():
             "timestamp": a[4],
             "acknowledged": bool(a[5])
         }
-        for a in alerts
+        for a in data
     ]
 
 
 @app.post("/api/alerts/{alert_id}/ack")
-def ack_alert(alert_id: int):
+def ack(alert_id: int):
     acknowledge_alert(alert_id)
     return {"status": "acknowledged"}
 
@@ -126,13 +126,13 @@ def ack_alert(alert_id: int):
 # MEMORY
 # ========================
 @app.get("/api/memory/profile")
-def get_profile():
+def profile():
     return get_all_profile()
 
 
 @app.get("/api/memory/events")
-def get_events():
-    events = get_recent_events(limit=20)
+def events():
+    data = get_recent_events(limit=20)
 
     return [
         {
@@ -141,13 +141,13 @@ def get_events():
             "importance": e[3],
             "timestamp": e[4]
         }
-        for e in events
+        for e in data
     ]
 
 
 @app.get("/api/memory/preferences")
-def get_prefs():
-    prefs = get_preferences()
+def prefs():
+    data = get_preferences()
 
     return [
         {
@@ -156,7 +156,7 @@ def get_prefs():
             "value": p[2],
             "confidence": p[3]
         }
-        for p in prefs
+        for p in data
     ]
 
 
@@ -164,8 +164,8 @@ def get_prefs():
 # TASKS
 # ========================
 @app.get("/api/tasks")
-def get_all_tasks():
-    tasks = get_tasks("pending")
+def tasks():
+    data = get_tasks("pending")
 
     return [
         {
@@ -175,17 +175,8 @@ def get_all_tasks():
             "created_at": t[3],
             "due_at": t[4]
         }
-        for t in tasks
+        for t in data
     ]
-
-
-# ========================
-# CONVERSATIONS
-# ========================
-@app.get("/api/conversations")
-def get_conversations():
-    history = get_conversation_history(limit=50)
-    return [{"role": r, "content": c} for r, c in history]
 
 
 # ========================
@@ -201,8 +192,8 @@ async def chat(payload: dict):
     save_conversation("user", user_text)
     log_memory_event("conversation", user_text[:80], importance=4)
 
-    if not GROQ_API_KEY or Groq is None:
-        return {"reply": "Groq API not configured or missing dependency."}
+    if not GROQ_API_KEY:
+        return {"reply": "GROQ_API_KEY missing in environment."}
 
     try:
         client = Groq(api_key=GROQ_API_KEY)
@@ -246,36 +237,32 @@ async def chat(payload: dict):
 # KNOWLEDGE UPLOAD
 # ========================
 @app.post("/api/knowledge/upload")
-async def upload_document(
-    file: UploadFile = File(...),
-    tags: str = Form("")
-):
-    filename = file.filename
-    filepath = os.path.join(UPLOADS_PATH, filename)
+async def upload(file: UploadFile = File(...), tags: str = Form("")):
+    filepath = os.path.join(UPLOADS_PATH, file.filename)
 
     with open(filepath, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    chunks = store_document(filepath, filename, tags=tags)
+    chunks = store_document(filepath, file.filename, tags=tags)
 
     return {
         "status": "stored",
-        "filename": filename,
+        "filename": file.filename,
         "chunks": chunks
     }
 
 
 @app.get("/api/knowledge/documents")
-def list_documents():
+def documents():
     return get_all_documents()
 
 
 @app.delete("/api/knowledge/documents/{filename}")
-def remove_document(filename: str):
+def delete_doc(filename: str):
     deleted = delete_document(filename)
 
-    filepath = os.path.join(UPLOADS_PATH, filename)
-    if os.path.exists(filepath):
-        os.remove(filepath)
+    path = os.path.join(UPLOADS_PATH, filename)
+    if os.path.exists(path):
+        os.remove(path)
 
     return {"deleted_chunks": deleted}
