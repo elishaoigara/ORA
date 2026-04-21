@@ -1,35 +1,24 @@
-from datetime import datetime
-from database import log_alert
+def decide(context):
+    reasoning = []
+    actions = []
 
-def decide(context: dict):
     cpu = context.get("cpu", 0)
     ram = context.get("ram", 0)
     disk = context.get("disk_free_gb", 999)
 
-    decision = {
-        "timestamp": datetime.now().isoformat(),
-        "actions": [],
-        "reasoning": []
-    }
-
     if cpu > 85:
-        decision["actions"].append({"type": "alert", "message": f"High CPU: {cpu}%", "severity": "high"})
-        decision["reasoning"].append("CPU overload risk")
+        reasoning.append(f"High CPU: {cpu}%")
+        actions.append({"type": "alert", "message": f"High CPU usage: {cpu}%", "severity": "high"})
 
     if ram > 90:
-        decision["actions"].append({"type": "alert", "message": f"High RAM: {ram}%", "severity": "high"})
-        decision["reasoning"].append("RAM pressure detected")
+        reasoning.append(f"High RAM: {ram}%")
+        actions.append({"type": "alert", "message": f"High RAM usage: {ram}%", "severity": "high"})
 
     if disk < 5:
-        decision["actions"].append({"type": "alert", "message": f"Low disk: {disk:.1f}GB left", "severity": "medium"})
-        decision["reasoning"].append("Disk space critical")
+        reasoning.append(f"Low disk: {disk:.1f}GB")
+        actions.append({"type": "alert", "message": f"Low disk space: {disk:.1f}GB", "severity": "medium"})
 
-    if not decision["actions"]:
-        decision["actions"].append({"type": "log", "message": "All systems normal"})
-        decision["reasoning"].append("No issues detected")
+    if not reasoning:
+        reasoning.append("All systems normal")
 
-    for action in decision["actions"]:
-        if action["type"] == "alert":
-            log_alert("decision_engine", action["message"], action.get("severity", "medium"))
-
-    return decision
+    return {"reasoning": reasoning, "actions": actions}
