@@ -231,8 +231,81 @@ def run_telegram_bot():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("task", cmd_task))
+    app.add_handler(CommandHandler("predict", cmd_predict))
+    app.add_handler(CommandHandler("remind", cmd_remind))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("[ORA] Telegram bot running...")
     app.run_polling()
+async def cmd_predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from intelligence.prediction_engine import predict_needs
+    predictions = predict_needs()
+    if not predictions:
+        await update.message.reply_text("No predictions right now.")
+        return
+    msg = "ORA Predictions:\n\n"
+    for p in predictions[:5]:
+        bar = int(p["confidence"] * 10)
+        msg += f"[{p['type']}]\n{p['message']}\nConfidence: {'*' * bar}\n\n"
+    await update.message.reply_text(msg)
+import threading
+
+def _send_reminder(message):
+    notify(f"Reminder: {message}")
+
+async def cmd_remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Usage: /remind 14:30 Call client
+    Usage: /remind 5m Check the oven
+    """
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Usage:\n"
+            "/remind 14:30 [message] — remind at specific time\n"
+            "/remind 5m [message] — remind in X minutes\n"
+            "/remind 2h [message] — remind in X hours"
+        )
+        return
+
+    time_arg = args[0]
+    message = " ".join(args[1:])
+    now = datetime.now()
+    delay_seconds = None
+
+    try:
+        if time_arg.endswith("m"):
+            delay_seconds = int(time_arg[:-1]) * 60
+        elif time_arg.endswith("h"):
+            delay_seconds = int(time_arg[:-1]) * 3600
+        elif ":" in time_arg:
+            target = datetime.strptime(
+                f"{now.date().isoformat()} {time_arg}", "%Y-%m-%d %H:%M"
+            )
+            if target < now:
+                await update.message.reply_text("That time has already passed today.")
+                return
+            delay_seconds = (target - now).total_seconds()
+        else:
+            await update.message.reply_text("Format: 14:30 or 5m or 2h")
+            return
+
+        minutes = int(delay_seconds / 60)
+        seconds = int(delay_seconds % 60)
+
+        timer = threading.Timer(delay_seconds, _send_reminder, args=[message])
+        timer.daemon = True
+        timer.start()
+
+        if delay_seconds < 3600:
+            await update.message.reply_text(
+                f"Reminder set for {minutes}m {seconds}s from now:\n{message}"
+            )
+        else:
+            await update.message.reply_text(
+                f"Reminder set for {time_arg}:\n{message}"
+            )
+
+    except Exception as e:
+        await update.message.reply_text(f"Could not set reminder: {str(e)}")

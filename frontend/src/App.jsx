@@ -4,6 +4,7 @@ import DashboardPage from "./pages/DashboardPage"
 import ChatPage from "./pages/ChatPage"
 import TasksPage from "./pages/TasksPage"
 import MemoryPage from "./pages/MemoryPage"
+import KnowledgePage from "./pages/KnowledgePage"
 import "./App.css"
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/memory" element={<MemoryPage />} />
+            <Route path="/knowledge" element={<KnowledgePage />} />
           </Routes>
         </main>
       </div>
