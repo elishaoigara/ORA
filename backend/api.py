@@ -1,24 +1,25 @@
 import os
 import json
 import shutil
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-# 🔥 SAFE IMPORTS (IMPORTANT FOR RENDER DEPLOY)
-from backend.database import (
+from database import (
     get_recent_alerts, get_system_stats,
     acknowledge_alert, get_tasks,
-    get_conversation_history, save_conversation
+    get_conversation_history, save_conversation,
+    init_db, init_tasks_table
 )
 
-from backend.memory.profile import get_all_profile
-from backend.memory.events import get_recent_events, log_memory_event
-from backend.memory.preferences import get_preferences
+from memory.profile import get_all_profile, init_profile
+from memory.events import get_recent_events, log_memory_event
+from memory.preferences import get_preferences
 
-from backend.context import build_system_prompt
-from backend.knowledge import (
+from context import build_system_prompt
+from knowledge import (
     store_document,
     get_all_documents,
     delete_document,
@@ -36,9 +37,30 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
 
 
 # ========================
+# LIFESPAN — init DB + background thread on startup
+# ========================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Init database tables
+    init_db()
+    init_tasks_table()
+    init_profile()
+    log_memory_event("system", "ORA API started", importance=6)
+
+    # Start background monitoring + Telegram in a daemon thread
+    try:
+        from main import startup
+        startup()
+    except Exception as e:
+        print(f"[STARTUP] Background init skipped: {e}")
+
+    yield  # app runs here
+
+
+# ========================
 # APP
 # ========================
-app = FastAPI(title="ORA Backend")
+app = FastAPI(title="ORA Backend", lifespan=lifespan)
 
 
 # ========================
@@ -86,7 +108,11 @@ def get_status():
     try:
         data = json.loads(row[0])
     except Exception:
-        data = {}
+        try:
+            import ast
+            data = ast.literal_eval(row[0])
+        except Exception:
+            data = {}
 
     return {
         "cpu": data.get("cpu_percent"),
@@ -177,6 +203,15 @@ def tasks():
         }
         for t in data
     ]
+
+
+# ========================
+# CONVERSATIONS (used by ChatPage)
+# ========================
+@app.get("/api/conversations")
+def conversations():
+    data = get_conversation_history(limit=50)
+    return [{"role": r, "content": c} for r, c in data]
 
 
 # ========================

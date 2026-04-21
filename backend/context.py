@@ -55,7 +55,7 @@ def build_context(query=None):
                 for c in chunks:
                     lines.append(f"[{c['filename']}]: {c['text'][:300]}")
                 sections.append("## Relevant knowledge from your files\n" + "\n\n".join(lines))
-        except Exception as e:
+        except Exception:
             pass
 
     return "\n\n".join(sections)
