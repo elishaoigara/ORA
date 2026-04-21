@@ -5,54 +5,59 @@ const API = "http://localhost:8000"
 export default function TasksPage() {
   const [tasks, setTasks] = useState([])
 
-  const load = async () => {
-    try {
-      const data = await fetch(`${API}/api/tasks`).then(r => r.json())
-      setTasks(data)
-    } catch {}
-  }
+  useEffect(() => {
+    fetch(`${API}/api/tasks`).then(r => r.json()).then(setTasks).catch(() => {})
+  }, [])
 
-  useEffect(() => { load() }, [])
+  const priColor = { high: "var(--red)", medium: "var(--amber)", low: "var(--green)" }
 
   return (
-    <div style={s.page}>
-      <h1 style={s.title}>📌 Tasks</h1>
-      <p style={s.sub}>Manage tasks via Telegram: /task add, /task done, /task delete</p>
+    <div className="page">
+      <div className="page-header">
+        <div className="page-title">// Task Queue</div>
+        <div className="page-sub">Manage via Telegram · /task add [title] @HH:MM</div>
+      </div>
 
-      <div style={s.list}>
-        {tasks.length === 0
-          ? <div style={s.empty}>No pending tasks. Add one via Telegram: <code>/task add Buy milk @14:00</code></div>
-          : tasks.map(t => (
-            <div key={t.id} style={s.task}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div>
-                  <p style={s.taskTitle}>{t.title}</p>
-                  <p style={s.taskMeta}>Added: {new Date(t.created_at).toLocaleDateString()}</p>
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <div className="card-title">Telegram Commands</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "0.5rem" }}>
+          {[
+            ["/task add Buy milk @14:00", "Add task"],
+            ["/task list", "View all"],
+            ["/task done [id]", "Complete"],
+            ["/task delete [id]", "Delete"],
+          ].map(([cmd, desc]) => (
+            <div key={cmd} style={{ padding: "0.5rem", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 4 }}>
+              <div style={{ fontFamily: "Share Tech Mono, monospace", fontSize: "0.72rem", color: "var(--amber)", marginBottom: 2 }}>{cmd}</div>
+              <div style={{ fontSize: "0.75rem", color: "var(--text3)" }}>{desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-title">Pending ({tasks.length})</div>
+        {tasks.length === 0 ? (
+          <div className="empty"><div className="empty-icon">◆</div>Queue empty</div>
+        ) : (
+          tasks.map(t => (
+            <div key={t.id} className="task-row">
+              <div>
+                <div className="task-title">{t.title}</div>
+                <div className="task-meta">
+                  ID:{t.id} · {t.created_at?.slice(0, 10)}
+                  {t.due_at && ` · DUE: ${t.due_at.slice(11, 16)}`}
                 </div>
-                <div style={{ textAlign: "right" }}>
-                  {t.due_at && <span style={s.due}>⏰ {t.due_at.slice(11, 16)}</span>}
-                  <span style={{ ...s.priority, color: t.priority === "high" ? "#f87171" : t.priority === "low" ? "#34d399" : "#fbbf24" }}>
-                    {t.priority}
-                  </span>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontFamily: "Share Tech Mono, monospace", fontSize: "0.7rem", color: priColor[t.priority] || "var(--text3)", letterSpacing: 1 }}>
+                  {t.priority?.toUpperCase()}
                 </div>
               </div>
             </div>
           ))
-        }
+        )}
       </div>
     </div>
   )
-}
-
-const s = {
-  page: { padding: "2rem", maxWidth: 800, margin: "0 auto" },
-  title: { color: "#7c6af7", fontSize: "1.3rem", fontWeight: 700, marginBottom: 4 },
-  sub: { color: "#333", fontSize: "0.8rem", marginBottom: "2rem" },
-  list: { display: "flex", flexDirection: "column", gap: "0.75rem" },
-  empty: { color: "#444", background: "#0d0d1a", border: "1px solid #1a1a2e", borderRadius: 12, padding: "2rem", textAlign: "center" },
-  task: { background: "#0d0d1a", border: "1px solid #1a1a2e", borderRadius: 12, padding: "1rem 1.25rem" },
-  taskTitle: { color: "#e0e0e0", fontSize: "0.95rem" },
-  taskMeta: { color: "#333", fontSize: "0.75rem", marginTop: 4 },
-  due: { color: "#7c6af7", fontSize: "0.8rem", display: "block" },
-  priority: { fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase" }
 }

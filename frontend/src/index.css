@@ -1,41 +1,94 @@
-﻿@import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap');
+﻿@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg: #0e0e1a;
-  --bg2: #161628;
-  --bg3: #1c1c35;
-  --border: #2a2a4a;
-  --accent: #7c6af7;
-  --accent2: #ff6b8a;
-  --accent3: #00e5a0;
-  --text: #f0f0ff;
-  --muted: #7070a0;
-  --card: #14142a;
+  --bg: #020408;
+  --bg1: #060d12;
+  --bg2: #0a1520;
+  --border: #0d2535;
+  --border2: #1a3a50;
+  --amber: #f59e0b;
+  --amber2: #fbbf24;
+  --green: #10b981;
+  --red: #ef4444;
+  --blue: #3b82f6;
+  --text: #94a3b8;
+  --text2: #cbd5e1;
+  --text3: #475569;
+  --glow: rgba(245, 158, 11, 0.15);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-body {
+html, body, #root {
+  height: 100%;
   background: var(--bg);
-  color: var(--text);
-  font-family: 'Space Mono', monospace;
-  min-height: 100vh;
-  overflow-x: hidden;
+  color: var(--text2);
+  font-family: 'Rajdhani', sans-serif;
+  overflow: hidden;
 }
 
+/* Scanlines overlay */
 body::before {
   content: '';
   position: fixed;
   top: 0; left: 0;
   width: 100%; height: 100%;
-  background:
-    radial-gradient(ellipse at 15% 15%, rgba(124,106,247,0.12) 0%, transparent 45%),
-    radial-gradient(ellipse at 85% 85%, rgba(0,229,160,0.07) 0%, transparent 45%),
-    radial-gradient(ellipse at 85% 15%, rgba(255,107,138,0.07) 0%, transparent 40%);
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Grid background */
+body::after {
+  content: '';
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background-image:
+    linear-gradient(rgba(13,37,53,0.3) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(13,37,53,0.3) 1px, transparent 1px);
+  background-size: 40px 40px;
   pointer-events: none;
   z-index: 0;
 }
 
-::-webkit-scrollbar { width: 4px; }
+#root { position: relative; z-index: 1; }
+
+::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb { background: var(--amber); opacity: 0.3; }
+
+/* Glow text */
+.glow { color: var(--amber); text-shadow: 0 0 10px rgba(245,158,11,0.5); }
+.glow-green { color: var(--green); text-shadow: 0 0 10px rgba(16,185,129,0.5); }
+.glow-red { color: var(--red); text-shadow: 0 0 10px rgba(239,68,68,0.5); }
+
+/* Blink animation */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.blink { animation: blink 1s infinite; }
+
+/* Pulse animation */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 5px var(--amber); }
+  50% { box-shadow: 0 0 20px var(--amber), 0 0 40px rgba(245,158,11,0.3); }
+}
+
+/* Scan animation */
+@keyframes scan {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  html, body, #root { overflow: auto; }
+}

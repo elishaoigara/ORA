@@ -2,20 +2,16 @@
 
 const API = "http://localhost:8000"
 
-function StatBar({ label, value, color }) {
+function Meter({ label, value, unit = "%" }) {
+  const color = value > 80 ? "var(--red)" : value > 60 ? "var(--amber)" : "var(--green)"
   return (
-    <div style={{ marginBottom: "1.25rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-        <span style={{ fontSize: "0.7rem", color: "var(--muted)", letterSpacing: "0.1em" }}>{label}</span>
-        <span style={{ fontSize: "0.8rem", fontWeight: 700, color: value > 80 ? "var(--accent2)" : "var(--text)" }}>{value}%</span>
+    <div className="meter">
+      <div className="meter-header">
+        <span className="meter-label">{label}</span>
+        <span className="meter-value" style={{ color }}>{value}{unit}</span>
       </div>
-      <div style={{ height: "3px", background: "var(--border)", borderRadius: "2px" }}>
-        <div style={{
-          width: `${value}%`, height: "100%", borderRadius: "2px",
-          background: value > 80 ? "var(--accent2)" : color,
-          boxShadow: `0 0 8px ${value > 80 ? "var(--accent2)" : color}`,
-          transition: "width 1s ease"
-        }} />
+      <div className="meter-track">
+        <div className="meter-bar" style={{ width: `${Math.min(value, 100)}%`, background: color }} />
       </div>
     </div>
   )
@@ -25,112 +21,109 @@ export default function DashboardPage() {
   const [status, setStatus] = useState(null)
   const [alerts, setAlerts] = useState([])
   const [tasks, setTasks] = useState([])
-  const [time, setTime] = useState(new Date())
+
+  const fetchAll = async () => {
+    try {
+      const [s, a, t] = await Promise.all([
+        fetch(`${API}/api/status`).then(r => r.json()),
+        fetch(`${API}/api/alerts`).then(r => r.json()),
+        fetch(`${API}/api/tasks`).then(r => r.json()),
+      ])
+      setStatus(s)
+      setAlerts(a)
+      setTasks(t)
+    } catch {}
+  }
+
+  const ack = async (id) => {
+    await fetch(`${API}/api/alerts/${id}/ack`, { method: "POST" })
+    fetchAll()
+  }
 
   useEffect(() => {
-    const fetch_data = async () => {
-      try {
-        const [s, a, t] = await Promise.all([
-          fetch(`${API}/api/status`).then(r => r.json()),
-          fetch(`${API}/api/alerts`).then(r => r.json()),
-          fetch(`${API}/api/tasks`).then(r => r.json()),
-        ])
-        setStatus(s)
-        setAlerts(a)
-        setTasks(t)
-      } catch (e) {}
-    }
-    fetch_data()
-    const iv = setInterval(fetch_data, 10000)
-    const clock = setInterval(() => setTime(new Date()), 1000)
-    return () => { clearInterval(iv); clearInterval(clock) }
+    fetchAll()
+    const i = setInterval(fetchAll, 10000)
+    return () => clearInterval(i)
   }, [])
 
-  const pending = tasks.filter(t => t.status === "pending")
-  const activeAlerts = alerts.filter(a => !a.acknowledged)
+  const active = alerts.filter(a => !a.acknowledged)
+  const sevColor = { high: "var(--red)", medium: "var(--amber)", low: "var(--green)" }
 
   return (
-    <div>
-      <div style={{ marginBottom: "2.5rem" }}>
-        <h1 style={{ fontFamily: "Syne, sans-serif", fontSize: "2rem", fontWeight: 800, letterSpacing: "-0.02em" }}>
-          Dashboard
-        </h1>
-        <div style={{ color: "var(--muted)", fontSize: "0.75rem", marginTop: "0.25rem", letterSpacing: "0.05em" }}>
-          {time.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} — {time.toLocaleTimeString()}
-        </div>
+    <div className="page">
+      <div className="page-header">
+        <div className="page-title">// System Monitor</div>
+        <div className="page-sub">Real-time intelligence feed · Nairobi, KE</div>
       </div>
 
-      <div className="grid-2" style={{ marginBottom: "1.5rem" }}>
-        <div className="card">
-          <div className="tag">System Status</div>
-          {status ? (
-            <>
-              <StatBar label="CPU" value={status.cpu} color="var(--accent)" />
-              <StatBar label="RAM" value={status.ram} color="#43e97b" />
-              <div style={{ fontSize: "0.7rem", color: "var(--muted)", marginTop: "1rem" }}>
-                Disk free: {status.disk_free_gb}GB &nbsp;|&nbsp; Updated: {status.last_updated?.slice(11,19)}
-              </div>
-            </>
-          ) : (
-            <div style={{ color: "var(--muted)", fontSize: "0.8rem" }}>Connecting to ORA...</div>
-          )}
+      <div className="grid-3" style={{ marginBottom: "1rem" }}>
+        <div className="stat-box">
+          <div className="stat-num">{tasks.length}</div>
+          <div className="stat-label">Pending Tasks</div>
         </div>
-
-        <div className="card">
-          <div className="tag">Pending Tasks</div>
-          {pending.length === 0 ? (
-            <div style={{ color: "var(--muted)", fontSize: "0.8rem" }}>All clear.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
-              {pending.slice(0, 5).map(t => (
-                <div key={t.id} style={{
-                  fontSize: "0.8rem", padding: "0.5rem 0.75rem",
-                  background: "rgba(108,99,255,0.06)",
-                  border: "1px solid rgba(108,99,255,0.12)",
-                  borderRadius: "8px",
-                  display: "flex", justifyContent: "space-between", alignItems: "center"
-                }}>
-                  <span>{t.title}</span>
-                  {t.due_at && <span style={{ fontSize: "0.65rem", color: "var(--accent)" }}>{t.due_at.slice(11,16)}</span>}
-                </div>
-              ))}
-            </div>
-          )}
+        <div className="stat-box">
+          <div className="stat-num" style={{ color: active.length > 0 ? "var(--red)" : "var(--green)" }}>{active.length}</div>
+          <div className="stat-label">Active Alerts</div>
+        </div>
+        <div className="stat-box">
+          <div className="stat-num" style={{ color: "var(--green)" }}>
+            {status && status.status !== "warming_up" ? "ON" : "—"}
+          </div>
+          <div className="stat-label">ORA Status</div>
         </div>
       </div>
 
       <div className="grid-2">
         <div className="card">
-          <div className="tag">Alerts</div>
-          {activeAlerts.length === 0 ? (
-            <div style={{ color: "var(--accent3)", fontSize: "0.8rem" }}>All clear.</div>
+          <div className="card-title">Hardware Status</div>
+          {status && status.status !== "warming_up" ? (
+            <>
+              <Meter label="CPU_LOAD" value={status.cpu} />
+              <Meter label="RAM_USED" value={status.ram} />
+              <Meter label="DISK_FREE" value={Math.round((status.disk_free_gb / 100) * 100)} unit="GB" />
+              <div style={{ fontFamily: "Share Tech Mono, monospace", fontSize: "0.65rem", color: "var(--text3)", marginTop: 8 }}>
+                LAST_SYNC: {status.last_updated ? new Date(status.last_updated).toLocaleTimeString() : "—"}
+              </div>
+            </>
           ) : (
-            activeAlerts.slice(0, 4).map(a => (
-              <div key={a.id} style={{
-                padding: "0.5rem 0", borderBottom: "1px solid var(--border)",
-                fontSize: "0.8rem", color: a.severity === "high" ? "var(--accent2)" : "var(--text)"
-              }}>
-                [{a.severity}] {a.message}
+            <div className="empty"><div className="empty-icon">⌛</div>Initializing sensors...</div>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-title">Alert Feed</div>
+          {active.length === 0 ? (
+            <div className="empty"><div className="empty-icon" style={{ color: "var(--green)" }}>◉</div>All systems nominal</div>
+          ) : (
+            active.slice(0, 4).map(a => (
+              <div key={a.id} className={`alert-row ${a.severity}`}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div className="alert-severity" style={{ color: sevColor[a.severity] }}>{a.severity?.toUpperCase()}</div>
+                  <button className="btn btn-ghost" onClick={() => ack(a.id)} style={{ fontSize: "0.6rem", padding: "2px 6px" }}>ACK</button>
+                </div>
+                <div className="alert-msg">{a.message}</div>
               </div>
             ))
           )}
         </div>
 
-        <div className="card">
-          <div className="tag">Quick Stats</div>
-          <div className="grid-2">
-            {[
-              { label: "Pending Tasks", value: pending.length, color: "var(--accent)" },
-              { label: "Active Alerts", value: activeAlerts.length, color: "var(--accent2)" },
-              { label: "Total Tasks", value: tasks.length, color: "var(--accent3)" },
-              { label: "Resolved", value: alerts.filter(a => a.acknowledged).length, color: "var(--muted)" },
-            ].map(({ label, value, color }) => (
-              <div key={label} style={{ textAlign: "center", padding: "1rem" }}>
-                <div style={{ fontSize: "2rem", fontWeight: 800, fontFamily: "Syne, sans-serif", color }}>{value}</div>
-                <div style={{ fontSize: "0.65rem", color: "var(--muted)", letterSpacing: "0.1em", marginTop: "0.25rem" }}>{label}</div>
-              </div>
-            ))}
-          </div>
+        <div className="card" style={{ gridColumn: "1 / -1" }}>
+          <div className="card-title">Task Queue</div>
+          {tasks.length === 0 ? (
+            <div className="empty"><div className="empty-icon">◆</div>Queue empty · Add via Telegram: /task add</div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "0.5rem" }}>
+              {tasks.slice(0, 6).map(t => (
+                <div key={t.id} className="task-row">
+                  <div>
+                    <div className="task-title">{t.title}</div>
+                    {t.due_at && <div className="task-meta">DUE: {t.due_at.slice(11, 16)}</div>}
+                  </div>
+                  <div className="task-due">[{t.id}]</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
