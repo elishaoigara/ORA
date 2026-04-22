@@ -1,8 +1,10 @@
 """
-ORA Telegram Bot — pure httpx implementation.
+ORA Telegram Bot — pure HTTP implementation.
 No python-telegram-bot library = no set_wakeup_fd restriction.
 Runs cleanly in any thread on Render.
 """
+print("[TELEGRAM] Loading pure HTTP bot v3...")
+
 import time
 import threading
 import requests
@@ -25,13 +27,12 @@ from groq import Groq
 
 
 # ========================
-# TELEGRAM API HELPERS
+# TELEGRAM API
 # ========================
 BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
 def tg_send(chat_id, text):
-    """Send a message via Telegram Bot API."""
     try:
         requests.post(
             f"{BASE}/sendMessage",
@@ -43,7 +44,6 @@ def tg_send(chat_id, text):
 
 
 def tg_edit(chat_id, message_id, text):
-    """Edit an existing message."""
     try:
         requests.post(
             f"{BASE}/editMessageText",
@@ -55,7 +55,6 @@ def tg_edit(chat_id, message_id, text):
 
 
 def tg_get_updates(offset=None):
-    """Long-poll for new updates."""
     try:
         params = {"timeout": 30, "allowed_updates": ["message"]}
         if offset:
@@ -68,7 +67,7 @@ def tg_get_updates(offset=None):
 
 
 # ========================
-# NOTIFY — works from any thread, anywhere
+# NOTIFY — works from any thread
 # ========================
 def notify(message, is_alert=False):
     prefix = "ORA ALERT\n\n" if is_alert else ""
@@ -107,19 +106,13 @@ COOLDOWN = 2
 
 
 def ai_respond(user_text):
-    """
-    Knowledge-first response:
-    1. Search uploaded docs/notes
-    2. Build full context (profile, memory, alerts)
-    3. Groq answers from YOUR data first
-    """
     global LAST_REQUEST
     elapsed = time.time() - LAST_REQUEST
     if elapsed < COOLDOWN:
         time.sleep(COOLDOWN - elapsed)
     LAST_REQUEST = time.time()
 
-    # 1. Search knowledge base
+    # 1. Search knowledge base first
     knowledge_context = ""
     try:
         from knowledge import search_knowledge
@@ -132,10 +125,10 @@ def ai_respond(user_text):
     except Exception as e:
         print(f"[KNOWLEDGE ERROR] {e}")
 
-    # 2. Build system prompt
+    # 2. Build system prompt with full context
     system_prompt = build_system_prompt(query=user_text)
 
-    # 3. Inject knowledge as priority
+    # 3. Inject knowledge as top priority
     if knowledge_context:
         system_prompt = (
             "PRIORITY: Answer from Elisha's own data below first. "
@@ -145,7 +138,7 @@ def ai_respond(user_text):
             + system_prompt
         )
 
-    # 4. Build messages with history
+    # 4. Add conversation history
     history = get_conversation_history(limit=8)
     messages = [{"role": "system", "content": system_prompt}]
     for role, content in history:
@@ -176,11 +169,11 @@ def handle_start(chat_id):
         "Your personal intelligence system.\n\n"
         "Commands:\n"
         "/status - System health\n"
-        "/task add [title] @HH:MM - Add task\n"
         "/tasks - List pending tasks\n"
+        "/task add [title] @HH:MM - Add task\n"
         "/task done [id] - Complete task\n"
         "/task delete [id] - Delete task\n"
-        "/remind 5m [message] - Set reminder\n"
+        "/remind 5m [message] - Remind in X minutes\n"
         "/remind 14:30 [message] - Remind at time\n"
         "/predict - ORA predictions\n"
         "/memory - Your profile\n\n"
@@ -273,7 +266,7 @@ def handle_task(chat_id, args):
             tg_send(chat_id, f"Error: {e}")
 
     else:
-        tg_send(chat_id, "Unknown subcommand. Use: add, done, delete")
+        tg_send(chat_id, "Unknown: use add, done, or delete")
 
 
 def handle_memory(chat_id):
@@ -308,7 +301,7 @@ def handle_remind(chat_id, args):
         tg_send(chat_id,
             "Usage:\n"
             "/remind 14:30 Call client\n"
-            "/remind 5m Check the oven\n"
+            "/remind 5m Check oven\n"
             "/remind 2h Review PR"
         )
         return
@@ -353,15 +346,14 @@ def handle_remind(chat_id, args):
 
 
 def handle_chat(chat_id, text):
-    """Knowledge-first AI chat handler."""
-    # Send "thinking" message
-    r = requests.post(
-        f"{BASE}/sendMessage",
-        json={"chat_id": chat_id, "text": "thinking..."},
-        timeout=10,
-    )
+    # Send thinking message and get its ID
     msg_id = None
     try:
+        r = requests.post(
+            f"{BASE}/sendMessage",
+            json={"chat_id": chat_id, "text": "thinking..."},
+            timeout=10,
+        )
         msg_id = r.json()["result"]["message_id"]
     except Exception:
         pass
@@ -377,27 +369,26 @@ def handle_chat(chat_id, text):
         reply = ai_respond(text)
         save_conversation("assistant", reply)
         log_memory_event("conversation", "ORA replied", importance=3)
-
         if msg_id:
             tg_edit(chat_id, msg_id, reply)
         else:
             tg_send(chat_id, reply)
-
     except Exception as e:
         print(f"[AI ERROR] {e}")
-        err_msg = "ORA hit an error. Try again."
+        err = "ORA hit an error. Try again."
         if msg_id:
-            tg_edit(chat_id, msg_id, err_msg)
+            tg_edit(chat_id, msg_id, err)
         else:
-            tg_send(chat_id, err_msg)
+            tg_send(chat_id, err)
 
 
 # ========================
 # MAIN POLLING LOOP
-# Pure sync — no asyncio, no event loop, no threading restrictions
+# Pure sync HTTP — no asyncio, no event loop,
+# no threading restrictions, works on Render free tier
 # ========================
 def run_telegram_bot():
-    print("[TELEGRAM] Bot starting with pure HTTP polling...")
+    print("[TELEGRAM] Bot polling started (pure HTTP)...")
     offset = None
 
     while True:
@@ -412,14 +403,12 @@ def run_telegram_bot():
 
                 chat_id = msg["chat"]["id"]
                 text = msg.get("text", "").strip()
-
                 if not text:
                     continue
 
-                # Route commands
                 if text.startswith("/"):
                     parts = text.split()
-                    cmd = parts[0].lower().split("@")[0]  # handle /cmd@botname
+                    cmd = parts[0].lower().split("@")[0]
                     args = parts[1:]
 
                     if cmd == "/start":
@@ -439,7 +428,6 @@ def run_telegram_bot():
                     else:
                         tg_send(chat_id, f"Unknown command: {cmd}")
                 else:
-                    # Free-form chat
                     handle_chat(chat_id, text)
 
         except Exception as e:

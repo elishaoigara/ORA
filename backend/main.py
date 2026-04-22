@@ -1,6 +1,5 @@
 import time
 import threading
-import asyncio
 import psutil
 from datetime import datetime
 
@@ -67,7 +66,7 @@ def run_cycle():
 
 
 # ─────────────────────────────────────────
-# MONITORING LOOP (runs in background thread)
+# MONITORING LOOP
 # ─────────────────────────────────────────
 def run_monitoring_loop():
     while True:
@@ -79,9 +78,8 @@ def run_monitoring_loop():
 
 
 # ─────────────────────────────────────────
-# TELEGRAM BOT THREAD
-# Must have its own event loop — cannot share
-# uvicorn's event loop or it silently fails
+# TELEGRAM THREAD
+# Pure sync — no asyncio needed with new bot
 # ─────────────────────────────────────────
 def run_telegram_thread():
     from config import TELEGRAM_BOT_TOKEN
@@ -89,14 +87,9 @@ def run_telegram_thread():
         print("[TELEGRAM] No token — skipping.")
         return
 
-    # Give uvicorn time to fully start first
+    # Wait for uvicorn to fully start
     time.sleep(3)
-
     print("[TELEGRAM] Starting bot in dedicated thread...")
-
-    # New isolated event loop for this thread
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
     while True:
         try:
@@ -129,20 +122,19 @@ def start_intelligence_layer():
 def startup():
     print("[ORA] Initializing systems...")
 
-    # Database + profile
     init_db()
     init_tasks_table()
     init_profile()
     log_memory_event("system", "ORA started", importance=6)
 
-    # Telegram bot — isolated thread with its own event loop
+    # Telegram — pure sync thread, no event loop
     t_telegram = threading.Thread(target=run_telegram_thread, daemon=True, name="telegram")
     t_telegram.start()
 
-    # Intelligence scheduler (morning briefing etc.)
+    # Intelligence scheduler
     start_intelligence_layer()
 
-    # System monitoring loop
+    # Monitoring loop
     t_monitor = threading.Thread(target=run_monitoring_loop, daemon=True, name="monitor")
     t_monitor.start()
 
