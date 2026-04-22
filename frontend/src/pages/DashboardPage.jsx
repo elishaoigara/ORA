@@ -38,11 +38,7 @@ export default function DashboardPage() {
 
   const fetchJSON = async (url) => {
     const res = await fetch(url)
-
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status} → ${url}`)
-    }
-
+    if (!res.ok) throw new Error(`HTTP ${res.status} → ${url}`)
     return res.json()
   }
 
@@ -60,9 +56,7 @@ export default function DashboardPage() {
 
     } catch (e) {
       console.error("🔥 API ERROR:", e)
-
-      // fallback (safe)
-      setStatus(null)
+      setStatus({ status: "error" })
       setAlerts([])
       setTasks([])
     }
@@ -91,6 +85,13 @@ export default function DashboardPage() {
     low: "var(--green)"
   }
 
+  // ✅ REAL FIX: proper system status detection
+  const isOnline =
+    status &&
+    status.status !== "warming_up" &&
+    status.status !== "error" &&
+    typeof status.cpu === "number"
+
   return (
     <div className="page">
       <div className="page-header">
@@ -100,6 +101,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* STATS */}
       <div className="grid-3" style={{ marginBottom: "1rem" }}>
         <div className="stat-box">
           <div className="stat-num">{tasks.length}</div>
@@ -120,28 +122,28 @@ export default function DashboardPage() {
           <div className="stat-label">Active Alerts</div>
         </div>
 
-        {/* ✅ FIXED STATUS LOGIC */}
+        {/* ✅ FIXED ORA STATUS */}
         <div className="stat-box">
           <div
             className="stat-num"
             style={{
-              color: status && status.cpu !== undefined
-                ? "var(--green)"
-                : "var(--red)"
+              color: isOnline ? "var(--green)" : "var(--red)"
             }}
           >
-            {status && status.cpu !== undefined ? "ON" : "OFF"}
+            {isOnline ? "ON" : "OFF"}
           </div>
           <div className="stat-label">ORA Status</div>
         </div>
       </div>
 
+      {/* MAIN GRID */}
       <div className="grid-2">
+
+        {/* HARDWARE */}
         <div className="card">
           <div className="card-title">Hardware Status</div>
 
-          {/* ✅ FIXED CONDITION */}
-          {status && status.cpu !== undefined ? (
+          {isOnline ? (
             <>
               <Meter label="CPU_LOAD" value={status.cpu} />
               <Meter label="RAM_USED" value={status.ram} />
@@ -167,20 +169,20 @@ export default function DashboardPage() {
           ) : (
             <div className="empty">
               <div className="empty-icon">⌛</div>
-              No data from backend
+              {status?.status === "error"
+                ? "Backend error"
+                : "Initializing ORA system..."}
             </div>
           )}
         </div>
 
+        {/* ALERTS */}
         <div className="card">
           <div className="card-title">Alert Feed</div>
 
           {active.length === 0 ? (
             <div className="empty">
-              <div
-                className="empty-icon"
-                style={{ color: "var(--green)" }}
-              >
+              <div className="empty-icon" style={{ color: "var(--green)" }}>
                 ◉
               </div>
               All systems nominal
@@ -215,6 +217,7 @@ export default function DashboardPage() {
           )}
         </div>
 
+        {/* TASKS */}
         <div className="card" style={{ gridColumn: "1 / -1" }}>
           <div className="card-title">Task Queue</div>
 
@@ -233,20 +236,19 @@ export default function DashboardPage() {
                 <div key={t.id} className="task-row">
                   <div>
                     <div className="task-title">{t.title}</div>
-
                     {t.due_at && (
                       <div className="task-meta">
                         DUE: {t.due_at.slice(11, 16)}
                       </div>
                     )}
                   </div>
-
                   <div className="task-due">[{t.id}]</div>
                 </div>
               ))}
             </div>
           )}
         </div>
+
       </div>
     </div>
   )
