@@ -1,11 +1,10 @@
 """
 ORA Telegram Bot — pure HTTP implementation.
-No python-telegram-bot library = no asyncio restrictions.
-Runs cleanly in any thread on Railway/Render.
+No python-telegram-bot library = no set_wakeup_fd restriction.
+Runs cleanly in any thread on Render.
 """
-print("[TELEGRAM] Loading pure HTTP bot...")
+print("[TELEGRAM] Loading pure HTTP bot v3...")
 
-import ast
 import time
 import threading
 import requests
@@ -14,8 +13,6 @@ from datetime import date, datetime
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GROQ_API_KEY
 from database import (
     get_system_stats,
-    get_recent_alerts,
-    acknowledge_alert,
     save_conversation,
     get_conversation_history,
     add_task,
@@ -30,40 +27,27 @@ from groq import Groq
 
 
 # ========================
-# TELEGRAM API HELPERS
+# TELEGRAM API
 # ========================
 BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
 def tg_send(chat_id, text):
-    """Send a message. Returns message_id."""
     try:
-        r = requests.post(
+        requests.post(
             f"{BASE}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "Markdown"
-            },
+            json={"chat_id": chat_id, "text": text},
             timeout=10,
         )
-        return r.json().get("result", {}).get("message_id")
     except Exception as e:
         print(f"[TG SEND ERROR] {e}")
-        return None
 
 
 def tg_edit(chat_id, message_id, text):
-    """Edit an existing message."""
     try:
         requests.post(
             f"{BASE}/editMessageText",
-            json={
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "text": text,
-                "parse_mode": "Markdown"
-            },
+            json={"chat_id": chat_id, "message_id": message_id, "text": text},
             timeout=10,
         )
     except Exception as e:
@@ -71,7 +55,6 @@ def tg_edit(chat_id, message_id, text):
 
 
 def tg_get_updates(offset=None):
-    """Long-poll for new messages."""
     try:
         params = {"timeout": 30, "allowed_updates": ["message"]}
         if offset:
@@ -84,10 +67,10 @@ def tg_get_updates(offset=None):
 
 
 # ========================
-# NOTIFY — call from anywhere
+# NOTIFY — works from any thread
 # ========================
 def notify(message, is_alert=False):
-    prefix = "🔴 ORA ALERT\n\n" if is_alert else ""
+    prefix = "ORA ALERT\n\n" if is_alert else ""
     tg_send(TELEGRAM_CHAT_ID, prefix + message)
 
 
@@ -101,9 +84,7 @@ def check_due_tasks():
     tasks = get_tasks("pending")
     now = datetime.now()
     for t in tasks:
-        task_id = t[0]
-        title = t[1]
-        due_at = t[4]
+        task_id, title, _, _, due_at = t[0], t[1], t[2], t[3], t[4]
         if not due_at:
             continue
         try:
@@ -111,17 +92,17 @@ def check_due_tasks():
             diff = (due_time - now).total_seconds()
             if 0 <= diff <= 60 and task_id not in _notified_tasks:
                 _notified_tasks.add(task_id)
-                notify(f"⏰ Task due now: *{title}*", is_alert=True)
+                notify(f"Task due now: {title}", is_alert=True)
         except Exception as e:
             print(f"[TASK PARSE ERROR] {e}")
 
 
 # ========================
-# GROQ AI
+# GROQ AI — knowledge-first
 # ========================
 client = Groq(api_key=GROQ_API_KEY)
 LAST_REQUEST = 0
-COOLDOWN = 2
+COOLDOWN = 10  # 10 seconds between requests to stay within free tier limits
 
 
 def ai_respond(user_text):
@@ -131,7 +112,7 @@ def ai_respond(user_text):
         time.sleep(COOLDOWN - elapsed)
     LAST_REQUEST = time.time()
 
-    # Search knowledge base first
+    # 1. Search knowledge base first
     knowledge_context = ""
     try:
         from knowledge import search_knowledge
@@ -144,19 +125,20 @@ def ai_respond(user_text):
     except Exception as e:
         print(f"[KNOWLEDGE ERROR] {e}")
 
-    # Build system prompt
+    # 2. Build system prompt with full context
     system_prompt = build_system_prompt(query=user_text)
 
-    # Inject knowledge as top priority
+    # 3. Inject knowledge as top priority
     if knowledge_context:
         system_prompt = (
-            "PRIORITY: Answer from Elisha's own files first.\n\n"
+            "PRIORITY: Answer from Elisha's own data below first. "
+            "Only use general knowledge if his data does not cover it.\n\n"
             + knowledge_context
             + "\n\n---\n\n"
             + system_prompt
         )
 
-    # Build messages with history
+    # 4. Add conversation history
     history = get_conversation_history(limit=8)
     messages = [{"role": "system", "content": system_prompt}]
     for role, content in history:
@@ -166,42 +148,52 @@ def ai_respond(user_text):
         })
     messages.append({"role": "user", "content": user_text})
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=messages,
-        max_tokens=600,
-        temperature=0.6,
-    )
-    return response.choices[0].message.content.strip()
+    # 5. Call Groq with rate limit retry
+    for attempt in range(3):
+        try:
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=messages,
+                max_tokens=600,
+                temperature=0.6,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "rate_limit" in err.lower():
+                wait = 30 * (attempt + 1)
+                print(f"[GROQ] Rate limited — waiting {wait}s (attempt {attempt+1}/3)")
+                time.sleep(wait)
+            else:
+                raise
+    return "ORA is rate limited right now. Try again in a minute."
 
 
 # ========================
 # COMMAND HANDLERS
 # ========================
-
 def handle_start(chat_id):
     profile = get_all_profile()
     name = profile.get("name", "Elisha")
     tg_send(chat_id,
-        f"👁 *ORA online, {name}.*\n\n"
+        f"ORA online, {name}.\n\n"
         "Your personal intelligence system.\n\n"
-        "*Commands:*\n"
-        "/status — system health\n"
-        "/alerts — recent alerts\n"
-        "/tasks — pending tasks\n"
-        "/task add [title] @HH:MM\n"
-        "/task done [id]\n"
-        "/task delete [id]\n"
-        "/remind 5m [message]\n"
-        "/remind 14:30 [message]\n"
-        "/brief — morning briefing\n"
-        "/knowledge — your files\n"
-        "/memory — your profile\n\n"
+        "Commands:\n"
+        "/status - System health\n"
+        "/tasks - List pending tasks\n"
+        "/task add [title] @HH:MM - Add task\n"
+        "/task done [id] - Complete task\n"
+        "/task delete [id] - Delete task\n"
+        "/remind 5m [message] - Remind in X minutes\n"
+        "/remind 14:30 [message] - Remind at time\n"
+        "/predict - ORA predictions\n"
+        "/memory - Your profile\n\n"
         "Or just talk to me."
     )
 
 
 def handle_status(chat_id):
+    import ast
     row = get_system_stats()
     if not row:
         tg_send(chat_id, "ORA warming up, no data yet.")
@@ -210,42 +202,17 @@ def handle_status(chat_id):
         data = ast.literal_eval(row[0])
         cpu = data.get("cpu_percent", "?")
         ram = data.get("ram_percent", "?")
-        disk = round(data.get("disk_free_gb", 0), 1)
+        disk = data.get("disk_free_gb", 0)
         ts = row[1][11:19]
         tg_send(chat_id,
-            f"📊 *System Status*\n\n"
-            f"🖥 CPU: {cpu}%\n"
-            f"🧠 RAM: {ram}%\n"
-            f"💾 Disk: {disk}GB free\n"
-            f"🕐 Last sync: {ts}"
+            f"System Status\n\n"
+            f"CPU: {cpu}%\n"
+            f"RAM: {ram}%\n"
+            f"Disk free: {disk:.1f}GB\n"
+            f"Last sync: {ts}"
         )
     except Exception as e:
         tg_send(chat_id, f"Error reading status: {e}")
-
-
-def handle_alerts(chat_id):
-    alerts = get_recent_alerts(5)
-    if not alerts:
-        tg_send(chat_id, "✅ No alerts on record.")
-        return
-    lines = ["🔔 *Recent Alerts*\n"]
-    for a in alerts:
-        status = "✅" if a[5] else "🔴"
-        lines.append(f"{status} [{a[0]}] *{a[1]}*\n{a[2]}")
-    tg_send(chat_id, "\n".join(lines))
-
-
-def handle_ack(chat_id, args):
-    if not args:
-        tg_send(chat_id, "Usage: /ack [id]")
-        return
-    try:
-        alert_id = int(args[0])
-        feedback = " ".join(args[1:]) or None
-        acknowledge_alert(alert_id, feedback)
-        tg_send(chat_id, f"✅ Alert [{alert_id}] acknowledged.")
-    except Exception as e:
-        tg_send(chat_id, f"Error: {e}")
 
 
 def handle_tasks(chat_id):
@@ -253,10 +220,10 @@ def handle_tasks(chat_id):
     if not tasks:
         tg_send(chat_id, "No pending tasks.")
         return
-    lines = ["📌 *Pending Tasks*\n"]
+    lines = ["Pending Tasks\n"]
     for t in tasks:
-        due = f" ⏰ {t[4][11:16]}" if t[4] else ""
-        lines.append(f"`[{t[0]}]` {t[1]}{due}")
+        due = f" - due {t[4][11:16]}" if t[4] else ""
+        lines.append(f"[{t[0]}] {t[1]}{due} ({t[2]})")
     tg_send(chat_id, "\n".join(lines))
 
 
@@ -273,9 +240,6 @@ def handle_task(chat_id, args):
 
     if sub == "add":
         full = " ".join(args[1:])
-        if not full:
-            tg_send(chat_id, "Usage: /task add [title] @HH:MM")
-            return
         due_at = None
         title = full
         if "@" in full:
@@ -287,13 +251,10 @@ def handle_task(chat_id, args):
                     f"{date.today().isoformat()} {time_str}", "%Y-%m-%d %H:%M"
                 ).isoformat()
             except Exception:
-                tg_send(chat_id, "Use HH:MM format. Example: /task add Meeting @14:30")
+                tg_send(chat_id, "Use HH:MM format for time.")
                 return
         add_task(title, due_at=due_at)
-        reply = f"✅ Task added: *{title}*"
-        if due_at:
-            reply += f"\n⏰ Due at {due_at[11:16]}"
-        tg_send(chat_id, reply)
+        tg_send(chat_id, f"Task added: {title}")
 
     elif sub == "done":
         if len(args) < 2:
@@ -301,7 +262,7 @@ def handle_task(chat_id, args):
             return
         try:
             complete_task(int(args[1]))
-            tg_send(chat_id, f"✅ Task [{args[1]}] completed.")
+            tg_send(chat_id, f"Task [{args[1]}] done.")
         except Exception as e:
             tg_send(chat_id, f"Error: {e}")
 
@@ -311,93 +272,39 @@ def handle_task(chat_id, args):
             return
         try:
             delete_task(int(args[1]))
-            tg_send(chat_id, f"🗑 Task [{args[1]}] deleted.")
+            tg_send(chat_id, f"Task [{args[1]}] deleted.")
         except Exception as e:
             tg_send(chat_id, f"Error: {e}")
 
     else:
-        tg_send(chat_id, "Unknown subcommand. Use: add, done, delete")
+        tg_send(chat_id, "Unknown: use add, done, or delete")
 
 
 def handle_memory(chat_id):
-    from memory.preferences import get_preferences
     profile = get_all_profile()
-    prefs = get_preferences()
-
     if not profile:
         tg_send(chat_id, "No profile data yet.")
         return
-
-    lines = ["🧠 *ORA Memory*\n\n*Profile:*"]
+    lines = ["Your Profile\n"]
     for k, v in profile.items():
         lines.append(f"- {k}: {v}")
-
-    if prefs:
-        lines.append("\n*Preferences:*")
-        for p in prefs:
-            lines.append(f"- {p[0]}/{p[1]}: {p[2]}")
-
     tg_send(chat_id, "\n".join(lines))
 
 
-def handle_brief(chat_id):
-    tg_send(chat_id, "📋 Generating your briefing...")
+def handle_predict(chat_id):
     try:
-        from briefing import generate_briefing
-        briefing = generate_briefing()
-        tg_send(chat_id, briefing)
-    except Exception as e:
-        tg_send(chat_id, f"Briefing error: {e}")
-
-
-def handle_knowledge(chat_id, args):
-    if not args:
-        try:
-            from knowledge import get_all_documents
-            docs = get_all_documents()
-            if not docs:
-                tg_send(chat_id, "No documents indexed yet.\nUpload via the web dashboard.")
-                return
-            lines = [f"📚 *Knowledge Base* — {len(docs)} files\n"]
-            for d in docs[:8]:
-                lines.append(f"◈ *{d['filename']}*")
-                if d.get("summary"):
-                    lines.append(f"  _{d['summary'][:100]}..._")
-                lines.append(f"  {d['chunks']} chunks · {d['doc_type']}\n")
-            tg_send(chat_id, "\n".join(lines))
-        except Exception as e:
-            tg_send(chat_id, f"Knowledge error: {e}")
-        return
-
-    sub = args[0].lower()
-
-    if sub == "search":
-        query = " ".join(args[1:])
-        if not query:
-            tg_send(chat_id, "Usage: /knowledge search [query]")
+        from intelligence.prediction_engine import predict_needs
+        predictions = predict_needs()
+        if not predictions:
+            tg_send(chat_id, "No predictions right now.")
             return
-        try:
-            from knowledge import search_knowledge
-            results = search_knowledge(query, n_results=3)
-            if not results:
-                tg_send(chat_id, "Nothing found for that query.")
-                return
-            lines = [f"🔍 *Search: {query}*\n"]
-            for r in results:
-                lines.append(f"📄 *{r['filename']}* ({int(r['relevance']*100)}% match)")
-                lines.append(f"{r['text'][:250]}...\n")
-            tg_send(chat_id, "\n".join(lines))
-        except Exception as e:
-            tg_send(chat_id, f"Search error: {e}")
-
-    elif sub == "summary":
-        filename = " ".join(args[1:])
-        try:
-            from knowledge import get_document_summary
-            summary = get_document_summary(filename)
-            tg_send(chat_id, f"📋 *{filename}*\n\n{summary}")
-        except Exception as e:
-            tg_send(chat_id, f"Error: {e}")
+        lines = ["ORA Predictions\n"]
+        for p in predictions[:5]:
+            bar = "*" * int(p["confidence"] * 10)
+            lines.append(f"[{p['type']}]\n{p['message']}\nConfidence: {bar}\n")
+        tg_send(chat_id, "\n".join(lines))
+    except Exception as e:
+        tg_send(chat_id, f"Prediction error: {e}")
 
 
 def handle_remind(chat_id, args):
@@ -432,24 +339,35 @@ def handle_remind(chat_id, args):
             return
 
         def _fire():
-            notify(f"⏰ Reminder: {message}")
+            notify(f"Reminder: {message}")
 
         t = threading.Timer(delay, _fire)
         t.daemon = True
         t.start()
 
         mins = int(delay / 60)
+        secs = int(delay % 60)
         if delay < 3600:
-            tg_send(chat_id, f"⏰ Reminder set for {mins} minutes:\n_{message}_")
+            tg_send(chat_id, f"Reminder set for {mins}m {secs}s:\n{message}")
         else:
-            tg_send(chat_id, f"⏰ Reminder set for {time_arg}:\n_{message}_")
+            tg_send(chat_id, f"Reminder set for {time_arg}:\n{message}")
 
     except Exception as e:
         tg_send(chat_id, f"Could not set reminder: {e}")
 
 
 def handle_chat(chat_id, text):
-    msg_id = tg_send(chat_id, "🧠 thinking...")
+    # Send thinking message and get its ID
+    msg_id = None
+    try:
+        r = requests.post(
+            f"{BASE}/sendMessage",
+            json={"chat_id": chat_id, "text": "thinking..."},
+            timeout=10,
+        )
+        msg_id = r.json()["result"]["message_id"]
+    except Exception:
+        pass
 
     save_conversation("user", text)
     log_memory_event("conversation", text[:80], importance=4)
@@ -459,32 +377,16 @@ def handle_chat(chat_id, text):
         return
 
     try:
-        from ai_gateway import safe_ai_call
-
-        reply = safe_ai_call(ai_respond, text)
-
-        # handle AI blocked response
-        if isinstance(reply, dict) and reply.get("error"):
-            err_msg = f"⚠️ AI blocked: {reply['error']}"
-
-            if msg_id:
-                tg_edit(chat_id, msg_id, err_msg)
-            else:
-                tg_send(chat_id, err_msg)
-            return
-
+        reply = ai_respond(text)
         save_conversation("assistant", reply)
         log_memory_event("conversation", "ORA replied", importance=3)
-
         if msg_id:
             tg_edit(chat_id, msg_id, reply)
         else:
             tg_send(chat_id, reply)
-
     except Exception as e:
         print(f"[AI ERROR] {e}")
-        err = "ORA hit an error. Try again in a moment."
-
+        err = "ORA hit an error. Try again."
         if msg_id:
             tg_edit(chat_id, msg_id, err)
         else:
@@ -493,9 +395,11 @@ def handle_chat(chat_id, text):
 
 # ========================
 # MAIN POLLING LOOP
+# Pure sync HTTP — no asyncio, no event loop,
+# no threading restrictions, works on Render free tier
 # ========================
 def run_telegram_bot():
-    print("[TELEGRAM] Bot polling started...")
+    print("[TELEGRAM] Bot polling started (pure HTTP)...")
     offset = None
 
     while True:
@@ -522,26 +426,18 @@ def run_telegram_bot():
                         handle_start(chat_id)
                     elif cmd == "/status":
                         handle_status(chat_id)
-                    elif cmd == "/alerts":
-                        handle_alerts(chat_id)
-                    elif cmd == "/ack":
-                        handle_ack(chat_id, args)
                     elif cmd == "/tasks":
                         handle_tasks(chat_id)
                     elif cmd == "/task":
                         handle_task(chat_id, args)
                     elif cmd == "/memory":
                         handle_memory(chat_id)
-                    elif cmd == "/brief":
-                        handle_brief(chat_id)
-                    elif cmd == "/knowledge":
-                        handle_knowledge(chat_id, args)
+                    elif cmd == "/predict":
+                        handle_predict(chat_id)
                     elif cmd == "/remind":
                         handle_remind(chat_id, args)
-                    elif cmd == "/help":
-                        handle_start(chat_id)
                     else:
-                        tg_send(chat_id, f"Unknown command. Send /start to see all commands.")
+                        tg_send(chat_id, f"Unknown command: {cmd}")
                 else:
                     handle_chat(chat_id, text)
 
