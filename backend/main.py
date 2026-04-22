@@ -1,3 +1,4 @@
+from knowledge import start_file_watcher
 import time
 import threading
 import psutil
