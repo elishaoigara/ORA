@@ -12,7 +12,7 @@ export default function ChatPage() {
 
   // load history
   useEffect(() => {
-    fetch(`${API}/api/conversations`)
+    fetch(`${API}/api/conversation-history`)
       .then(r => r.json())
       .then(data => setMessages(Array.isArray(data) ? data : []))
       .catch(() => {})
