@@ -1,4 +1,3 @@
-import os
 import time
 import threading
 import asyncio
@@ -15,9 +14,9 @@ from briefing import send_morning_briefing
 from scheduler import start_scheduler
 
 
-# -----------------------------
+# ─────────────────────────────────────────
 # SYSTEM DATA COLLECTION
-# -----------------------------
+# ─────────────────────────────────────────
 def collect_data():
     try:
         return {
@@ -31,9 +30,9 @@ def collect_data():
         return {}
 
 
-# -----------------------------
-# MAIN ORA CYCLE
-# -----------------------------
+# ─────────────────────────────────────────
+# MONITORING CYCLE
+# ─────────────────────────────────────────
 def run_cycle():
     now = datetime.now().strftime('%H:%M:%S')
     print(f"\n[{now}] ORA cycle...")
@@ -67,34 +66,50 @@ def run_cycle():
         print(f"[DECISION ERROR] {e}")
 
 
-# -----------------------------
+# ─────────────────────────────────────────
+# MONITORING LOOP (runs in background thread)
+# ─────────────────────────────────────────
+def run_monitoring_loop():
+    while True:
+        try:
+            run_cycle()
+        except Exception as e:
+            print(f"[CYCLE ERROR] {e}")
+        time.sleep(LOOP_INTERVAL)
+
+
+# ─────────────────────────────────────────
 # TELEGRAM BOT THREAD
-# Runs in its own thread with its own event loop
-# so it doesn't conflict with uvicorn's async loop
-# -----------------------------
+# Must have its own event loop — cannot share
+# uvicorn's event loop or it silently fails
+# ─────────────────────────────────────────
 def run_telegram_thread():
     from config import TELEGRAM_BOT_TOKEN
     if not TELEGRAM_BOT_TOKEN:
-        print("[TELEGRAM] No token set, skipping.")
+        print("[TELEGRAM] No token — skipping.")
         return
+
+    # Give uvicorn time to fully start first
+    time.sleep(3)
 
     print("[TELEGRAM] Starting bot in dedicated thread...")
 
-    # Fresh event loop for this thread — critical on Render
+    # New isolated event loop for this thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    try:
-        from telegram_bot import run_telegram_bot
-        run_telegram_bot()
-    except Exception as e:
-        print(f"[TELEGRAM ERROR] {e}")
-        time.sleep(10)
+    while True:
+        try:
+            from telegram_bot import run_telegram_bot
+            run_telegram_bot()
+        except Exception as e:
+            print(f"[TELEGRAM ERROR] {e} — restarting in 10s")
+            time.sleep(10)
 
 
-# -----------------------------
+# ─────────────────────────────────────────
 # INTELLIGENCE LAYER
-# -----------------------------
+# ─────────────────────────────────────────
 def start_intelligence_layer():
     jobs = [
         {
@@ -105,40 +120,30 @@ def start_intelligence_layer():
         },
     ]
     start_scheduler(jobs)
-    print("[ORA] Scheduler started — daily intelligence active")
+    print("[ORA] Scheduler started — daily briefing at 07:00 Nairobi")
 
 
-# -----------------------------
-# MONITORING LOOP
-# -----------------------------
-def run_monitoring_loop():
-    while True:
-        try:
-            run_cycle()
-        except Exception as e:
-            print(f"[CYCLE ERROR] {e}")
-        time.sleep(LOOP_INTERVAL)
-
-
-# -----------------------------
+# ─────────────────────────────────────────
 # STARTUP — called by api.py lifespan
-# -----------------------------
+# ─────────────────────────────────────────
 def startup():
-    # Init DB and profile
+    print("[ORA] Initializing systems...")
+
+    # Database + profile
     init_db()
     init_tasks_table()
     init_profile()
     log_memory_event("system", "ORA started", importance=6)
 
-    # Telegram in its own thread with its own event loop
-    t_telegram = threading.Thread(target=run_telegram_thread, daemon=True)
+    # Telegram bot — isolated thread with its own event loop
+    t_telegram = threading.Thread(target=run_telegram_thread, daemon=True, name="telegram")
     t_telegram.start()
 
-    # Intelligence scheduler
+    # Intelligence scheduler (morning briefing etc.)
     start_intelligence_layer()
 
     # System monitoring loop
-    t_monitor = threading.Thread(target=run_monitoring_loop, daemon=True)
+    t_monitor = threading.Thread(target=run_monitoring_loop, daemon=True, name="monitor")
     t_monitor.start()
 
-    print("[ORA] All systems started.")
+    print("[ORA] All systems online.")
