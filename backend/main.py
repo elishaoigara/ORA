@@ -145,7 +145,6 @@ def ai_worker():
 
             print("  [AI WORKER] Processing decision...")
 
-            # HARD BUDGET CHECK
             if not ai_budget.can_use_ai():
                 print("[AI WORKER] BLOCKED by AI budget controller")
                 continue
@@ -219,7 +218,7 @@ def start_intelligence_layer():
 
 
 # ─────────────────────────────────────────
-# STARTUP
+# STARTUP (FIXED FOR RENDER)
 # ─────────────────────────────────────────
 def startup():
     print("[ORA] Initializing systems...")
@@ -229,16 +228,7 @@ def startup():
     init_profile()
     log_memory_event("system", "ORA started", importance=6)
 
-    # Telegram thread
-    threading.Thread(target=run_telegram_thread, daemon=True).start()
-
-    # AI worker thread
-    threading.Thread(target=ai_worker, daemon=True).start()
-
-    # Scheduler
+    # ONLY SAFE COMPONENT HERE
     start_intelligence_layer()
 
-    # Monitoring loop
-    threading.Thread(target=run_monitoring_loop, daemon=True).start()
-
-    print("[ORA] All systems online.")
+    print("[ORA] Core systems online (API mode)")
