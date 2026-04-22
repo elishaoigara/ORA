@@ -376,10 +376,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========================
 # BOT RUNNER
-# Uses manual async loop — avoids set_wakeup_fd error
-# when running in a non-main thread on Render
+# v20 compatible - stop_signals=None lets it run in a non-main thread
 # ========================
-async def _run_bot_async():
+def run_telegram_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
@@ -392,25 +394,4 @@ async def _run_bot_async():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("[ORA] Telegram bot polling...")
-
-    async with app:
-        await app.start()
-        await app.updater.start_polling(drop_pending_updates=True)
-        # Keep running forever
-        while True:
-            await asyncio.sleep(1)
-
-
-def run_telegram_bot():
-    """
-    Runs the bot in a fresh event loop.
-    Called from a daemon thread in main.py.
-    """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(_run_bot_async())
-    except Exception as e:
-        print(f"[TELEGRAM FATAL] {e}")
-    finally:
-        loop.close()
+    app.run_polling(drop_pending_updates=True, stop_signals=None)
