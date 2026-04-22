@@ -91,21 +91,6 @@ export default function DashboardPage() {
     low: "var(--green)"
   }
 
-  // ✅ FIX: three distinct states
-  // - null           → fetch failed entirely → OFFLINE (red)
-  // - {status: "warming_up"} or {status: "error"} → backend up, no data yet → INIT (amber)
-  // - {cpu: ...}     → data present → ON (green)
-  const oraStatus = !status
-    ? "OFFLINE"
-    : status.cpu !== undefined
-      ? "ON"
-      : "INIT"
-
-  const oraColor =
-    oraStatus === "ON"      ? "var(--green)" :
-    oraStatus === "INIT"    ? "var(--amber)" :
-    "var(--red)"
-
   return (
     <div className="page">
       <div className="page-header">
@@ -135,13 +120,17 @@ export default function DashboardPage() {
           <div className="stat-label">Active Alerts</div>
         </div>
 
-        {/* ✅ FIXED: OFFLINE / INIT / ON */}
+        {/* ✅ FIXED STATUS LOGIC */}
         <div className="stat-box">
           <div
             className="stat-num"
-            style={{ color: oraColor }}
+            style={{
+              color: status && status.cpu !== undefined
+                ? "var(--green)"
+                : "var(--red)"
+            }}
           >
-            {oraStatus}
+            {status && status.cpu !== undefined ? "ON" : "OFF"}
           </div>
           <div className="stat-label">ORA Status</div>
         </div>
@@ -151,6 +140,7 @@ export default function DashboardPage() {
         <div className="card">
           <div className="card-title">Hardware Status</div>
 
+          {/* ✅ FIXED CONDITION */}
           {status && status.cpu !== undefined ? (
             <>
               <Meter label="CPU_LOAD" value={status.cpu} />
@@ -177,7 +167,7 @@ export default function DashboardPage() {
           ) : (
             <div className="empty">
               <div className="empty-icon">⌛</div>
-              {oraStatus === "OFFLINE" ? "Cannot reach backend" : "Waiting for first data..."}
+              No data from backend
             </div>
           )}
         </div>
