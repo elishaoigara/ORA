@@ -3,16 +3,17 @@ import API from "../api"
 
 const nav = [
   { id: "dashboard", icon: "◈", label: "Dashboard" },
-  { id: "chat", icon: "◎", label: "Neural Link" },
-  { id: "tasks", icon: "◆", label: "Tasks" },
+  { id: "chat",      icon: "◎", label: "Neural Link" },
+  { id: "tasks",     icon: "◆", label: "Tasks" },
   { id: "knowledge", icon: "◉", label: "Knowledge" },
-  { id: "memory", icon: "▣", label: "Memory" },
+  { id: "memory",    icon: "▣", label: "Memory" },
 ]
 
 export default function Sidebar({ current, onNavigate }) {
   const [time, setTime] = useState("")
   const [online, setOnline] = useState(false)
 
+  // Clock
   useEffect(() => {
     const tick = () => {
       const now = new Date()
@@ -23,11 +24,15 @@ export default function Sidebar({ current, onNavigate }) {
     return () => clearInterval(t)
   }, [])
 
+  // Health check — reads body to confirm backend is truly responding
   useEffect(() => {
     const check = async () => {
       try {
-        await fetch(`${API}/api/health`)
-        setOnline(true)
+        const res = await fetch(`${API}/api/health`, { method: "GET" })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = await res.json()
+        // Backend returns { status: "ok" }
+        setOnline(data?.status === "ok" || data?.status === "ORA online")
       } catch {
         setOnline(false)
       }

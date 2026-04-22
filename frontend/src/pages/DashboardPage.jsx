@@ -56,7 +56,8 @@ export default function DashboardPage() {
 
     } catch (e) {
       console.error("🔥 API ERROR:", e)
-      setStatus({ status: "error" })
+      // Don't wipe status to "error" on network blip — keep last known state
+      setStatus(prev => prev ?? { status: "error" })
       setAlerts([])
       setTasks([])
     }
@@ -85,12 +86,30 @@ export default function DashboardPage() {
     low: "var(--green)"
   }
 
-  // ✅ REAL FIX: proper system status detection
+  // FIX: status is "online" when we got a valid response with cpu as a number.
+  // "warming_up" means backend is running but monitoring hasn't logged data yet.
+  // "error" means the fetch itself failed (CORS / network / server down).
   const isOnline =
-    status &&
+    status !== null &&
     status.status !== "warming_up" &&
     status.status !== "error" &&
     typeof status.cpu === "number"
+
+  const statusLabel = () => {
+    if (status === null) return "..."
+    if (status.status === "error") return "ERR"
+    if (status.status === "warming_up") return "INIT"
+    if (isOnline) return "ON"
+    return "OFF"
+  }
+
+  const statusColor = () => {
+    if (status === null) return "var(--text3)"
+    if (status.status === "error") return "var(--red)"
+    if (status.status === "warming_up") return "var(--amber)"
+    if (isOnline) return "var(--green)"
+    return "var(--red)"
+  }
 
   return (
     <div className="page">
@@ -122,15 +141,12 @@ export default function DashboardPage() {
           <div className="stat-label">Active Alerts</div>
         </div>
 
-        {/* ✅ FIXED ORA STATUS */}
         <div className="stat-box">
           <div
             className="stat-num"
-            style={{
-              color: isOnline ? "var(--green)" : "var(--red)"
-            }}
+            style={{ color: statusColor() }}
           >
-            {isOnline ? "ON" : "OFF"}
+            {statusLabel()}
           </div>
           <div className="stat-label">ORA Status</div>
         </div>
@@ -141,7 +157,7 @@ export default function DashboardPage() {
 
         {/* HARDWARE */}
         <div className="card">
-          <div className="card-title">Hardware Status</div>
+          <div className="card-title">// Hardware Status</div>
 
           {isOnline ? (
             <>
@@ -170,7 +186,9 @@ export default function DashboardPage() {
             <div className="empty">
               <div className="empty-icon">⌛</div>
               {status?.status === "error"
-                ? "Backend error"
+                ? "Backend unreachable — check CORS / env vars"
+                : status?.status === "warming_up"
+                ? "ORA warming up... (may take 30s on free tier)"
                 : "Initializing ORA system..."}
             </div>
           )}
@@ -178,7 +196,7 @@ export default function DashboardPage() {
 
         {/* ALERTS */}
         <div className="card">
-          <div className="card-title">Alert Feed</div>
+          <div className="card-title">// Alert Feed</div>
 
           {active.length === 0 ? (
             <div className="empty">
@@ -219,7 +237,7 @@ export default function DashboardPage() {
 
         {/* TASKS */}
         <div className="card" style={{ gridColumn: "1 / -1" }}>
-          <div className="card-title">Task Queue</div>
+          <div className="card-title">// Task Queue</div>
 
           {tasks.length === 0 ? (
             <div className="empty">
