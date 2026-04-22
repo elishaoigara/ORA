@@ -11,55 +11,59 @@ const IMP_LABEL = (n = 0) =>
   n >= 5 ? "MED" :
   "LOW"
 
+// Safe fetch — never throws, always returns a value or fallback
+async function safeFetch(url, fallback) {
+  try {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    return data ?? fallback
+  } catch (e) {
+    console.error(`[MEMORY] fetch failed: ${url}`, e)
+    return fallback
+  }
+}
+
 export default function MemoryPage() {
   const [profile, setProfile] = useState({})
   const [events, setEvents] = useState([])
   const [prefs, setPrefs] = useState([])
   const [filter, setFilter] = useState("all")
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState(null)
 
-  // -----------------------------
-  // LOAD DATA
-  // -----------------------------
   useEffect(() => {
     const load = async () => {
-      try {
-        setLoading(true)
+      setLoading(true)
+      setError(null)
 
-        const [pRes, eRes, prRes] = await Promise.all([
-          fetch(`${API}/api/memory/profile`),
-          fetch(`${API}/api/memory/events`),
-          fetch(`${API}/api/memory/preferences`)
-        ])
+      // FIX: fetch each endpoint independently — one failure won't wipe all three.
+      const [p, e, pr] = await Promise.all([
+        safeFetch(`${API}/api/memory/profile`, {}),
+        safeFetch(`${API}/api/memory/events`, []),
+        safeFetch(`${API}/api/memory/preferences`, []),
+      ])
 
-        if (!pRes.ok || !eRes.ok || !prRes.ok) {
-          throw new Error()
-        }
+      // If ALL three came back empty/failed, surface an error
+      const allEmpty =
+        Object.keys(p).length === 0 &&
+        e.length === 0 &&
+        pr.length === 0
 
-        const [p, e, pr] = await Promise.all([
-          pRes.json(),
-          eRes.json(),
-          prRes.json()
-        ])
+      setProfile(p)
+      setEvents(Array.isArray(e) ? e : [])
+      setPrefs(Array.isArray(pr) ? pr : [])
 
-        setProfile(p || {})
-        setEvents(Array.isArray(e) ? e : [])
-        setPrefs(Array.isArray(pr) ? pr : [])
-
-      } catch {
-        setError(true)
-      } finally {
-        setLoading(false)
+      if (allEmpty) {
+        setError("Memory is empty — ORA hasn't stored anything yet, or the backend just restarted.")
       }
+
+      setLoading(false)
     }
 
     load()
   }, [])
 
-  // -----------------------------
-  // FILTER EVENTS
-  // -----------------------------
   const eventTypes = ["all", ...new Set(events.map(e => e.type || "unknown"))]
 
   const filtered =
@@ -67,13 +71,9 @@ export default function MemoryPage() {
       ? events
       : events.filter(e => e.type === filter)
 
-  // -----------------------------
-  // UI
-  // -----------------------------
   return (
     <div className="page">
 
-      {/* HEADER */}
       <div className="page-header">
         <div className="page-title">// Memory Core</div>
         <div className="page-sub">
@@ -81,56 +81,54 @@ export default function MemoryPage() {
         </div>
       </div>
 
-      {/* LOADING / ERROR */}
       {loading && (
         <div className="card">
-          <div>Loading memory...</div>
+          <div style={{ color: "var(--text3)", fontFamily: "Share Tech Mono, monospace", fontSize: "0.8rem" }}>
+            Loading memory...
+          </div>
         </div>
       )}
 
-      {error && (
-        <div className="card" style={{ color: "var(--red)" }}>
-          Failed to load memory (server may be sleeping)
+      {/* FIX: show error as info, not blocker — still render whatever data loaded */}
+      {!loading && error && (
+        <div className="card" style={{ borderColor: "rgba(245,158,11,0.3)", marginBottom: "1rem" }}>
+          <div style={{ color: "var(--amber)", fontSize: "0.8rem" }}>
+            ⚠ {error}
+          </div>
         </div>
       )}
 
-      {!loading && !error && (
+      {!loading && (
         <>
-          {/* HOW IT WORKS */}
+          {/* HOW MEMORY WORKS */}
           <div className="card" style={{ marginBottom: "1rem" }}>
             <div className="card-title">How Memory Works</div>
             <div style={{ fontSize: "0.8rem", color: "var(--text3)", lineHeight: 1.6 }}>
               ORA stores structured memory in three layers:
-              <br />• Profile → core identity data
-              <br />• Preferences → learned patterns
-              <br />• Events → timeline of interactions and actions
+              <br />• Profile → core identity data (name, role, timezone)
+              <br />• Preferences → learned patterns and habits
+              <br />• Events → timeline of interactions and system actions
             </div>
           </div>
 
           {/* PROFILE + PREFS */}
           <div className="grid-2" style={{ marginBottom: "1rem" }}>
 
-            {/* PROFILE */}
             <div className="card">
               <div className="card-title">Identity Profile</div>
 
               {Object.keys(profile).length === 0 ? (
-                <div className="empty">No profile data</div>
+                <div className="empty">No profile data yet</div>
               ) : (
                 Object.entries(profile).map(([k, v]) => (
                   <div key={k} className="mem-row">
-                    <span className="mem-key">
-                      {k.replace(/_/g, " ")}
-                    </span>
-                    <span className="mem-val">
-                      {String(v)}
-                    </span>
+                    <span className="mem-key">{k.replace(/_/g, " ")}</span>
+                    <span className="mem-val">{String(v)}</span>
                   </div>
                 ))
               )}
             </div>
 
-            {/* PREFS */}
             <div className="card">
               <div className="card-title">Preferences</div>
 
@@ -142,11 +140,8 @@ export default function MemoryPage() {
                     <span className="mem-key">
                       {(p.category || "general")}/{p.key || "unknown"}
                     </span>
-
                     <div style={{ textAlign: "right" }}>
-                      <div className="mem-val">
-                        {p.value || "-"}
-                      </div>
+                      <div className="mem-val">{p.value || "-"}</div>
                       <div style={{ fontSize: "0.65rem", color: "var(--text3)" }}>
                         {Math.round((p.confidence || 0) * 100)}%
                       </div>
@@ -162,21 +157,26 @@ export default function MemoryPage() {
             <div style={{
               display: "flex",
               justifyContent: "space-between",
+              alignItems: "center",
               marginBottom: "1rem"
             }}>
               <div className="card-title">
                 Event Log ({events.length})
               </div>
 
-              <div>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                 {eventTypes.slice(0, 5).map(t => (
                   <button
                     key={t}
                     onClick={() => setFilter(t)}
                     style={{
-                      marginRight: 4,
                       fontSize: "0.65rem",
-                      color: filter === t ? "var(--amber)" : "var(--text3)"
+                      padding: "2px 6px",
+                      background: "none",
+                      border: `1px solid ${filter === t ? "var(--amber)" : "var(--border)"}`,
+                      color: filter === t ? "var(--amber)" : "var(--text3)",
+                      cursor: "pointer",
+                      borderRadius: 2,
                     }}
                   >
                     {t}
@@ -191,12 +191,9 @@ export default function MemoryPage() {
               ) : (
                 filtered.map((e, i) => (
                   <div key={i} className="event-row">
-
-                    <div style={{ color: IMP_COLOR(e.importance) }}>
-                      {e.type || "event"}
-                      <div style={{ fontSize: "0.6rem" }}>
-                        {IMP_LABEL(e.importance)}
-                      </div>
+                    <div style={{ color: IMP_COLOR(e.importance), minWidth: 80 }}>
+                      <div style={{ fontSize: "0.7rem" }}>{e.type || "event"}</div>
+                      <div style={{ fontSize: "0.6rem" }}>{IMP_LABEL(e.importance)}</div>
                     </div>
 
                     <div className="event-summary">
@@ -204,11 +201,8 @@ export default function MemoryPage() {
                     </div>
 
                     <div className="event-time">
-                      {e.timestamp
-                        ? e.timestamp.slice(11, 19)
-                        : "--:--"}
+                      {e.timestamp ? e.timestamp.slice(11, 19) : "--:--"}
                     </div>
-
                   </div>
                 ))
               )}
