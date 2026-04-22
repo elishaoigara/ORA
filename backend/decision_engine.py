@@ -1,3 +1,4 @@
+from ai_budget import ai_budget
 def decide(context, use_ai=False, ai_handler=None):
     """
     Hybrid decision engine:

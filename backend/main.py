@@ -14,6 +14,11 @@ from memory.events import log_memory_event
 from briefing import send_morning_briefing
 from scheduler import start_scheduler
 
+# ─────────────────────────────────────────
+# AI BUDGET CONTROLLER IMPORT (NEW)
+# ─────────────────────────────────────────
+from ai_budget import ai_budget
+
 
 # ─────────────────────────────────────────
 # GLOBAL CONTROL LAYER
@@ -45,13 +50,9 @@ def collect_data():
 # AI CONTROL HELPERS (SAFE GATING)
 # ─────────────────────────────────────────
 def should_use_ai(data):
-    """
-    STRICT AI trigger:
-    only borderline + abnormal states
-    """
     return (
-        (85 < data["cpu_percent"] <= 92) or
-        (80 < data["ram_percent"] <= 90) or
+        (88 < data["cpu_percent"] <= 95) or
+        (85 < data["ram_percent"] <= 92) or
         (3 <= data["disk_free_gb"] <= 5)
     )
 
@@ -105,22 +106,26 @@ def run_cycle():
         execute(decision_cache[key])
         return
 
-    # 2. RULE ENGINE FIRST (IMPORTANT FIX)
+    # 2. RULE ENGINE FIRST
     decision = decide(context)
 
-    # If rules already handled it → execute immediately
     if decision.get("actions"):
         decision_cache[key] = decision
         execute(decision)
         return
 
-    # 3. AI ONLY IF NEEDED + COOLDOWN + NO RULE MATCH
-    if should_use_ai(data) and can_call_ai():
+    # 3. QUEUE GUARD (PREVENT SPAM)
+    if ai_queue.qsize() > 3:
+        print("[AI] Queue full — skipping request")
+        return
+
+    # 4. AI ONLY IF NEEDED + COOLDOWN + BUDGET CONTROL
+    if should_use_ai(data) and can_call_ai() and ai_budget.can_use_ai():
         print("  [AI] Queuing decision request...")
         ai_queue.put((key, context))
         return
 
-    # 4. SAFE FALLBACK (NO AI, NO FAILURE)
+    # 5. SAFE FALLBACK
     decision = {
         "reasoning": ["system stable / no AI needed"],
         "actions": []
@@ -131,7 +136,7 @@ def run_cycle():
 
 
 # ─────────────────────────────────────────
-# AI WORKER (RATE CONTROLLED)
+# AI WORKER (RATE CONTROLLED + BUDGETED)
 # ─────────────────────────────────────────
 def ai_worker():
     while True:
@@ -140,8 +145,15 @@ def ai_worker():
 
             print("  [AI WORKER] Processing decision...")
 
+            # HARD BUDGET CHECK
+            if not ai_budget.can_use_ai():
+                print("[AI WORKER] BLOCKED by AI budget controller")
+                continue
+
             try:
-                decision = decide(context)  # Groq call inside decision_engine
+                decision = decide(context, use_ai=True)
+                ai_budget.register_call()
+
             except Exception as e:
                 print(f"[AI ERROR] {e}")
                 decision = {
