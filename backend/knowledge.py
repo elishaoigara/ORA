@@ -1,34 +1,16 @@
-"""
-ORA Hybrid Knowledge Base
-SQLite FTS5 + MiniLM embeddings + lightweight reranking
-
-- FTS5 → fast keyword retrieval
-- Embeddings → semantic meaning search
-- Hybrid scoring → best of both worlds
-- No ChromaDB (avoids RAM crash)
-"""
-
 import os
 import sqlite3
 import uuid
-import numpy as np
 from datetime import datetime
+import re
 
 import PyPDF2
 from PIL import Image
-
-# ========================
-# EMBEDDINGS (MiniLM - lightweight)
-# ========================
-from sentence_transformers import SentenceTransformer
-
-EMBED_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
 
 UPLOADS_PATH = os.getenv("UPLOADS_PATH", "uploads")
 KB_DB_PATH = os.getenv("KB_DB_PATH", "ora_knowledge.db")
 
 os.makedirs(UPLOADS_PATH, exist_ok=True)
-
 
 # ========================
 # DATABASE
@@ -41,33 +23,25 @@ def _get_conn():
 
 def _init_kb():
     conn = _get_conn()
-
     conn.executescript("""
-        CREATE TABLE IF NOT EXISTS knowledge (
-            id TEXT PRIMARY KEY,
-            filename TEXT,
-            doc_type TEXT,
-            tags TEXT,
-            uploaded_at TEXT,
-            chunk_index INTEGER,
-            content TEXT,
-            embedding BLOB
-        );
-
         CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
-        USING fts5(content);
+        USING fts5(
+            id UNINDEXED,
+            filename,
+            doc_type,
+            tags,
+            uploaded_at UNINDEXED,
+            chunk_index UNINDEXED,
+            content
+        );
     """)
-
     conn.commit()
     conn.close()
-    print("[Knowledge] Hybrid DB ready (SQLite + Embeddings)")
-
 
 _init_kb()
 
-
 # ========================
-# TEXT EXTRACTION
+# EXTRACTION
 # ========================
 def extract_text_from_pdf(filepath):
     try:
@@ -84,7 +58,7 @@ def extract_text_from_pdf(filepath):
 def extract_text_from_txt(filepath):
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read().strip()
+            return f.read()
     except:
         return ""
 
@@ -92,7 +66,7 @@ def extract_text_from_txt(filepath):
 def extract_text_from_image(filepath):
     try:
         img = Image.open(filepath)
-        return f"Image: {img.size} {img.mode}"
+        return f"Image: {os.path.basename(filepath)} size {img.size}"
     except:
         return ""
 
@@ -100,35 +74,20 @@ def extract_text_from_image(filepath):
 # ========================
 # CHUNKING
 # ========================
-def chunk_text(text, size=500, overlap=80):
+def chunk_text(text, size=500, overlap=50):
     chunks = []
-    start = 0
-    while start < len(text):
-        end = start + size
-        chunks.append(text[start:end])
-        start = end - overlap
+    i = 0
+    while i < len(text):
+        chunks.append(text[i:i+size])
+        i += size - overlap
     return [c for c in chunks if c.strip()]
 
 
 # ========================
-# EMBEDDINGS
+# STORE
 # ========================
-def get_embedding(text: str):
-    vec = EMBED_MODEL.encode(text)
-    return np.array(vec, dtype=np.float32).tobytes()
-
-
-def cosine_sim(a, b):
-    a = np.frombuffer(a, dtype=np.float32)
-    b = np.frombuffer(b, dtype=np.float32)
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
-
-
-# ========================
-# STORE DOCUMENT
-# ========================
-def store_document(filepath, filename, doc_type="text", tags=""):
-    if filename.lower().endswith(".pdf"):
+def store_document(filepath, filename, tags=""):
+    if filename.endswith(".pdf"):
         text = extract_text_from_pdf(filepath)
         doc_type = "pdf"
     elif filename.lower().endswith((".png", ".jpg", ".jpeg")):
@@ -143,115 +102,118 @@ def store_document(filepath, filename, doc_type="text", tags=""):
 
     chunks = chunk_text(text)
     conn = _get_conn()
-    now = datetime.now().isoformat()
-
-    stored = 0
 
     for i, chunk in enumerate(chunks):
-        emb = get_embedding(chunk)
-        doc_id = f"{filename}_{i}_{uuid.uuid4().hex[:8]}"
-
-        conn.execute("""
-            INSERT INTO knowledge
-            (id, filename, doc_type, tags, uploaded_at, chunk_index, content, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (doc_id, filename, doc_type, tags, now, i, chunk, emb))
-
-        conn.execute("INSERT INTO knowledge_fts (content) VALUES (?)", (chunk,))
-        stored += 1
+        conn.execute(
+            "INSERT INTO knowledge_fts VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"{filename}_{i}_{uuid.uuid4().hex[:6]}",
+                filename,
+                doc_type,
+                tags,
+                datetime.now().isoformat(),
+                i,
+                chunk,
+            ),
+        )
 
     conn.commit()
     conn.close()
-
-    return stored
+    return len(chunks)
 
 
 # ========================
-# HYBRID SEARCH ENGINE
+# QUERY EXPANSION (FAKE SEMANTIC)
+# ========================
+SYNONYMS = {
+    "salary": ["pay", "income", "wage"],
+    "increase": ["raise", "growth", "boost"],
+    "contract": ["agreement", "deal"],
+    "meeting": ["discussion", "call"],
+}
+
+def expand_query(query):
+    words = query.lower().split()
+    expanded = set(words)
+
+    for w in words:
+        if w in SYNONYMS:
+            expanded.update(SYNONYMS[w])
+
+    return " ".join(expanded)
+
+
+# ========================
+# SEARCH
 # ========================
 def search_knowledge(query, n_results=5):
     conn = _get_conn()
 
-    query_emb = get_embedding(query)
+    expanded = expand_query(query)
 
-    rows = conn.execute("""
-        SELECT filename, doc_type, tags, content, embedding
-        FROM knowledge
-    """).fetchall()
-
-    results = []
-
-    for row in rows:
-        semantic_score = cosine_sim(query_emb, row["embedding"])
-
-        keyword_score = 0
-        if query.lower() in row["content"].lower():
-            keyword_score = 0.3
-
-        hybrid_score = (semantic_score * 0.7) + (keyword_score * 0.3)
-
-        results.append({
-            "text": row["content"],
-            "filename": row["filename"],
-            "doc_type": row["doc_type"],
-            "tags": row["tags"],
-            "score": hybrid_score
-        })
+    rows = conn.execute(
+        """
+        SELECT filename, doc_type, tags, content
+        FROM knowledge_fts
+        WHERE knowledge_fts MATCH ?
+        LIMIT ?
+        """,
+        (expanded, n_results * 3),
+    ).fetchall()
 
     conn.close()
 
-    results.sort(key=lambda x: x["score"], reverse=True)
+    results = []
+    for r in rows:
+        score = 0
+
+        # Boost tag matches
+        if r["tags"] and any(t in query for t in r["tags"].split(",")):
+            score += 2
+
+        # Boost filename match
+        if any(word in r["filename"].lower() for word in query.split()):
+            score += 1
+
+        # Basic keyword density
+        density = sum(r["content"].lower().count(w) for w in query.split())
+        score += density * 0.1
+
+        results.append({
+            "text": r["content"],
+            "filename": r["filename"],
+            "score": score
+        })
+
+    # Rerank
+    results.sort(key=lambda x: -x["score"])
+
     return results[:n_results]
 
 
 # ========================
-# FORMAT FOR LLM
-# ========================
-def search_and_format(query, n_results=4):
-    chunks = search_knowledge(query, n_results)
-
-    if not chunks:
-        return ""
-
-    out = ["## ORA MEMORY CONTEXT\n"]
-
-    for c in chunks:
-        out.append(f"[{c['filename']}] (score: {round(c['score'], 2)})")
-        out.append(c["text"][:400])
-
-    return "\n".join(out)
-
-
-# ========================
-# LIST DOCS
+# LIST
 # ========================
 def get_all_documents():
     conn = _get_conn()
-
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT filename, doc_type, tags, uploaded_at, COUNT(*) as chunks
-        FROM knowledge
+        FROM knowledge_fts
         GROUP BY filename
-    """).fetchall()
-
+        ORDER BY uploaded_at DESC
+        """
+    ).fetchall()
     conn.close()
 
-    return [
-        dict(row)
-        for row in rows
-    ]
+    return [dict(r) for r in rows]
 
 
 # ========================
-# DELETE DOC
+# DELETE
 # ========================
 def delete_document(filename):
     conn = _get_conn()
-
-    conn.execute("DELETE FROM knowledge WHERE filename=?", (filename,))
-    conn.execute("DELETE FROM knowledge_fts WHERE content LIKE ?", (f"%{filename}%",))
-
+    conn.execute("DELETE FROM knowledge_fts WHERE filename = ?", (filename,))
     conn.commit()
     conn.close()
-
-    return True
