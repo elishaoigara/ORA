@@ -162,18 +162,28 @@ def health():
 @app.get("/api/status")
 def status():
     try:
-        row = get_system_stats()
-        if not row:
-            return {"status": "warming_up"}
+        # FIX: Always return live psutil data immediately — never block on DB.
+        # The DB row from monitoring_loop is only used for last_updated timestamp.
+        # This means ORA status goes ON instantly after cold start, not after 5s+ wait.
+        cpu = psutil.cpu_percent(interval=0.1)
+        ram = psutil.virtual_memory().percent
+        disk_free_gb = psutil.disk_usage("/").free / (1024 ** 3)
+        now = datetime.now().isoformat()
 
-        # row is a sqlite3.Row — index by column name or position
-        data = json.loads(row[0])
+        # Try to get last_updated from DB (best-effort, non-blocking)
+        last_updated = now
+        try:
+            row = get_system_stats()
+            if row:
+                last_updated = row[1]
+        except Exception:
+            pass
 
         return {
-            "cpu": data.get("cpu_percent", 0),
-            "ram": data.get("ram_percent", 0),
-            "disk_free_gb": data.get("disk_free_gb", 0),
-            "last_updated": row[1]
+            "cpu": round(cpu, 1),
+            "ram": round(ram, 1),
+            "disk_free_gb": round(disk_free_gb, 2),
+            "last_updated": last_updated
         }
 
     except Exception:
