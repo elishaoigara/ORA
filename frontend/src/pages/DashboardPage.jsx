@@ -3,6 +3,7 @@ import API from "../api"
 
 function Meter({ label, value = 0, unit = "%" }) {
   const safeValue = Number(value) || 0
+
   const color =
     safeValue > 80 ? "var(--red)" :
     safeValue > 60 ? "var(--amber)" :
@@ -16,6 +17,7 @@ function Meter({ label, value = 0, unit = "%" }) {
           {safeValue}{unit}
         </span>
       </div>
+
       <div className="meter-track">
         <div
           className="meter-bar"
@@ -59,8 +61,8 @@ export default function DashboardPage() {
     } catch (e) {
       console.error("🔥 API ERROR:", e)
 
-      // fallback so UI doesn't crash
-      setStatus({ status: "error" })
+      // fallback (safe)
+      setStatus(null)
       setAlerts([])
       setTasks([])
     }
@@ -82,6 +84,7 @@ export default function DashboardPage() {
   }, [])
 
   const active = alerts.filter(a => !a.acknowledged)
+
   const sevColor = {
     high: "var(--red)",
     medium: "var(--amber)",
@@ -117,14 +120,17 @@ export default function DashboardPage() {
           <div className="stat-label">Active Alerts</div>
         </div>
 
+        {/* ✅ FIXED STATUS LOGIC */}
         <div className="stat-box">
           <div
             className="stat-num"
-            style={{ color: "var(--green)" }}
+            style={{
+              color: status && status.cpu !== undefined
+                ? "var(--green)"
+                : "var(--red)"
+            }}
           >
-            {status && status.status !== "warming_up" && status.status !== "error"
-              ? "ON"
-              : "OFF"}
+            {status && status.cpu !== undefined ? "ON" : "OFF"}
           </div>
           <div className="stat-label">ORA Status</div>
         </div>
@@ -134,9 +140,8 @@ export default function DashboardPage() {
         <div className="card">
           <div className="card-title">Hardware Status</div>
 
-          {status &&
-          status.status !== "warming_up" &&
-          status.status !== "error" ? (
+          {/* ✅ FIXED CONDITION */}
+          {status && status.cpu !== undefined ? (
             <>
               <Meter label="CPU_LOAD" value={status.cpu} />
               <Meter label="RAM_USED" value={status.ram} />
@@ -162,9 +167,7 @@ export default function DashboardPage() {
           ) : (
             <div className="empty">
               <div className="empty-icon">⌛</div>
-              {status?.status === "error"
-                ? "API error — check console"
-                : "Initializing sensors..."}
+              No data from backend
             </div>
           )}
         </div>
