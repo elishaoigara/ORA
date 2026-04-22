@@ -124,7 +124,7 @@ app = FastAPI(title="ORA Backend", lifespan=lifespan)
 # ========================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[FRONTEND_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -277,6 +277,18 @@ def tasks():
 # ========================
 # CHAT ENGINE
 # ========================
+@app.get("/api/conversation-history")
+def get_conversation_history_api():
+    try:
+        history = get_conversation_history(limit=20) # Use the same limit as in chat
+        return [
+            {"role": h[0], "content": h[1], "timestamp": h[2]}
+            for h in history
+        ]
+    except Exception:
+        return []
+
+
 @app.post("/api/chat")
 async def chat(payload: dict):
     try:
@@ -292,13 +304,9 @@ async def chat(payload: dict):
 
         client = Groq(api_key=GROQ_API_KEY)
 
-        knowledge_context = search_and_format(user_text, n_results=4)
         system_prompt = build_system_prompt(query=user_text)
 
-        if knowledge_context:
-            system_prompt += "\n\n" + knowledge_context
-
-        history = get_conversation_history(limit=6)
+        history = get_conversation_history(limit=20)
 
         messages = [{"role": "system", "content": system_prompt}]
 

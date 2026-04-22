@@ -1,7 +1,6 @@
 from datetime import datetime
 from intelligence.priority_engine import get_prioritized_tasks
 from intelligence.goals_engine import get_goals
-from telegram_bot import notify
 
 LAST_RUN_DAY = None
 
@@ -15,6 +14,12 @@ def generate_daily_brief():
         return
 
     if LAST_RUN_DAY == now.date():
+        return
+
+    try:
+        from telegram_bot import notify
+    except ImportError:
+        print("[TELEGRAM] Telegram bot not configured, skipping daily brief notification.")
         return
 
     tasks = get_prioritized_tasks()
