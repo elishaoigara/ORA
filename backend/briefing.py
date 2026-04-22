@@ -2,7 +2,7 @@ from datetime import datetime
 from database import get_system_stats, get_tasks
 from memory.profile import get_all_profile
 from context import build_system_prompt
-import ast
+import json
 
 
 def generate_briefing() -> str:
@@ -20,7 +20,7 @@ def generate_briefing() -> str:
     row = get_system_stats()
     if row:
         try:
-            data = ast.literal_eval(row[0])
+            data = json.loads(row[0])
             cpu = data.get("cpu_percent", "?")
             ram = data.get("ram_percent", "?")
             disk = round(data.get("disk_free_gb", 0), 1)
