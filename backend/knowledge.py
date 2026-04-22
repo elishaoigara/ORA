@@ -47,12 +47,14 @@ init_db()
 # =============================
 def load_index():
     if os.path.exists(INDEX_PATH):
-        return json.load(open(INDEX_PATH))
+        with open(INDEX_PATH, "r") as f:
+            return json.load(f)
     return {}
 
 
 def save_index(index):
-    json.dump(index, open(INDEX_PATH, "w"), indent=2)
+    with open(INDEX_PATH, "w") as f:
+        json.dump(index, f, indent=2)
 
 
 def get_file_hash(filepath):
@@ -69,23 +71,28 @@ def is_already_indexed(filepath):
 
 
 # =============================
-# EXTRACTION
+# EXTRACTION (STREAMING)
 # =============================
 def extract_text(filepath):
     name = filepath.lower()
 
+    # --- PDF (STREAMING) ---
     if name.endswith(".pdf"):
         try:
             import PyPDF2
-            text = ""
-            with open(filepath, "rb") as f:
-                reader = PyPDF2.PdfReader(f)
-                for p in reader.pages:
-                    text += p.extract_text() or ""
-            return text, "pdf"
-        except:
-            return "", "pdf"
+            reader = PyPDF2.PdfReader(filepath)
 
+            def page_generator():
+                for p in reader.pages:
+                    yield (p.extract_text() or "")
+
+            return page_generator(), "pdf"
+
+        except Exception as e:
+            print("[PDF ERROR]", e)
+            return None, "pdf"
+
+    # --- IMAGE ---
     elif name.endswith((".png", ".jpg", ".jpeg")):
         try:
             img = Image.open(filepath)
@@ -93,9 +100,11 @@ def extract_text(filepath):
         except:
             return "", "image"
 
+    # --- TEXT ---
     else:
         try:
-            return open(filepath, encoding="utf-8", errors="ignore").read(), "text"
+            with open(filepath, encoding="utf-8", errors="ignore") as f:
+                return f.read(), "text"
         except:
             return "", "text"
 
@@ -113,7 +122,7 @@ def chunk_text(text, size=600, overlap=100):
 
 
 # =============================
-# SUMMARY (UNCHANGED)
+# SUMMARY (SAFE)
 # =============================
 def generate_summary(text, filename):
     try:
@@ -129,13 +138,14 @@ def generate_summary(text, filename):
             model="llama-3.3-70b-versatile",
             messages=[{
                 "role": "user",
-                "content": f"Summarize this:\n{text[:3000]}"
+                "content": f"Summarize this document:\n{text[:3000]}"
             }],
             max_tokens=150
         )
 
         return res.choices[0].message.content.strip()
-    except:
+    except Exception as e:
+        print("[SUMMARY ERROR]", e)
         return None
 
 
@@ -143,6 +153,10 @@ def generate_summary(text, filename):
 # STORE DOCUMENT
 # =============================
 def store_document(filepath, filename, tags="", force=False):
+
+    # --- FILE SIZE PROTECTION ---
+    if os.path.getsize(filepath) > 10 * 1024 * 1024:
+        return {"status": "error", "reason": "file too large"}
 
     if not force and is_already_indexed(filepath):
         return {"status": "skipped", "chunks": 0}
@@ -154,11 +168,23 @@ def store_document(filepath, filename, tags="", force=False):
     delete_document(filename)
 
     conn = get_conn()
-
     stored = 0
 
-    # SUMMARY
-    summary = generate_summary(text, filename)
+    # =============================
+    # SUMMARY (SAFE SAMPLE ONLY)
+    # =============================
+    summary_text = ""
+
+    if doc_type == "pdf":
+        for i, page in enumerate(text):
+            summary_text += page
+            if i >= 3:  # only first 4 pages
+                break
+    else:
+        summary_text = text[:3000]
+
+    summary = generate_summary(summary_text, filename)
+
     if summary:
         conn.execute(
             "INSERT INTO knowledge_fts VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -174,28 +200,49 @@ def store_document(filepath, filename, tags="", force=False):
         )
         stored += 1
 
-    # CHUNKS
-    chunks = chunk_text(text)
-
-    for chunk in chunks:
-        conn.execute(
-            "INSERT INTO knowledge_fts VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                str(uuid.uuid4()),
-                filename,
-                doc_type,
-                tags,
-                chunk,
-                0,
-                datetime.now().isoformat(),
-            ),
-        )
-        stored += 1
+    # =============================
+    # CHUNKING + INSERT (STREAMING)
+    # =============================
+    if doc_type == "pdf":
+        for page in text:
+            chunks = chunk_text(page)
+            for chunk in chunks:
+                conn.execute(
+                    "INSERT INTO knowledge_fts VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(uuid.uuid4()),
+                        filename,
+                        doc_type,
+                        tags,
+                        chunk,
+                        0,
+                        datetime.now().isoformat(),
+                    ),
+                )
+                stored += 1
+    else:
+        chunks = chunk_text(text)
+        for chunk in chunks:
+            conn.execute(
+                "INSERT INTO knowledge_fts VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(uuid.uuid4()),
+                    filename,
+                    doc_type,
+                    tags,
+                    chunk,
+                    0,
+                    datetime.now().isoformat(),
+                ),
+            )
+            stored += 1
 
     conn.commit()
     conn.close()
 
+    # =============================
     # UPDATE INDEX
+    # =============================
     index = load_index()
     index[filename] = {
         "hash": get_file_hash(filepath),
@@ -211,14 +258,14 @@ def store_document(filepath, filename, tags="", force=False):
 
 
 # =============================
-# SEARCH (SMART LIGHTWEIGHT)
+# SEARCH (FTS5 + BM25)
 # =============================
 def search_knowledge(query, n_results=5):
     conn = get_conn()
 
     rows = conn.execute(
         """
-        SELECT *, rank
+        SELECT *, bm25(knowledge_fts) as rank
         FROM knowledge_fts
         WHERE knowledge_fts MATCH ?
         ORDER BY rank
@@ -234,7 +281,7 @@ def search_knowledge(query, n_results=5):
         score = 1.0 / (r["rank"] + 1)
 
         if r["is_summary"]:
-            score += 1  # boost summaries
+            score += 1
 
         results.append({
             "text": r["content"],
@@ -264,7 +311,7 @@ def search_and_format(query, n_results=4):
 
 
 # =============================
-# DOC MANAGEMENT
+# DOCUMENT MANAGEMENT
 # =============================
 def get_all_documents():
     index = load_index()
