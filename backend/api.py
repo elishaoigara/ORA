@@ -59,7 +59,7 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 # ========================
-# BACKGROUND MONITOR (🔥 FIX)
+# BACKGROUND MONITOR
 # ========================
 def monitoring_loop():
     while True:
@@ -90,6 +90,12 @@ async def lifespan(app: FastAPI):
         init_profile()
         log_memory_event("system", "ORA API started", importance=6)
 
+        # ✅ FIX: start monitoring thread here, inside lifespan
+        # (on_event startup is ignored when lifespan is set)
+        thread = threading.Thread(target=monitoring_loop, daemon=True)
+        thread.start()
+        print("[ORA] Monitoring thread started")
+
     except Exception:
         print("[INIT ERROR]", traceback.format_exc())
 
@@ -97,16 +103,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ORA Backend", lifespan=lifespan)
-
-
-# ========================
-# START BACKGROUND THREAD (🔥 FIX)
-# ========================
-@app.on_event("startup")
-def start_background_tasks():
-    thread = threading.Thread(target=monitoring_loop, daemon=True)
-    thread.start()
-    print("[ORA] Monitoring started")
 
 
 # ========================
