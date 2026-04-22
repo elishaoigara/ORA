@@ -1,511 +1,257 @@
-import os
-import uuid
-import json
-import hashlib
-from datetime import datetime
-from pathlib import Path
+"""
+ORA Hybrid Knowledge Base
+SQLite FTS5 + MiniLM embeddings + lightweight reranking
 
-import chromadb
+- FTS5 → fast keyword retrieval
+- Embeddings → semantic meaning search
+- Hybrid scoring → best of both worlds
+- No ChromaDB (avoids RAM crash)
+"""
+
+import os
+import sqlite3
+import uuid
+import numpy as np
+from datetime import datetime
+
+import PyPDF2
 from PIL import Image
 
-CHROMA_PATH = "ora_memory"
-UPLOADS_PATH = "uploads"
-INDEX_PATH = "ora_index.json"  # tracks what's been indexed
+# ========================
+# EMBEDDINGS (MiniLM - lightweight)
+# ========================
+from sentence_transformers import SentenceTransformer
 
-os.makedirs(CHROMA_PATH, exist_ok=True)
+EMBED_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+
+UPLOADS_PATH = os.getenv("UPLOADS_PATH", "uploads")
+KB_DB_PATH = os.getenv("KB_DB_PATH", "ora_knowledge.db")
+
 os.makedirs(UPLOADS_PATH, exist_ok=True)
 
-# Init ChromaDB
-chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
-collection = chroma_client.get_or_create_collection(
-    name="ora_knowledge",
-    metadata={"hnsw:space": "cosine"}
-)
+
+# ========================
+# DATABASE
+# ========================
+def _get_conn():
+    conn = sqlite3.connect(KB_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-# -----------------------------
-# FILE INDEX (prevents duplicates)
-# -----------------------------
+def _init_kb():
+    conn = _get_conn()
 
-def load_index():
-    if os.path.exists(INDEX_PATH):
-        with open(INDEX_PATH, "r") as f:
-            return json.load(f)
-    return {}
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS knowledge (
+            id TEXT PRIMARY KEY,
+            filename TEXT,
+            doc_type TEXT,
+            tags TEXT,
+            uploaded_at TEXT,
+            chunk_index INTEGER,
+            content TEXT,
+            embedding BLOB
+        );
 
-def save_index(index):
-    with open(INDEX_PATH, "w") as f:
-        json.dump(index, f, indent=2)
+        CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
+        USING fts5(content);
+    """)
 
-def get_file_hash(filepath):
-    h = hashlib.md5()
-    with open(filepath, "rb") as f:
-        h.update(f.read())
-    return h.hexdigest()
-
-def is_already_indexed(filepath):
-    index = load_index()
-    filename = os.path.basename(filepath)
-    current_hash = get_file_hash(filepath)
-    if filename in index:
-        return index[filename].get("hash") == current_hash
-    return False
+    conn.commit()
+    conn.close()
+    print("[Knowledge] Hybrid DB ready (SQLite + Embeddings)")
 
 
-# -----------------------------
+_init_kb()
+
+
+# ========================
 # TEXT EXTRACTION
-# -----------------------------
-
-def extract_from_pdf(filepath):
-    """Extract text from PDF using pdfplumber (best quality)."""
+# ========================
+def extract_text_from_pdf(filepath):
     try:
-        import pdfplumber
         text = ""
-        with pdfplumber.open(filepath) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-
-            # Also extract tables
-            for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    for row in table:
-                        clean_row = [str(cell or "") for cell in row]
-                        text += " | ".join(clean_row) + "\n"
+        with open(filepath, "rb") as f:
+            reader = PyPDF2.PdfReader(f)
+            for page in reader.pages:
+                text += page.extract_text() or ""
         return text.strip()
-    except ImportError:
-        # Fallback to PyPDF2
-        try:
-            import PyPDF2
-            text = ""
-            with open(filepath, "rb") as f:
-                reader = PyPDF2.PdfReader(f)
-                for page in reader.pages:
-                    text += page.extract_text() or ""
-            return text.strip()
-        except Exception as e:
-            print(f"[PDF Error] {e}")
-            return ""
-    except Exception as e:
-        print(f"[PDF Error] {e}")
+    except:
         return ""
 
 
-def extract_from_txt(filepath):
-    """Extract text from txt, md, csv files."""
+def extract_text_from_txt(filepath):
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             return f.read().strip()
-    except Exception as e:
-        print(f"[TXT Error] {e}")
+    except:
         return ""
 
 
-def extract_from_image(filepath):
-    """
-    Store image metadata. OCR can be added later.
-    For now ORA knows the image exists and its properties.
-    """
+def extract_text_from_image(filepath):
     try:
         img = Image.open(filepath)
-        filename = os.path.basename(filepath)
-        return (
-            f"IMAGE_FILE: {filename}\n"
-            f"Dimensions: {img.size[0]}x{img.size[1]}px\n"
-            f"Mode: {img.mode}\n"
-            f"Format: {img.format}\n"
-            f"Uploaded: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        )
-    except Exception as e:
-        return f"Image file: {os.path.basename(filepath)}"
+        return f"Image: {img.size} {img.mode}"
+    except:
+        return ""
 
 
-def extract_text(filepath):
-    """Auto-detect file type and extract text."""
-    filename = os.path.basename(filepath).lower()
-
-    if filename.endswith(".pdf"):
-        return extract_from_pdf(filepath), "pdf"
-    elif filename.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
-        return extract_from_image(filepath), "image"
-    elif filename.endswith((".csv",)):
-        return extract_from_txt(filepath), "csv"
-    elif filename.endswith((".md", ".markdown")):
-        return extract_from_txt(filepath), "markdown"
-    elif filename.endswith((".json",)):
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return json.dumps(data, indent=2), "json"
-        except:
-            return extract_from_txt(filepath), "json"
-    else:
-        return extract_from_txt(filepath), "text"
-
-
-# -----------------------------
-# SMART CHUNKING
-# -----------------------------
-
-def smart_chunk(text, chunk_size=600, overlap=100):
-    """
-    Chunk text intelligently — prefer breaking at paragraph
-    boundaries rather than mid-sentence.
-    """
-    if not text:
-        return []
-
-    # Try to split on paragraphs first
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-
+# ========================
+# CHUNKING
+# ========================
+def chunk_text(text, size=500, overlap=80):
     chunks = []
-    current = ""
-
-    for para in paragraphs:
-        if len(current) + len(para) < chunk_size:
-            current += para + "\n\n"
-        else:
-            if current:
-                chunks.append(current.strip())
-            # If paragraph itself is too long, split it
-            if len(para) > chunk_size:
-                words = para.split()
-                sub = ""
-                for word in words:
-                    if len(sub) + len(word) < chunk_size:
-                        sub += word + " "
-                    else:
-                        if sub:
-                            chunks.append(sub.strip())
-                        sub = word + " "
-                if sub:
-                    chunks.append(sub.strip())
-                current = ""
-            else:
-                current = para + "\n\n"
-
-    if current:
-        chunks.append(current.strip())
-
-    return [c for c in chunks if len(c) > 50]  # filter tiny chunks
+    start = 0
+    while start < len(text):
+        end = start + size
+        chunks.append(text[start:end])
+        start = end - overlap
+    return [c for c in chunks if c.strip()]
 
 
-# -----------------------------
-# GENERATE DOCUMENT SUMMARY
-# -----------------------------
-
-def generate_summary(text, filename):
-    """
-    Generate a brief summary of a document using Groq.
-    This summary is stored as a high-importance chunk.
-    """
-    try:
-        from config import GROQ_API_KEY
-        from groq import Groq
-
-        if not GROQ_API_KEY or len(text) < 100:
-            return None
-
-        client = Groq(api_key=GROQ_API_KEY)
-        sample = text[:3000]  # first 3000 chars
-
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Summarize this document in 3-5 sentences. "
-                    f"Focus on key facts, decisions, or information. "
-                    f"File: {filename}\n\n{sample}"
-                )
-            }],
-            max_tokens=200,
-            temperature=0.3
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        print(f"[Summary Error] {e}")
-        return None
+# ========================
+# EMBEDDINGS
+# ========================
+def get_embedding(text: str):
+    vec = EMBED_MODEL.encode(text)
+    return np.array(vec, dtype=np.float32).tobytes()
 
 
-# -----------------------------
+def cosine_sim(a, b):
+    a = np.frombuffer(a, dtype=np.float32)
+    b = np.frombuffer(b, dtype=np.float32)
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
+
+
+# ========================
 # STORE DOCUMENT
-# -----------------------------
-
-def store_document(filepath, filename, tags="", force=False):
-    """
-    Process and store a document in ORA's semantic memory.
-    - Skips if file already indexed with same content (unless force=True)
-    - Generates AI summary
-    - Chunks intelligently
-    - Returns dict with status and chunk count
-    """
-    # Check for duplicates
-    if not force and is_already_indexed(filepath):
-        return {"status": "skipped", "reason": "already indexed", "chunks": 0}
-
-    # Extract text
-    text, doc_type = extract_text(filepath)
+# ========================
+def store_document(filepath, filename, doc_type="text", tags=""):
+    if filename.lower().endswith(".pdf"):
+        text = extract_text_from_pdf(filepath)
+        doc_type = "pdf"
+    elif filename.lower().endswith((".png", ".jpg", ".jpeg")):
+        text = extract_text_from_image(filepath)
+        doc_type = "image"
+    else:
+        text = extract_text_from_txt(filepath)
+        doc_type = "text"
 
     if not text:
-        return {"status": "error", "reason": "no text extracted", "chunks": 0}
+        return 0
 
-    # Delete old version if re-indexing
-    delete_document(filename)
-
-    # Generate AI summary first
-    print(f"[ORA Knowledge] Generating summary for {filename}...")
-    summary = generate_summary(text, filename)
+    chunks = chunk_text(text)
+    conn = _get_conn()
+    now = datetime.now().isoformat()
 
     stored = 0
-    file_hash = get_file_hash(filepath)
-
-    # Store summary as priority chunk
-    if summary:
-        summary_id = f"SUMMARY_{filename}_{uuid.uuid4().hex[:8]}"
-        try:
-            collection.add(
-                documents=[f"DOCUMENT SUMMARY: {summary}"],
-                ids=[summary_id],
-                metadatas=[{
-                    "filename": filename,
-                    "doc_type": doc_type,
-                    "chunk_index": -1,  # -1 = summary
-                    "tags": tags,
-                    "is_summary": "true",
-                    "uploaded_at": datetime.now().isoformat()
-                }]
-            )
-            stored += 1
-        except Exception as e:
-            print(f"[Summary Store Error] {e}")
-
-    # Chunk and store
-    chunks = smart_chunk(text)
-    print(f"[ORA Knowledge] Indexing {len(chunks)} chunks from {filename}...")
 
     for i, chunk in enumerate(chunks):
+        emb = get_embedding(chunk)
         doc_id = f"{filename}_{i}_{uuid.uuid4().hex[:8]}"
-        try:
-            collection.add(
-                documents=[chunk],
-                ids=[doc_id],
-                metadatas=[{
-                    "filename": filename,
-                    "doc_type": doc_type,
-                    "chunk_index": i,
-                    "tags": tags,
-                    "is_summary": "false",
-                    "uploaded_at": datetime.now().isoformat()
-                }]
-            )
-            stored += 1
-        except Exception as e:
-            print(f"[ChromaDB Error] {e}")
 
-    # Update index
-    index = load_index()
-    index[filename] = {
-        "hash": file_hash,
-        "doc_type": doc_type,
-        "tags": tags,
-        "chunks": stored,
-        "summary": summary or "",
-        "indexed_at": datetime.now().isoformat()
-    }
-    save_index(index)
+        conn.execute("""
+            INSERT INTO knowledge
+            (id, filename, doc_type, tags, uploaded_at, chunk_index, content, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (doc_id, filename, doc_type, tags, now, i, chunk, emb))
 
-    print(f"[ORA Knowledge] ✓ {filename} → {stored} chunks stored")
-    return {
-        "status": "stored",
-        "filename": filename,
-        "doc_type": doc_type,
-        "chunks": stored,
-        "summary": summary or "No summary generated"
-    }
+        conn.execute("INSERT INTO knowledge_fts (content) VALUES (?)", (chunk,))
+        stored += 1
+
+    conn.commit()
+    conn.close()
+
+    return stored
 
 
-# -----------------------------
-# SEARCH KNOWLEDGE
-# -----------------------------
+# ========================
+# HYBRID SEARCH ENGINE
+# ========================
+def search_knowledge(query, n_results=5):
+    conn = _get_conn()
 
-def search_knowledge(query, n_results=5, tags_filter=None):
-    """
-    Semantic search across all indexed documents.
-    Summaries are weighted higher in results.
-    Returns ranked list of relevant chunks with source info.
-    """
-    try:
-        count = collection.count()
-        if count == 0:
-            return []
+    query_emb = get_embedding(query)
 
-        where = None
-        if tags_filter:
-            where = {"tags": {"$contains": tags_filter}}
+    rows = conn.execute("""
+        SELECT filename, doc_type, tags, content, embedding
+        FROM knowledge
+    """).fetchall()
 
-        results = collection.query(
-            query_texts=[query],
-            n_results=min(n_results, count),
-            where=where,
-            include=["documents", "metadatas", "distances"]
-        )
+    results = []
 
-        chunks = []
-        if results and results["documents"]:
-            for i, doc in enumerate(results["documents"][0]):
-                meta = results["metadatas"][0][i] if results["metadatas"] else {}
-                distance = results["distances"][0][i] if results["distances"] else 1.0
-                relevance = round(1 - distance, 3)
+    for row in rows:
+        semantic_score = cosine_sim(query_emb, row["embedding"])
 
-                chunks.append({
-                    "text": doc,
-                    "filename": meta.get("filename", "unknown"),
-                    "doc_type": meta.get("doc_type", "text"),
-                    "tags": meta.get("tags", ""),
-                    "is_summary": meta.get("is_summary") == "true",
-                    "relevance": relevance
-                })
+        keyword_score = 0
+        if query.lower() in row["content"].lower():
+            keyword_score = 0.3
 
-        # Sort by relevance, summaries first
-        chunks.sort(key=lambda x: (not x["is_summary"], -x["relevance"]))
-        return chunks
+        hybrid_score = (semantic_score * 0.7) + (keyword_score * 0.3)
 
-    except Exception as e:
-        print(f"[Search Error] {e}")
-        return []
+        results.append({
+            "text": row["content"],
+            "filename": row["filename"],
+            "doc_type": row["doc_type"],
+            "tags": row["tags"],
+            "score": hybrid_score
+        })
+
+    conn.close()
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:n_results]
 
 
+# ========================
+# FORMAT FOR LLM
+# ========================
 def search_and_format(query, n_results=4):
-    """
-    Search and format results for injection into ORA's prompt.
-    Returns formatted string ready for context injection.
-    """
-    chunks = search_knowledge(query, n_results=n_results)
+    chunks = search_knowledge(query, n_results)
+
     if not chunks:
         return ""
 
-    lines = ["## Relevant knowledge from your files:"]
-    seen_files = set()
+    out = ["## ORA MEMORY CONTEXT\n"]
 
     for c in chunks:
-        fname = c["filename"]
-        prefix = "📋 SUMMARY" if c["is_summary"] else "📄 EXCERPT"
-        relevance_pct = int(c["relevance"] * 100)
+        out.append(f"[{c['filename']}] (score: {round(c['score'], 2)})")
+        out.append(c["text"][:400])
 
-        if fname not in seen_files:
-            lines.append(f"\n**[{fname}]** (relevance: {relevance_pct}%)")
-            seen_files.add(fname)
-
-        lines.append(f"{prefix}: {c['text'][:400]}")
-
-    return "\n".join(lines)
+    return "\n".join(out)
 
 
-# -----------------------------
-# DOCUMENT MANAGEMENT
-# -----------------------------
-
+# ========================
+# LIST DOCS
+# ========================
 def get_all_documents():
-    """List all stored documents with metadata from index."""
-    index = load_index()
-    docs = []
-    for filename, meta in index.items():
-        docs.append({
-            "filename": filename,
-            "doc_type": meta.get("doc_type", "text"),
-            "tags": meta.get("tags", ""),
-            "chunks": meta.get("chunks", 0),
-            "summary": meta.get("summary", ""),
-            "indexed_at": meta.get("indexed_at", "")
-        })
-    docs.sort(key=lambda x: x["indexed_at"], reverse=True)
-    return docs
+    conn = _get_conn()
+
+    rows = conn.execute("""
+        SELECT filename, doc_type, tags, uploaded_at, COUNT(*) as chunks
+        FROM knowledge
+        GROUP BY filename
+    """).fetchall()
+
+    conn.close()
+
+    return [
+        dict(row)
+        for row in rows
+    ]
 
 
+# ========================
+# DELETE DOC
+# ========================
 def delete_document(filename):
-    """Delete all chunks of a document from ChromaDB and index."""
-    deleted = 0
-    try:
-        results = collection.get()
-        ids_to_delete = [
-            results["ids"][i]
-            for i, meta in enumerate(results["metadatas"])
-            if meta.get("filename") == filename
-        ]
-        if ids_to_delete:
-            collection.delete(ids=ids_to_delete)
-            deleted = len(ids_to_delete)
-    except Exception as e:
-        print(f"[Delete Error] {e}")
+    conn = _get_conn()
 
-    # Remove from index
-    index = load_index()
-    if filename in index:
-        del index[filename]
-        save_index(index)
+    conn.execute("DELETE FROM knowledge WHERE filename=?", (filename,))
+    conn.execute("DELETE FROM knowledge_fts WHERE content LIKE ?", (f"%{filename}%",))
 
-    return deleted
+    conn.commit()
+    conn.close()
 
-
-def get_document_summary(filename):
-    """Get the AI-generated summary of a specific document."""
-    index = load_index()
-    if filename in index:
-        return index[filename].get("summary", "No summary available")
-    return "Document not found"
-
-
-def reindex_all():
-    """
-    Re-index all files in the uploads folder.
-    Useful for rebuilding the knowledge base.
-    """
-    results = []
-    for filename in os.listdir(UPLOADS_PATH):
-        filepath = os.path.join(UPLOADS_PATH, filename)
-        if os.path.isfile(filepath):
-            result = store_document(filepath, filename, force=True)
-            results.append(result)
-    return results
-
-
-# -----------------------------
-# AUTO FILE WATCHER
-# -----------------------------
-
-def start_file_watcher():
-    """
-    Watch the uploads folder for new files.
-    Auto-indexes anything dropped in.
-    """
-    try:
-        from watchdog.observers import Observer
-        from watchdog.events import FileSystemEventHandler
-
-        class UploadHandler(FileSystemEventHandler):
-            def on_created(self, event):
-                if not event.is_directory:
-                    filepath = event.src_path
-                    filename = os.path.basename(filepath)
-                    # Skip temp files
-                    if filename.startswith(".") or filename.endswith(".tmp"):
-                        return
-                    print(f"[ORA Watcher] New file detected: {filename}")
-                    import time
-                    time.sleep(1)  # Wait for file to finish writing
-                    store_document(filepath, filename)
-
-        observer = Observer()
-        observer.schedule(UploadHandler(), UPLOADS_PATH, recursive=False)
-        observer.start()
-        print(f"[ORA Watcher] Watching {UPLOADS_PATH} for new files...")
-        return observer
-    except ImportError:
-        print("[ORA Watcher] watchdog not installed, file watching disabled")
-        return None
-    except Exception as e:
-        print(f"[ORA Watcher Error] {e}")
-        return None
+    return True
