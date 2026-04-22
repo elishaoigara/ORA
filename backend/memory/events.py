@@ -5,40 +5,54 @@ from groq import Groq
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+
 def log_memory_event(event_type, summary, detail="", importance=5):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("""INSERT INTO memory_events
-                 (event_type, summary, detail, importance, timestamp)
-                 VALUES (?, ?, ?, ?, ?)""",
-              (event_type, summary, detail, importance, datetime.now().isoformat()))
+    c.execute(
+        """INSERT INTO memory_events
+           (event_type, summary, detail, importance, timestamp)
+           VALUES (?, ?, ?, ?, ?)""",
+        (event_type, summary, detail, importance, datetime.now().isoformat())
+    )
     conn.commit()
     close_conn()
+
 
 def get_recent_events(limit=20, event_type=None):
     conn = get_conn()
     c = conn.cursor()
     if event_type:
-        c.execute("""SELECT event_type, summary, detail, importance, timestamp
-                     FROM memory_events WHERE event_type=?
-                     ORDER BY id DESC LIMIT ?""", (event_type, limit))
+        c.execute(
+            """SELECT event_type, summary, detail, importance, timestamp
+               FROM memory_events WHERE event_type=?
+               ORDER BY id DESC LIMIT ?""",
+            (event_type, limit)
+        )
     else:
-        c.execute("""SELECT event_type, summary, detail, importance, timestamp
-                     FROM memory_events ORDER BY id DESC LIMIT ?""", (limit,))
+        c.execute(
+            """SELECT event_type, summary, detail, importance, timestamp
+               FROM memory_events ORDER BY id DESC LIMIT ?""",
+            (limit,)
+        )
     rows = c.fetchall()
     close_conn()
     return rows
 
+
 def get_important_events(min_importance=7, limit=10):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("""SELECT event_type, summary, detail, importance, timestamp
-                 FROM memory_events WHERE importance >= ?
-                 ORDER BY importance DESC, id DESC LIMIT ?""",
-              (min_importance, limit))
+    c.execute(
+        """SELECT event_type, summary, detail, importance, timestamp
+           FROM memory_events WHERE importance >= ?
+           ORDER BY importance DESC, id DESC LIMIT ?""",
+        (min_importance, limit)
+    )
     rows = c.fetchall()
     close_conn()
     return rows
+
 
 def summarize_old_events(days_old=7, max_events=50):
     if not GROQ_API_KEY:
@@ -49,22 +63,31 @@ def summarize_old_events(days_old=7, max_events=50):
     conn = get_conn()
     c = conn.cursor()
 
-    # Get events older than `days_old`
     cutoff_date = (datetime.now() - timedelta(days=days_old)).isoformat()
-    c.execute("SELECT id, event_type, summary, detail, timestamp FROM memory_events WHERE timestamp < ? ORDER BY timestamp ASC LIMIT ?", (cutoff_date, max_events))
+
+    # FIX: fetch id too so we can delete by id later
+    c.execute(
+        """SELECT id, event_type, summary, detail, timestamp
+           FROM memory_events WHERE timestamp < ?
+           ORDER BY timestamp ASC LIMIT ?""",
+        (cutoff_date, max_events)
+    )
     old_events = c.fetchall()
 
     if not old_events:
         close_conn()
         return
 
-    # Group events by type for better summarization
+    # FIX: rows are plain tuples — use positional indexes, not dict keys
+    # Columns: 0=id, 1=event_type, 2=summary, 3=detail, 4=timestamp
     grouped_events = {}
     for event in old_events:
-        event_type = event["event_type"]
+        event_type = event[1]  # FIX: was event["event_type"]
         if event_type not in grouped_events:
             grouped_events[event_type] = []
-        grouped_events[event_type].append(f"[{event["timestamp"]}] {event["summary"]}: {event["detail"]}")
+        grouped_events[event_type].append(
+            f"[{event[4]}] {event[2]}: {event[3]}"  # FIX: was event["timestamp"] etc.
+        )
 
     summaries = []
     for event_type, events_list in grouped_events.items():
@@ -72,11 +95,10 @@ def summarize_old_events(days_old=7, max_events=50):
             continue
 
         events_text = "\n".join(events_list)
-        prompt = f"""
-        Summarize the following {event_type} events concisely. Focus on key themes and outcomes.
-        Events:
-        {events_text}
-        """
+        prompt = (
+            f"Summarize the following {event_type} events concisely. "
+            f"Focus on key themes and outcomes.\nEvents:\n{events_text}"
+        )
         try:
             response = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
@@ -94,9 +116,10 @@ def summarize_old_events(days_old=7, max_events=50):
         log_memory_event("system_summary", "Periodic event summarization", full_summary, importance=2)
         print(f"[MEMORY] Summarized {len(old_events)} old events.")
 
-        # Delete summarized events
-        old_event_ids = [event["id"] for event in old_events]
-        c.execute(f"DELETE FROM memory_events WHERE id IN ({','.join(['?' * len(old_event_ids)])})", old_event_ids)
+        # FIX: build id list using tuple indexing
+        old_event_ids = [event[0] for event in old_events]  # FIX: was event["id"]
+        placeholders = ",".join("?" * len(old_event_ids))
+        c.execute(f"DELETE FROM memory_events WHERE id IN ({placeholders})", old_event_ids)
         conn.commit()
 
     close_conn()
