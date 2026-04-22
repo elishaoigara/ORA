@@ -2,7 +2,7 @@ def decide(context, use_ai=False, ai_handler=None):
     """
     Hybrid decision engine:
     - Rules first (fast, free)
-    - AI fallback only when needed
+    - AI fallback only when truly needed
     """
 
     reasoning = []
@@ -13,7 +13,7 @@ def decide(context, use_ai=False, ai_handler=None):
     disk = context.get("disk_free_gb", 999)
 
     # ─────────────────────────────────────────
-    # RULE-BASED DECISIONS (PRIMARY LAYER)
+    # RULE LAYER (PRIMARY - 90% OF CASES)
     # ─────────────────────────────────────────
     if cpu > 85:
         reasoning.append(f"High CPU: {cpu}%")
@@ -40,7 +40,13 @@ def decide(context, use_ai=False, ai_handler=None):
         })
 
     # ─────────────────────────────────────────
-    # INTELLIGENCE TRIGGER (WHEN RULES ARE NOT ENOUGH)
+    # DEFAULT RULE RESULT
+    # ─────────────────────────────────────────
+    if not reasoning:
+        reasoning.append("All systems normal")
+
+    # ─────────────────────────────────────────
+    # AI TRIGGER LOGIC (STRICTED)
     # ─────────────────────────────────────────
     complex_state = (
         (70 < cpu <= 85) or
@@ -48,27 +54,32 @@ def decide(context, use_ai=False, ai_handler=None):
         (5 <= disk <= 10)
     )
 
-    if not actions and complex_state:
+    # AI ONLY if:
+    # - no critical rule triggered
+    # - system is in gray zone
+    # - AI is explicitly enabled
+    if not actions and complex_state and use_ai and ai_handler:
+
         reasoning.append("Borderline system state detected")
 
-        if use_ai and ai_handler:
-            try:
-                ai_result = ai_handler(context)
+        try:
+            ai_result = ai_handler(context)
 
-                return {
-                    "reasoning": ["AI analysis"] + ai_result.get("reasoning", []),
-                    "actions": ai_result.get("actions", [])
-                }
+            # safety checks (VERY IMPORTANT for production stability)
+            if not isinstance(ai_result, dict):
+                raise ValueError("AI returned invalid format")
 
-            except Exception as e:
-                reasoning.append(f"AI fallback failed: {e}")
+            return {
+                "reasoning": ["AI analysis"] + ai_result.get("reasoning", []),
+                "actions": ai_result.get("actions", [])
+            }
+
+        except Exception as e:
+            reasoning.append(f"AI fallback failed: {str(e)}")
 
     # ─────────────────────────────────────────
-    # DEFAULT STATE
+    # FINAL OUTPUT (SAFE GUARANTEE)
     # ─────────────────────────────────────────
-    if not reasoning:
-        reasoning.append("All systems normal")
-
     return {
         "reasoning": reasoning,
         "actions": actions

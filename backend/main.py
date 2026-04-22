@@ -42,22 +42,28 @@ def collect_data():
 
 
 # ─────────────────────────────────────────
-# AI CONTROL HELPERS
+# AI CONTROL HELPERS (SAFE GATING)
 # ─────────────────────────────────────────
 def should_use_ai(data):
+    """
+    STRICT AI trigger:
+    only borderline + abnormal states
+    """
     return (
-        data["cpu_percent"] > 85 or
-        data["ram_percent"] > 80 or
-        data["disk_free_gb"] < 5
+        (85 < data["cpu_percent"] <= 92) or
+        (80 < data["ram_percent"] <= 90) or
+        (3 <= data["disk_free_gb"] <= 5)
     )
 
 
 def can_call_ai():
     global last_ai_call
     now = time.time()
+
     if now - last_ai_call > AI_COOLDOWN:
         last_ai_call = now
         return True
+
     return False
 
 
@@ -93,20 +99,35 @@ def run_cycle():
 
     key = get_cache_key(context)
 
-    # 1. Use cached decision if available
+    # 1. CACHE HIT (NO AI EVER)
     if key in decision_cache:
-        decision = decision_cache[key]
         print("  [CACHE] Using cached decision")
+        execute(decision_cache[key])
+        return
+
+    # 2. RULE ENGINE FIRST (IMPORTANT FIX)
+    decision = decide(context)
+
+    # If rules already handled it → execute immediately
+    if decision.get("actions"):
+        decision_cache[key] = decision
         execute(decision)
         return
 
-    # 2. Decide if AI is needed
+    # 3. AI ONLY IF NEEDED + COOLDOWN + NO RULE MATCH
     if should_use_ai(data) and can_call_ai():
         print("  [AI] Queuing decision request...")
         ai_queue.put((key, context))
-    else:
-        decision = {"action": "none", "reasoning": ["system stable / rate-limited"]}
-        execute(decision)
+        return
+
+    # 4. SAFE FALLBACK (NO AI, NO FAILURE)
+    decision = {
+        "reasoning": ["system stable / no AI needed"],
+        "actions": []
+    }
+
+    decision_cache[key] = decision
+    execute(decision)
 
 
 # ─────────────────────────────────────────
@@ -120,12 +141,12 @@ def ai_worker():
             print("  [AI WORKER] Processing decision...")
 
             try:
-                decision = decide(context)  # Groq call
+                decision = decide(context)  # Groq call inside decision_engine
             except Exception as e:
                 print(f"[AI ERROR] {e}")
                 decision = {
-                    "action": "none",
-                    "reasoning": ["fallback triggered"]
+                    "reasoning": ["fallback triggered"],
+                    "actions": []
                 }
 
             decision_cache[key] = decision
