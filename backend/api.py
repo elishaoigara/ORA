@@ -275,6 +275,56 @@ def tasks():
 
 
 # ========================
+# KNOWLEDGE
+# ========================
+@app.get("/api/knowledge/documents")
+def list_documents():
+    try:
+        return get_all_documents()
+    except Exception:
+        return []
+
+
+@app.post("/api/knowledge/upload")
+async def upload_file(file: UploadFile = File(...), tags: str = Form("")):
+    try:
+        # Check file size
+        file_content = await file.read()
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="File too large")
+
+        # Save file to disk
+        filename = file.filename
+        filepath = os.path.join(UPLOADS_PATH, filename)
+        with open(filepath, "wb") as f:
+            f.write(file_content)
+
+        # Index document
+        result = store_document(filepath, filename, tags=tags)
+        return {
+            "filename": filename,
+            "chunks": result.get("chunks", 0),
+            "status": result.get("status", "stored")
+        }
+    except Exception as e:
+        print("[UPLOAD ERROR]", traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/knowledge/documents/{filename}")
+def remove_document(filename: str):
+    try:
+        delete_document(filename)
+        # Also remove file from disk
+        filepath = os.path.join(UPLOADS_PATH, filename)
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        return {"status": "deleted"}
+    except Exception:
+        raise HTTPException(status_code=500, detail="Delete failed")
+
+
+# ========================
 # CHAT ENGINE
 # ========================
 @app.get("/api/conversation-history")
