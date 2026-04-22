@@ -41,7 +41,7 @@ from knowledge import (
     store_document,
     get_all_documents,
     delete_document,
-    search_and_format,   # 🔥 IMPORTANT FIX
+    search_and_format,
     UPLOADS_PATH
 )
 
@@ -65,7 +65,7 @@ async def lifespan(app: FastAPI):
         init_profile()
         log_memory_event("system", "ORA API started", importance=6)
     except Exception as e:
-        print("[INIT ERROR]", e)
+        print("[INIT ERROR]", traceback.format_exc())
 
     yield
 
@@ -100,6 +100,11 @@ app.mount(
 # ========================
 # HEALTH
 # ========================
+@app.get("/")
+def root():
+    return {"status": "ORA backend running"}
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ORA online"}
@@ -219,7 +224,7 @@ def conversations():
 
 
 # ========================
-# CHAT ENGINE (FIXED + GROUNDED)
+# CHAT ENGINE (STABLE + GROUNDED)
 # ========================
 @app.post("/api/chat")
 async def chat(payload: dict):
@@ -236,7 +241,7 @@ async def chat(payload: dict):
 
         client = Groq(api_key=GROQ_API_KEY)
 
-        # 🔥 RETRIEVAL STEP (FIX FOR HALLUCINATION)
+        # 🔥 KNOWLEDGE RETRIEVAL (anti hallucination)
         knowledge_context = search_and_format(user_text, n_results=4)
 
         system_prompt = build_system_prompt(query=user_text)
@@ -248,12 +253,7 @@ async def chat(payload: dict):
 
         history = get_conversation_history(limit=6)
 
-        messages = [
-            {
-                "role": "system",
-                "content": system_prompt
-            }
-        ]
+        messages = [{"role": "system", "content": system_prompt}]
 
         for role, content in history[:-1]:
             messages.append({
@@ -277,7 +277,7 @@ async def chat(payload: dict):
 
         return {"reply": reply}
 
-    except Exception as e:
+    except Exception:
         print("[CHAT ERROR]", traceback.format_exc())
         return {"reply": "ORA temporarily unavailable."}
 
@@ -305,7 +305,6 @@ async def upload(file: UploadFile = File(...), tags: str = Form("")):
                 size += len(chunk)
 
                 if size > MAX_FILE_SIZE:
-                    f.close()
                     os.remove(filepath)
                     raise HTTPException(status_code=413, detail="File too large")
 
@@ -319,9 +318,9 @@ async def upload(file: UploadFile = File(...), tags: str = Form("")):
             "chunks": result
         }
 
-    except Exception as e:
+    except Exception:
         print("[UPLOAD ERROR]", traceback.format_exc())
-        return {"error": str(e)}
+        return {"error": "Upload failed"}
 
 
 # ========================
