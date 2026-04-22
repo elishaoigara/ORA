@@ -2,6 +2,10 @@ import os
 import json
 import uuid
 import traceback
+import threading
+import time
+import psutil
+from datetime import datetime
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -21,7 +25,8 @@ from database import (
     get_conversation_history,
     save_conversation,
     init_db,
-    init_tasks_table
+    init_tasks_table,
+    log_event
 )
 
 # ========================
@@ -54,6 +59,27 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 # ========================
+# BACKGROUND MONITOR (🔥 FIX)
+# ========================
+def monitoring_loop():
+    while True:
+        try:
+            data = {
+                "cpu_percent": psutil.cpu_percent(interval=1),
+                "ram_percent": psutil.virtual_memory().percent,
+                "disk_free_gb": psutil.disk_usage("/").free / (1024 ** 3),
+                "timestamp": datetime.now().isoformat()
+            }
+
+            log_event("system", data)
+
+        except Exception as e:
+            print("[MONITOR ERROR]", e)
+
+        time.sleep(5)
+
+
+# ========================
 # INIT
 # ========================
 @asynccontextmanager
@@ -63,6 +89,7 @@ async def lifespan(app: FastAPI):
         init_tasks_table()
         init_profile()
         log_memory_event("system", "ORA API started", importance=6)
+
     except Exception:
         print("[INIT ERROR]", traceback.format_exc())
 
@@ -73,11 +100,21 @@ app = FastAPI(title="ORA Backend", lifespan=lifespan)
 
 
 # ========================
-# CORS (IMPORTANT FIX)
+# START BACKGROUND THREAD (🔥 FIX)
+# ========================
+@app.on_event("startup")
+def start_background_tasks():
+    thread = threading.Thread(target=monitoring_loop, daemon=True)
+    thread.start()
+    print("[ORA] Monitoring started")
+
+
+# ========================
+# CORS
 # ========================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 🔥 force open (fix Vercel issues)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -105,7 +142,7 @@ def root():
 
 
 @app.get("/api/health")
-@app.head("/api/health")  # 🔥 FIX HEAD requests (Render ping)
+@app.head("/api/health")
 def health():
     return {"status": "ORA online"}
 
@@ -120,10 +157,7 @@ def status():
         if not row:
             return {"status": "warming_up"}
 
-        try:
-            data = json.loads(row[0])
-        except Exception:
-            return {"status": "error", "detail": "Invalid system data"}
+        data = json.loads(row[0])
 
         return {
             "cpu": data.get("cpu_percent", 0),
@@ -155,7 +189,7 @@ def alerts():
             for a in data
         ]
     except Exception:
-        return []  # 🔥 prevent frontend crash
+        return []
 
 
 @app.post("/api/alerts/{alert_id}/ack")
@@ -231,18 +265,6 @@ def tasks():
 
 
 # ========================
-# CHAT HISTORY
-# ========================
-@app.get("/api/conversations")
-def conversations():
-    try:
-        data = get_conversation_history(limit=50)
-        return [{"role": r, "content": c} for r, c in data]
-    except Exception:
-        return []
-
-
-# ========================
 # CHAT ENGINE
 # ========================
 @app.post("/api/chat")
@@ -295,62 +317,3 @@ async def chat(payload: dict):
     except Exception:
         print("[CHAT ERROR]", traceback.format_exc())
         return {"reply": "ORA temporarily unavailable."}
-
-
-# ========================
-# KNOWLEDGE UPLOAD
-# ========================
-def safe_filename(name: str):
-    return f"{uuid.uuid4().hex}_{os.path.basename(name)}"
-
-
-@app.post("/api/knowledge/upload")
-async def upload(file: UploadFile = File(...), tags: str = Form("")):
-    try:
-        filename = safe_filename(file.filename)
-        filepath = os.path.join(UPLOADS_PATH, filename)
-
-        size = 0
-
-        with open(filepath, "wb") as f:
-            while chunk := await file.read(1024 * 1024):
-                size += len(chunk)
-
-                if size > MAX_FILE_SIZE:
-                    os.remove(filepath)
-                    raise HTTPException(status_code=413, detail="File too large")
-
-                f.write(chunk)
-
-        result = store_document(filepath, filename, tags=tags)
-
-        return {"status": "stored", "filename": filename, "chunks": result}
-
-    except Exception:
-        print("[UPLOAD ERROR]", traceback.format_exc())
-        return {"error": "Upload failed"}
-
-
-# ========================
-# KNOWLEDGE BASE
-# ========================
-@app.get("/api/knowledge/documents")
-def documents():
-    try:
-        return get_all_documents()
-    except Exception:
-        return []
-
-
-@app.delete("/api/knowledge/documents/{filename}")
-def delete_doc(filename: str):
-    try:
-        delete_document(filename)
-
-        path = os.path.join(UPLOADS_PATH, filename)
-        if os.path.exists(path):
-            os.remove(path)
-
-        return {"status": "deleted"}
-    except Exception:
-        return {"status": "error"}
