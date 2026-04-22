@@ -5,13 +5,16 @@ export default function ChatPage() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
+
   const bottomRef = useRef(null)
   const textareaRef = useRef(null)
+  const abortRef = useRef(null)
 
+  // load history
   useEffect(() => {
     fetch(`${API}/api/conversations`)
       .then(r => r.json())
-      .then(setMessages)
+      .then(data => setMessages(Array.isArray(data) ? data : []))
       .catch(() => {})
   }, [])
 
@@ -21,8 +24,14 @@ export default function ChatPage() {
 
   const send = async () => {
     if (!input.trim() || loading) return
+
     const text = input.trim()
     setInput("")
+
+    // cancel previous request if still running
+    if (abortRef.current) abortRef.current.abort()
+    abortRef.current = new AbortController()
+
     setMessages(prev => [...prev, { role: "user", content: text }])
     setLoading(true)
 
@@ -30,46 +39,79 @@ export default function ChatPage() {
       const res = await fetch(`${API}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text })
+        body: JSON.stringify({ message: text }),
+        signal: abortRef.current.signal
       })
+
       const data = await res.json()
-      setMessages(prev => [...prev, { role: "assistant", content: data.reply }])
-    } catch {
-      setMessages(prev => [...prev, { role: "assistant", content: "[CONNECTION LOST]" }])
+
+      const reply =
+        data?.reply ||
+        data?.error ||
+        "[INVALID RESPONSE]"
+
+      setMessages(prev => [
+        ...prev,
+        { role: "assistant", content: reply }
+      ])
+
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        setMessages(prev => [
+          ...prev,
+          { role: "assistant", content: "[CONNECTION ERROR]" }
+        ])
+      }
     }
+
     setLoading(false)
   }
 
   const onKey = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault()
+      send()
+    }
   }
 
   return (
     <div className="chat-page">
+
       <div className="chat-header">
         <div className="page-title">// Neural Link</div>
-        <div className="page-sub">Direct channel to ORA · Context-aware · Knows your files</div>
+        <div className="page-sub">
+          Direct channel to ORA · Context-aware intelligence system
+        </div>
       </div>
 
       <div className="chat-messages">
+
         {messages.length === 0 && (
           <div className="empty" style={{ marginTop: "4rem" }}>
             <div className="empty-icon">◎</div>
-            <div className="glow" style={{ marginBottom: 8 }}>ORA STANDING BY</div>
-            <div>Ask about your tasks, files, decisions, or anything else</div>
+            <div className="glow" style={{ marginBottom: 8 }}>
+              ORA STANDING BY
+            </div>
+            <div>Ask about tasks, files, system state, or anything else</div>
           </div>
         )}
 
         {messages.map((m, i) => (
-          <div key={i} className={`msg ${m.role === "user" ? "user" : "ora"}`}>
+          <div
+            key={i}
+            className={`msg ${m.role === "user" ? "user" : "ora"}`}
+          >
             <div className="msg-avatar">
               {m.role === "user" ? "EL" : "◎"}
             </div>
+
             <div className="msg-bubble">
               {m.role === "assistant" && (
                 <div className="msg-label">ORA // RESPONSE</div>
               )}
-              <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>
+                {m.content}
+              </div>
             </div>
           </div>
         ))}
@@ -91,20 +133,29 @@ export default function ChatPage() {
 
       <div className="chat-input-area">
         <div className="chat-input-row">
+
           <textarea
             ref={textareaRef}
             className="chat-textarea"
             value={input}
+            disabled={loading}
             onChange={e => setInput(e.target.value)}
             onKeyDown={onKey}
-            placeholder="TRANSMIT MESSAGE // Enter to send · Shift+Enter for new line"
+            placeholder="TRANSMIT MESSAGE // Enter to send"
             rows={2}
           />
-          <button className="btn-send" onClick={send} disabled={loading || !input.trim()}>
-            SEND ▶
+
+          <button
+            className="btn-send"
+            onClick={send}
+            disabled={loading || !input.trim()}
+          >
+            {loading ? "..." : "SEND ▶"}
           </button>
+
         </div>
       </div>
+
     </div>
   )
 }
