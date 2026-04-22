@@ -7,16 +7,20 @@ DB_PATH = "ora.db"
 # Thread-local storage for database connections
 _thread_local = threading.local()
 
+
 def get_conn():
     if not hasattr(_thread_local, "conn") or _thread_local.conn is None:
         _thread_local.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        _thread_local.conn.row_factory = sqlite3.Row
+        # Do NOT set row_factory — keep rows as plain tuples so index access
+        # works consistently everywhere (api.py uses row[0], row[1] etc.)
     return _thread_local.conn
+
 
 def close_conn():
     if hasattr(_thread_local, "conn") and _thread_local.conn is not None:
         _thread_local.conn.close()
         _thread_local.conn = None
+
 
 def init_db():
     conn = get_conn()
@@ -61,6 +65,7 @@ def init_db():
     conn.commit()
     close_conn()
 
+
 def init_tasks_table():
     conn = get_conn()
     c = conn.cursor()
@@ -75,13 +80,16 @@ def init_tasks_table():
     conn.commit()
     close_conn()
 
+
 def log_event(source, data):
     conn = get_conn()
     c = conn.cursor()
+    # FIX: always store as string — json.dumps is called by caller for system events
     c.execute("INSERT INTO events (source, data, timestamp) VALUES (?, ?, ?)",
-              (source, str(data), datetime.now().isoformat()))
+              (source, data, datetime.now().isoformat()))
     conn.commit()
     close_conn()
+
 
 def log_alert(rule_name, message, severity="medium"):
     conn = get_conn()
@@ -90,6 +98,7 @@ def log_alert(rule_name, message, severity="medium"):
               (rule_name, message, severity, datetime.now().isoformat()))
     conn.commit()
     close_conn()
+
 
 def get_recent_alerts(limit=10):
     conn = get_conn()
@@ -100,6 +109,7 @@ def get_recent_alerts(limit=10):
     close_conn()
     return rows
 
+
 def get_system_stats():
     conn = get_conn()
     c = conn.cursor()
@@ -108,12 +118,14 @@ def get_system_stats():
     close_conn()
     return row
 
+
 def acknowledge_alert(alert_id, feedback=None):
     conn = get_conn()
     c = conn.cursor()
     c.execute("UPDATE alerts SET acknowledged=1, feedback=? WHERE id=?", (feedback, alert_id))
     conn.commit()
     close_conn()
+
 
 def save_conversation(role, content):
     conn = get_conn()
@@ -123,13 +135,16 @@ def save_conversation(role, content):
     conn.commit()
     close_conn()
 
+
 def get_conversation_history(limit=20):
     conn = get_conn()
     c = conn.cursor()
+    # Returns rows as (role, content, timestamp) tuples
     c.execute("SELECT role, content, timestamp FROM conversations ORDER BY id DESC LIMIT ?", (limit,))
     rows = c.fetchall()
     close_conn()
     return list(reversed(rows))
+
 
 def add_task(title, priority="medium", due_at=None):
     conn = get_conn()
@@ -138,6 +153,7 @@ def add_task(title, priority="medium", due_at=None):
               (title, priority, datetime.now().isoformat(), due_at))
     conn.commit()
     close_conn()
+
 
 def get_tasks(status="pending"):
     conn = get_conn()
@@ -148,6 +164,7 @@ def get_tasks(status="pending"):
     close_conn()
     return rows
 
+
 def complete_task(task_id):
     conn = get_conn()
     c = conn.cursor()
@@ -155,6 +172,7 @@ def complete_task(task_id):
               (datetime.now().isoformat(), task_id))
     conn.commit()
     close_conn()
+
 
 def delete_task(task_id):
     conn = get_conn()

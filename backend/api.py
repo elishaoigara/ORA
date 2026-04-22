@@ -53,7 +53,7 @@ from knowledge import (
 # ENV
 # ========================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "").strip()
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
@@ -70,13 +70,10 @@ def monitoring_loop():
                 "disk_free_gb": psutil.disk_usage("/").free / (1024 ** 3),
                 "timestamp": datetime.now().isoformat()
             }
-
-            # ✅ FIX 1: json.dumps not str() — str() produces invalid JSON (single quotes)
+            # json.dumps not str() — str() produces invalid JSON (single quotes)
             log_event("system", json.dumps(data))
-
         except Exception as e:
             print("[MONITOR ERROR]", e)
-
         time.sleep(5)
 
 
@@ -103,11 +100,9 @@ async def lifespan(app: FastAPI):
         init_profile()
         log_memory_event("system", "ORA API started", importance=6)
 
-        # ✅ FIX 2: monitoring thread inside lifespan (on_event is ignored when lifespan is set)
         threading.Thread(target=monitoring_loop, daemon=True).start()
         print("[ORA] Monitoring thread started")
 
-        # ✅ FIX 3: telegram was never launched from api.py — added here
         threading.Thread(target=start_telegram, daemon=True).start()
 
     except Exception:
@@ -122,10 +117,14 @@ app = FastAPI(title="ORA Backend", lifespan=lifespan)
 # ========================
 # CORS
 # ========================
+# FIX: if FRONTEND_URL is empty or not set, allow all origins so Vercel can connect.
+# Once FRONTEND_URL is set in Render env, it locks down to that origin only.
+allowed_origins = [FRONTEND_URL] if FRONTEND_URL else ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=False if not FRONTEND_URL else True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -154,7 +153,7 @@ def root():
 @app.get("/api/health")
 @app.head("/api/health")
 def health():
-    return {"status": "ORA online"}
+    return {"status": "ok"}
 
 
 # ========================
@@ -167,6 +166,7 @@ def status():
         if not row:
             return {"status": "warming_up"}
 
+        # row is a sqlite3.Row — index by column name or position
         data = json.loads(row[0])
 
         return {
@@ -177,7 +177,8 @@ def status():
         }
 
     except Exception:
-        return {"status": "error", "detail": traceback.format_exc()}
+        print("[STATUS ERROR]", traceback.format_exc())
+        return {"status": "error"}
 
 
 # ========================
@@ -288,24 +289,23 @@ def list_documents():
 @app.post("/api/knowledge/upload")
 async def upload_file(file: UploadFile = File(...), tags: str = Form("")):
     try:
-        # Check file size
         file_content = await file.read()
         if len(file_content) > MAX_FILE_SIZE:
             raise HTTPException(status_code=400, detail="File too large")
 
-        # Save file to disk
         filename = file.filename
         filepath = os.path.join(UPLOADS_PATH, filename)
         with open(filepath, "wb") as f:
             f.write(file_content)
 
-        # Index document
         result = store_document(filepath, filename, tags=tags)
         return {
             "filename": filename,
             "chunks": result.get("chunks", 0),
             "status": result.get("status", "stored")
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print("[UPLOAD ERROR]", traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
@@ -315,7 +315,6 @@ async def upload_file(file: UploadFile = File(...), tags: str = Form("")):
 def remove_document(filename: str):
     try:
         delete_document(filename)
-        # Also remove file from disk
         filepath = os.path.join(UPLOADS_PATH, filename)
         if os.path.exists(filepath):
             os.remove(filepath)
@@ -330,7 +329,7 @@ def remove_document(filename: str):
 @app.get("/api/conversation-history")
 def get_conversation_history_api():
     try:
-        history = get_conversation_history(limit=20) # Use the same limit as in chat
+        history = get_conversation_history(limit=20)
         return [
             {"role": h[0], "content": h[1], "timestamp": h[2]}
             for h in history
@@ -350,7 +349,7 @@ async def chat(payload: dict):
         log_memory_event("conversation", user_text[:80], importance=4)
 
         if not GROQ_API_KEY:
-            return {"reply": "GROQ_API_KEY missing."}
+            return {"reply": "GROQ_API_KEY missing — set it in Render environment variables."}
 
         client = Groq(api_key=GROQ_API_KEY)
 
@@ -360,7 +359,11 @@ async def chat(payload: dict):
 
         messages = [{"role": "system", "content": system_prompt}]
 
-        for role, content in history[:-1]:
+        # FIX: history rows have 3 columns (role, content, timestamp).
+        # Unpack all three — ignore timestamp when building messages.
+        for row in history[:-1]:
+            role = row[0]
+            content = row[1]
             messages.append({
                 "role": "user" if role == "user" else "assistant",
                 "content": content
