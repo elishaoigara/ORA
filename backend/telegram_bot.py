@@ -1,15 +1,15 @@
 """
-ORA Telegram Bot — pure HTTP implementation.
-No python-telegram-bot library = no set_wakeup_fd restriction.
-Runs cleanly in any thread on Render.
+ORA Telegram Bot — pure HTTP implementation
+Fixed for Render stability + safe startup + API resilience
 """
 
-print("[TELEGRAM] Loading pure HTTP bot v3...")
+print("[TELEGRAM] Loading pure HTTP bot v3 (fixed)...")
 
 import time
 import threading
 import requests
-from datetime import date, datetime
+import json
+from datetime import datetime
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GROQ_API_KEY
 from database import (
@@ -28,12 +28,28 @@ from groq import Groq
 
 
 # ========================
+# SAFETY CHECK (FIX #1)
+# ========================
+if not TELEGRAM_BOT_TOKEN:
+    print("[TELEGRAM] Missing bot token - bot disabled")
+    TELEGRAM_ENABLED = False
+else:
+    TELEGRAM_ENABLED = True
+    BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+
+# ========================
+# GROQ CLIENT (FIX #2)
+# ========================
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+
+# ========================
 # TELEGRAM API
 # ========================
-BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-
-
 def tg_send(chat_id, text):
+    if not TELEGRAM_ENABLED:
+        return
     try:
         requests.post(
             f"{BASE}/sendMessage",
@@ -45,6 +61,8 @@ def tg_send(chat_id, text):
 
 
 def tg_edit(chat_id, message_id, text):
+    if not TELEGRAM_ENABLED:
+        return
     try:
         requests.post(
             f"{BASE}/editMessageText",
@@ -56,17 +74,22 @@ def tg_edit(chat_id, message_id, text):
 
 
 def tg_get_updates(offset=None):
+    if not TELEGRAM_ENABLED:
+        return []
+
     try:
-        params = {"timeout": 30, "allowed_updates": ["message"]}
+        params = {"timeout": 20, "allowed_updates": ["message"]}
         if offset:
             params["offset"] = offset
 
         r = requests.get(
             f"{BASE}/getUpdates",
             params=params,
-            timeout=35
+            timeout=25
         )
+
         return r.json().get("result", [])
+
     except Exception as e:
         print(f"[TG POLL ERROR] {e}")
         return []
@@ -81,7 +104,7 @@ def notify(message, is_alert=False):
 
 
 # ========================
-# TASK DUE CHECKER
+# TASK CHECKER
 # ========================
 _notified_tasks = set()
 
@@ -91,12 +114,12 @@ def check_due_tasks():
     now = datetime.now()
 
     for t in tasks:
-        task_id, title, _, _, due_at = t[0], t[1], t[2], t[3], t[4]
-
-        if not due_at:
-            continue
-
         try:
+            task_id, title, _, _, due_at = t
+
+            if not due_at:
+                continue
+
             due_time = datetime.fromisoformat(due_at)
             diff = (due_time - now).total_seconds()
 
@@ -105,13 +128,12 @@ def check_due_tasks():
                 notify(f"Task due now: {title}", is_alert=True)
 
         except Exception as e:
-            print(f"[TASK PARSE ERROR] {e}")
+            print(f"[TASK ERROR] {e}")
 
 
 # ========================
-# GROQ AI
+# AI RESPONSE (FIXED)
 # ========================
-client = Groq(api_key=GROQ_API_KEY)
 LAST_REQUEST = 0
 COOLDOWN = 10
 
@@ -119,36 +141,34 @@ COOLDOWN = 10
 def ai_respond(user_text):
     global LAST_REQUEST
 
+    if not client:
+        return "GROQ API not configured."
+
     elapsed = time.time() - LAST_REQUEST
     if elapsed < COOLDOWN:
         time.sleep(COOLDOWN - elapsed)
 
     LAST_REQUEST = time.time()
 
-    # Knowledge base search
     knowledge_context = ""
+
     try:
         from knowledge import search_knowledge
-
         chunks = search_knowledge(user_text, n_results=4)
-        if chunks:
-            knowledge_context = "\n\n".join([
-                f"[From your file: {c['filename']}]\n{c['text'][:400]}"
-                for c in chunks
-            ])
-    except Exception as e:
-        print(f"[KNOWLEDGE ERROR] {e}")
 
-    # System prompt
+        if chunks:
+            knowledge_context = "\n\n".join(
+                f"[{c.get('filename','file')}]\n{c.get('text','')[:400]}"
+                for c in chunks
+            )
+
+    except Exception as e:
+        print("[KNOWLEDGE ERROR]", e)
+
     system_prompt = build_system_prompt(query=user_text)
 
     if knowledge_context:
-        system_prompt = (
-            "PRIORITY: Use Elisha's data first.\n\n"
-            + knowledge_context
-            + "\n\n---\n\n"
-            + system_prompt
-        )
+        system_prompt = knowledge_context + "\n\n" + system_prompt
 
     history = get_conversation_history(limit=8)
 
@@ -157,12 +177,11 @@ def ai_respond(user_text):
     for role, content in history:
         messages.append({
             "role": "user" if role == "user" else "assistant",
-            "content": content,
+            "content": content
         })
 
     messages.append({"role": "user", "content": user_text})
 
-    # Groq call with retry
     for attempt in range(3):
         try:
             response = client.chat.completions.create(
@@ -174,16 +193,10 @@ def ai_respond(user_text):
             return response.choices[0].message.content.strip()
 
         except Exception as e:
-            err = str(e)
-            if "429" in err or "rate_limit" in err.lower():
-                wait = 20 * (attempt + 1)
-                print(f"[GROQ] Rate limited, waiting {wait}s")
-                time.sleep(wait)
-            else:
-                print(f"[GROQ ERROR] {e}")
-                break
+            print("[GROQ ERROR]", e)
+            time.sleep(5 * (attempt + 1))
 
-    return "ORA is temporarily rate limited."
+    return "ORA is temporarily unavailable."
 
 
 # ========================
@@ -195,26 +208,30 @@ def handle_start(chat_id):
 
     tg_send(chat_id,
         f"ORA online, {name}.\n\n"
-        "Your personal intelligence system is active.\n"
-        "Type /status or just talk."
+        "System active."
     )
 
 
 def handle_status(chat_id):
-    import ast
-
-    row = get_system_stats()
-    if not row:
-        tg_send(chat_id, "ORA warming up.")
-        return
-
     try:
-        data = ast.literal_eval(row[0])
+        row = get_system_stats()
+
+        if not row:
+            tg_send(chat_id, "ORA warming up.")
+            return
+
+        try:
+            data = json.loads(row[0])
+        except:
+            import ast
+            data = ast.literal_eval(row[0])
+
         tg_send(chat_id,
-            f"CPU: {data.get('cpu_percent')}%\n"
-            f"RAM: {data.get('ram_percent')}%\n"
-            f"Disk: {data.get('disk_free_gb')}GB"
+            f"CPU: {data.get('cpu_percent', 0)}%\n"
+            f"RAM: {data.get('ram_percent', 0)}%\n"
+            f"Disk: {data.get('disk_free_gb', 0)}GB"
         )
+
     except Exception as e:
         tg_send(chat_id, f"Status error: {e}")
 
@@ -227,61 +244,53 @@ def handle_chat(chat_id, text):
             f"{BASE}/sendMessage",
             json={"chat_id": chat_id, "text": "thinking..."},
         )
-        msg_id = r.json()["result"]["message_id"]
+        msg_id = r.json().get("result", {}).get("message_id")
     except:
         pass
 
     save_conversation("user", text)
     log_memory_event("conversation", text[:80], importance=4)
 
-    if not GROQ_API_KEY:
-        tg_send(chat_id, "Missing GROQ key.")
-        return
+    reply = ai_respond(text)
 
-    try:
-        reply = ai_respond(text)
+    save_conversation("assistant", reply)
+    log_memory_event("conversation", "ORA replied", importance=3)
 
-        save_conversation("assistant", reply)
-        log_memory_event("conversation", "ORA replied", importance=3)
-
-        if msg_id:
-            tg_edit(chat_id, msg_id, reply)
-        else:
-            tg_send(chat_id, reply)
-
-    except Exception as e:
-        print("[CHAT ERROR]", e)
-        tg_send(chat_id, "ORA error occurred.")
+    if msg_id:
+        tg_edit(chat_id, msg_id, reply)
+    else:
+        tg_send(chat_id, reply)
 
 
 # ========================
-# MAIN LOOP
+# MAIN LOOP (FIXED SAFETY)
 # ========================
 def run_telegram_bot():
     print("[TELEGRAM] Bot started...")
+
     offset = None
+
+    time.sleep(3)  # FIX: allow Render startup
 
     while True:
         try:
             updates = tg_get_updates(offset)
 
             for update in updates:
-                offset = update["update_id"] + 1
-                msg = update.get("message", {})
+                offset = update.get("update_id", 0) + 1
 
+                msg = update.get("message")
                 if not msg:
                     continue
 
                 chat_id = msg["chat"]["id"]
-                text = msg.get("text", "").strip()
+                text = msg.get("text", "")
 
                 if not text:
                     continue
 
                 if text.startswith("/"):
-                    parts = text.split()
-                    cmd = parts[0].lower().split("@")[0]
-                    args = parts[1:]
+                    cmd = text.split()[0].lower()
 
                     if cmd == "/start":
                         handle_start(chat_id)
@@ -293,5 +302,5 @@ def run_telegram_bot():
                     handle_chat(chat_id, text)
 
         except Exception as e:
-            print(f"[BOT LOOP ERROR] {e}")
+            print("[BOT LOOP ERROR]", e)
             time.sleep(5)
