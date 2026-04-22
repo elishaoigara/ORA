@@ -18,7 +18,7 @@ os.makedirs(UPLOADS_PATH, exist_ok=True)
 # DB INIT
 # =============================
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -39,9 +39,6 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-
-
-init_db()
 
 
 # =============================
@@ -226,7 +223,7 @@ def store_document(filepath, filename, tags="", force=False):
 
     # =============================
     # INDEX UPDATE
-    # =============================
+# =============================
     index = load_index()
     index[filename] = {
         "hash": get_file_hash(filepath),
@@ -246,16 +243,32 @@ def store_document(filepath, filename, tags="", force=False):
 # =============================
 def search_knowledge(query, n_results=5):
     conn = get_conn()
+    rows = []
 
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM knowledge_fts
-        WHERE knowledge_fts MATCH ?
-        LIMIT ?
-        """,
-        (query, n_results * 3)
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM knowledge_fts
+            WHERE knowledge_fts MATCH ?
+            ORDER BY uploaded_at DESC
+            LIMIT ?
+            """,
+            (query, n_results * 3)
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        print(f"[FTS ERROR] {e} - Falling back to LIKE query")
+        # Fallback to LIKE query if FTS5 fails
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM knowledge_fts
+            WHERE content LIKE ?
+            ORDER BY uploaded_at DESC
+            LIMIT ?
+            """,
+            (f"%{query}%", n_results * 3)
+        ).fetchall()
 
     conn.close()
 
@@ -287,7 +300,7 @@ def search_and_format(query, n_results=4):
         return ""
 
     return "\n".join(
-        f"[{c['filename']}] {c['text'][:300]}"
+        f"[{c["filename"]}] {c["text"][:300]}"
         for c in chunks
     )
 
