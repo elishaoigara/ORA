@@ -86,19 +86,16 @@ export default function DashboardPage() {
     low: "var(--green)"
   }
 
-  // FIX: status is "online" when we got a valid response with cpu as a number.
-  // "warming_up" means backend is running but monitoring hasn't logged data yet.
-  // "error" means the fetch itself failed (CORS / network / server down).
+  // FIX: /api/status now always returns live psutil data (cpu is always a number).
+  // Only falls back to { status: "error" } if psutil itself crashes.
   const isOnline =
     status !== null &&
-    status.status !== "warming_up" &&
     status.status !== "error" &&
     typeof status.cpu === "number"
 
   const statusLabel = () => {
     if (status === null) return "..."
     if (status.status === "error") return "ERR"
-    if (status.status === "warming_up") return "INIT"
     if (isOnline) return "ON"
     return "OFF"
   }
@@ -106,7 +103,6 @@ export default function DashboardPage() {
   const statusColor = () => {
     if (status === null) return "var(--text3)"
     if (status.status === "error") return "var(--red)"
-    if (status.status === "warming_up") return "var(--amber)"
     if (isOnline) return "var(--green)"
     return "var(--red)"
   }
@@ -187,9 +183,7 @@ export default function DashboardPage() {
               <div className="empty-icon">⌛</div>
               {status?.status === "error"
                 ? "Backend unreachable — check CORS / env vars"
-                : status?.status === "warming_up"
-                ? "ORA warming up... (may take 30s on free tier)"
-                : "Initializing ORA system..."}
+                : "Connecting to ORA..."}
             </div>
           )}
         </div>
