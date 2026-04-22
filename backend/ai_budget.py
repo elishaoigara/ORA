@@ -33,7 +33,7 @@ class AIBudgetController:
                 print("[AI BUDGET] Daily reset completed")
 
     # ─────────────────────────────────────────
-    # CHECK IF AI IS ALLOWED
+    # CHECK IF AI IS ALLOWED (SAFE VERSION)
     # ─────────────────────────────────────────
     def can_use_ai(self):
         self.reset_if_new_day()
@@ -42,19 +42,28 @@ class AIBudgetController:
             if not self.ai_enabled:
                 return False
 
-            if self.used_tokens >= self.daily_limit:
+            # HARD SAFETY CHECK (before overflow)
+            if self.used_tokens + self.estimated_tokens > self.daily_limit:
                 self.ai_enabled = False
-                print("[AI BUDGET] HARD STOP ACTIVATED (limit reached)")
+                print("[AI BUDGET] HARD STOP ACTIVATED (pre-check limit)")
                 return False
 
             return True
 
     # ─────────────────────────────────────────
-    # REGISTER AI USAGE
+    # REGISTER AI USAGE (SAFE VERSION)
     # ─────────────────────────────────────────
     def register_call(self, tokens=None):
         with self.lock:
             cost = tokens or self.estimated_tokens
+
+            # Prevent accidental overflow tracking
+            if self.used_tokens + cost > self.daily_limit:
+                self.used_tokens = self.daily_limit
+                self.ai_enabled = False
+                print("[AI BUDGET] HARD STOP (overflow prevented)")
+                return False
+
             self.used_tokens += cost
 
             print(f"[AI BUDGET] Used: {self.used_tokens}/{self.daily_limit}")
@@ -68,8 +77,10 @@ class AIBudgetController:
                 self.ai_enabled = False
                 print("[AI BUDGET] AI DISABLED (hard limit reached)")
 
+            return True
+
     # ─────────────────────────────────────────
-    # MANUAL OVERRIDE (OPTIONAL)
+    # MANUAL OVERRIDE
     # ─────────────────────────────────────────
     def force_enable(self):
         with self.lock:

@@ -459,16 +459,32 @@ def handle_chat(chat_id, text):
         return
 
     try:
-        reply = ai_respond(text)
+        from ai_gateway import safe_ai_call
+
+        reply = safe_ai_call(ai_respond, text)
+
+        # handle AI blocked response
+        if isinstance(reply, dict) and reply.get("error"):
+            err_msg = f"⚠️ AI blocked: {reply['error']}"
+
+            if msg_id:
+                tg_edit(chat_id, msg_id, err_msg)
+            else:
+                tg_send(chat_id, err_msg)
+            return
+
         save_conversation("assistant", reply)
         log_memory_event("conversation", "ORA replied", importance=3)
+
         if msg_id:
             tg_edit(chat_id, msg_id, reply)
         else:
             tg_send(chat_id, reply)
+
     except Exception as e:
         print(f"[AI ERROR] {e}")
         err = "ORA hit an error. Try again in a moment."
+
         if msg_id:
             tg_edit(chat_id, msg_id, err)
         else:
