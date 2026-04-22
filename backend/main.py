@@ -1,4 +1,3 @@
-from knowledge import start_file_watcher
 import time
 import threading
 import psutil
@@ -10,7 +9,7 @@ from database import init_db, init_tasks_table, log_event
 from decision_engine import decide
 from action_engine import execute
 from memory.profile import init_profile
-from memory.events import log_memory_event
+from memory.events import log_memory_event, summarize_old_events
 from briefing import send_morning_briefing
 from scheduler import start_scheduler
 
@@ -18,6 +17,11 @@ from scheduler import start_scheduler
 # AI BUDGET CONTROLLER IMPORT (NEW)
 # ─────────────────────────────────────────
 from ai_budget import ai_budget
+
+# ─────────────────────────────────────────
+# INTELLIGENCE IMPORTS
+# ─────────────────────────────────────────
+from intelligence.pattern_engine import run_pattern_analysis
 
 
 # ─────────────────────────────────────────
@@ -69,14 +73,14 @@ def can_call_ai():
 
 
 def get_cache_key(context):
-    return f"{round(context['cpu'])}-{round(context['ram'])}-{round(context['disk_free_gb'])}"
+    return f"{round(context["cpu"])}.{round(context["ram"])}.{round(context["disk_free_gb"])}"
 
 
 # ─────────────────────────────────────────
 # MONITORING CYCLE
 # ─────────────────────────────────────────
 def run_cycle():
-    now = datetime.now().strftime('%H:%M:%S')
+    now = datetime.now().strftime("%H:%M:%S")
     print(f"\n[{now}] ORA cycle...")
 
     data = collect_data()
@@ -84,9 +88,9 @@ def run_cycle():
         return
 
     print(
-        f"  CPU: {data['cpu_percent']}% | "
-        f"RAM: {data['ram_percent']}% | "
-        f"Disk: {data['disk_free_gb']:.1f}GB"
+        f"  CPU: {data["cpu_percent"]}% | "
+        f"RAM: {data["ram_percent"]}% | "
+        f"Disk: {data["disk_free_gb"]:.1f}GB"
     )
 
     log_event("system", data)
@@ -211,6 +215,18 @@ def start_intelligence_layer():
             "minute": 0,
             "fn": send_morning_briefing,
             "name": "morning_briefing"
+        },
+        {
+            "hour": 23,
+            "minute": 0,
+            "fn": run_pattern_analysis,
+            "name": "daily_pattern_analysis"
+        },
+        {
+            "hour": 2,
+            "minute": 0,
+            "fn": summarize_old_events,
+            "name": "summarize_old_events"
         },
     ]
     start_scheduler(jobs)
