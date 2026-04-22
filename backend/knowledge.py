@@ -13,8 +13,9 @@ DB_PATH = "ora_knowledge.db"
 
 os.makedirs(UPLOADS_PATH, exist_ok=True)
 
+
 # =============================
-# DATABASE INIT (SQLite FTS5)
+# DB INIT
 # =============================
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
@@ -42,8 +43,9 @@ def init_db():
 
 init_db()
 
+
 # =============================
-# FILE INDEX
+# INDEX FILE
 # =============================
 def load_index():
     if os.path.exists(INDEX_PATH):
@@ -57,56 +59,62 @@ def save_index(index):
         json.dump(index, f, indent=2)
 
 
+# =============================
+# SAFE HASH (FIX MEMORY CRASH)
+# =============================
 def get_file_hash(filepath):
     h = hashlib.md5()
     with open(filepath, "rb") as f:
-        h.update(f.read())
+        while chunk := f.read(8192):
+            h.update(chunk)
     return h.hexdigest()
 
 
 def is_already_indexed(filepath):
     index = load_index()
     filename = os.path.basename(filepath)
-    return filename in index and index[filename]["hash"] == get_file_hash(filepath)
+    return (
+        filename in index and
+        index[filename]["hash"] == get_file_hash(filepath)
+    )
 
 
 # =============================
-# EXTRACTION (STREAMING)
+# EXTRACTION (SAFE + STREAMING)
 # =============================
 def extract_text(filepath):
     name = filepath.lower()
 
-    # --- PDF (STREAMING) ---
+    # ---------------- PDF ----------------
     if name.endswith(".pdf"):
         try:
             import PyPDF2
             reader = PyPDF2.PdfReader(filepath)
 
-            def page_generator():
-                for p in reader.pages:
-                    yield (p.extract_text() or "")
+            pages = []
+            for p in reader.pages:
+                pages.append(p.extract_text() or "")
 
-            return page_generator(), "pdf"
-
+            return pages, "pdf"
         except Exception as e:
             print("[PDF ERROR]", e)
-            return None, "pdf"
+            return [], "pdf"
 
-    # --- IMAGE ---
+    # ---------------- IMAGE ----------------
     elif name.endswith((".png", ".jpg", ".jpeg")):
         try:
             img = Image.open(filepath)
-            return f"Image {img.size}", "image"
+            return [f"Image {img.size}"], "image"
         except:
-            return "", "image"
+            return [], "image"
 
-    # --- TEXT ---
+    # ---------------- TEXT ----------------
     else:
         try:
             with open(filepath, encoding="utf-8", errors="ignore") as f:
-                return f.read(), "text"
+                return [f.read()], "text"
         except:
-            return "", "text"
+            return [], "text"
 
 
 # =============================
@@ -115,14 +123,16 @@ def extract_text(filepath):
 def chunk_text(text, size=600, overlap=100):
     chunks = []
     i = 0
+
     while i < len(text):
-        chunks.append(text[i:i+size])
+        chunks.append(text[i:i + size])
         i += size - overlap
+
     return [c for c in chunks if len(c.strip()) > 50]
 
 
 # =============================
-# SUMMARY (SAFE)
+# SUMMARY
 # =============================
 def generate_summary(text, filename):
     try:
@@ -138,12 +148,13 @@ def generate_summary(text, filename):
             model="llama-3.3-70b-versatile",
             messages=[{
                 "role": "user",
-                "content": f"Summarize this document:\n{text[:3000]}"
+                "content": f"Summarize this document clearly:\n{text[:3000]}"
             }],
             max_tokens=150
         )
 
         return res.choices[0].message.content.strip()
+
     except Exception as e:
         print("[SUMMARY ERROR]", e)
         return None
@@ -154,16 +165,16 @@ def generate_summary(text, filename):
 # =============================
 def store_document(filepath, filename, tags="", force=False):
 
-    # --- FILE SIZE PROTECTION ---
     if os.path.getsize(filepath) > 10 * 1024 * 1024:
         return {"status": "error", "reason": "file too large"}
 
     if not force and is_already_indexed(filepath):
         return {"status": "skipped", "chunks": 0}
 
-    text, doc_type = extract_text(filepath)
-    if not text:
-        return {"status": "error", "chunks": 0}
+    pages, doc_type = extract_text(filepath)
+
+    if not pages:
+        return {"status": "error", "reason": "no extractable text", "chunks": 0}
 
     delete_document(filename)
 
@@ -171,19 +182,10 @@ def store_document(filepath, filename, tags="", force=False):
     stored = 0
 
     # =============================
-    # SUMMARY (SAFE SAMPLE ONLY)
+    # SUMMARY (FIRST PAGES ONLY)
     # =============================
-    summary_text = ""
-
-    if doc_type == "pdf":
-        for i, page in enumerate(text):
-            summary_text += page
-            if i >= 3:  # only first 4 pages
-                break
-    else:
-        summary_text = text[:3000]
-
-    summary = generate_summary(summary_text, filename)
+    summary_source = "\n".join(pages[:3])
+    summary = generate_summary(summary_source, filename)
 
     if summary:
         conn.execute(
@@ -201,28 +203,10 @@ def store_document(filepath, filename, tags="", force=False):
         stored += 1
 
     # =============================
-    # CHUNKING + INSERT (STREAMING)
+    # CHUNKING
     # =============================
-    if doc_type == "pdf":
-        for page in text:
-            chunks = chunk_text(page)
-            for chunk in chunks:
-                conn.execute(
-                    "INSERT INTO knowledge_fts VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        str(uuid.uuid4()),
-                        filename,
-                        doc_type,
-                        tags,
-                        chunk,
-                        0,
-                        datetime.now().isoformat(),
-                    ),
-                )
-                stored += 1
-    else:
-        chunks = chunk_text(text)
-        for chunk in chunks:
+    for page in pages:
+        for chunk in chunk_text(page):
             conn.execute(
                 "INSERT INTO knowledge_fts VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -241,7 +225,7 @@ def store_document(filepath, filename, tags="", force=False):
     conn.close()
 
     # =============================
-    # UPDATE INDEX
+    # INDEX UPDATE
     # =============================
     index = load_index()
     index[filename] = {
@@ -258,17 +242,16 @@ def store_document(filepath, filename, tags="", force=False):
 
 
 # =============================
-# SEARCH (FTS5 + BM25)
+# SEARCH (SAFE FTS5)
 # =============================
 def search_knowledge(query, n_results=5):
     conn = get_conn()
 
     rows = conn.execute(
         """
-        SELECT *, bm25(knowledge_fts) as rank
+        SELECT *
         FROM knowledge_fts
         WHERE knowledge_fts MATCH ?
-        ORDER BY rank
         LIMIT ?
         """,
         (query, n_results * 3)
@@ -277,11 +260,12 @@ def search_knowledge(query, n_results=5):
     conn.close()
 
     results = []
-    for r in rows:
-        score = 1.0 / (r["rank"] + 1)
 
-        if r["is_summary"]:
-            score += 1
+    for r in rows:
+        score = 1.0
+
+        if r["is_summary"] == "1":
+            score *= 2.0  # boost summary heavily
 
         results.append({
             "text": r["content"],
@@ -294,7 +278,7 @@ def search_knowledge(query, n_results=5):
 
 
 # =============================
-# FORMAT FOR AI
+# FORMAT
 # =============================
 def search_and_format(query, n_results=4):
     chunks = search_knowledge(query, n_results)
@@ -302,31 +286,26 @@ def search_and_format(query, n_results=4):
     if not chunks:
         return ""
 
-    lines = ["## Relevant knowledge:\n"]
-
-    for c in chunks:
-        lines.append(f"[{c['filename']}] {c['text'][:300]}")
-
-    return "\n".join(lines)
+    return "\n".join(
+        f"[{c['filename']}] {c['text'][:300]}"
+        for c in chunks
+    )
 
 
 # =============================
-# DOCUMENT MANAGEMENT
+# DOC MANAGEMENT
 # =============================
 def get_all_documents():
     index = load_index()
-    return [
-        {
-            "filename": k,
-            **v
-        }
-        for k, v in index.items()
-    ]
+    return [{"filename": k, **v} for k, v in index.items()]
 
 
 def delete_document(filename):
     conn = get_conn()
-    conn.execute("DELETE FROM knowledge_fts WHERE filename = ?", (filename,))
+    conn.execute(
+        "DELETE FROM knowledge_fts WHERE filename = ?",
+        (filename,)
+    )
     conn.commit()
     conn.close()
 

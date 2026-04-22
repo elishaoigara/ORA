@@ -1,24 +1,42 @@
 import os
 import json
 import shutil
-from contextlib import asynccontextmanager
+import uuid
+import traceback
 
-from fastapi import FastAPI, UploadFile, File, Form
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from groq import Groq
+
+# ========================
+# DATABASE
+# ========================
 from database import (
-    get_recent_alerts, get_system_stats,
-    acknowledge_alert, get_tasks,
-    get_conversation_history, save_conversation,
-    init_db, init_tasks_table
+    get_recent_alerts,
+    get_system_stats,
+    acknowledge_alert,
+    get_tasks,
+    get_conversation_history,
+    save_conversation,
+    init_db,
+    init_tasks_table
 )
 
+# ========================
+# MEMORY
+# ========================
 from memory.profile import get_all_profile, init_profile
 from memory.events import get_recent_events, log_memory_event
 from memory.preferences import get_preferences
 
+# ========================
+# CORE
+# ========================
 from context import build_system_prompt
+
 from knowledge import (
     store_document,
     get_all_documents,
@@ -26,40 +44,31 @@ from knowledge import (
     UPLOADS_PATH
 )
 
-from groq import Groq
-
-
 # ========================
 # ENV
 # ========================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
 
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
 
 # ========================
-# LIFESPAN — init DB + background thread on startup
+# INIT
 # ========================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Init database tables
-    init_db()
-    init_tasks_table()
-    init_profile()
-    log_memory_event("system", "ORA API started", importance=6)
-
-    # Start background monitoring + Telegram in a daemon thread
     try:
-        from main import startup
-        startup()
+        init_db()
+        init_tasks_table()
+        init_profile()
+        log_memory_event("system", "ORA API started", importance=6)
     except Exception as e:
-        print(f"[STARTUP] Background init skipped: {e}")
+        print("[INIT ERROR]", e)
 
-    yield  # app runs here
+    yield
 
 
-# ========================
-# APP
-# ========================
 app = FastAPI(title="ORA Backend", lifespan=lifespan)
 
 
@@ -99,27 +108,22 @@ def health():
 # STATUS
 # ========================
 @app.get("/api/status")
-def get_status():
-    row = get_system_stats()
-
-    if not row:
-        return {"status": "warming_up"}
-
+def status():
     try:
-        data = json.loads(row[0])
-    except Exception:
-        try:
-            import ast
-            data = ast.literal_eval(row[0])
-        except Exception:
-            data = {}
+        row = get_system_stats()
+        if not row:
+            return {"status": "warming_up"}
 
-    return {
-        "cpu": data.get("cpu_percent"),
-        "ram": data.get("ram_percent"),
-        "disk_free_gb": round(data.get("disk_free_gb", 0), 1),
-        "last_updated": row[1]
-    }
+        data = json.loads(row[0])
+        return {
+            "cpu": data.get("cpu_percent"),
+            "ram": data.get("ram_percent"),
+            "disk_free_gb": data.get("disk_free_gb"),
+            "last_updated": row[1]
+        }
+
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
 
 
 # ========================
@@ -127,19 +131,21 @@ def get_status():
 # ========================
 @app.get("/api/alerts")
 def alerts():
-    data = get_recent_alerts(20)
-
-    return [
-        {
-            "id": a[0],
-            "rule": a[1],
-            "message": a[2],
-            "severity": a[3],
-            "timestamp": a[4],
-            "acknowledged": bool(a[5])
-        }
-        for a in data
-    ]
+    try:
+        data = get_recent_alerts(20)
+        return [
+            {
+                "id": a[0],
+                "rule": a[1],
+                "message": a[2],
+                "severity": a[3],
+                "timestamp": a[4],
+                "acknowledged": bool(a[5])
+            }
+            for a in data
+        ]
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/api/alerts/{alert_id}/ack")
@@ -159,7 +165,6 @@ def profile():
 @app.get("/api/memory/events")
 def events():
     data = get_recent_events(limit=20)
-
     return [
         {
             "type": e[0],
@@ -174,7 +179,6 @@ def events():
 @app.get("/api/memory/preferences")
 def prefs():
     data = get_preferences()
-
     return [
         {
             "category": p[0],
@@ -192,7 +196,6 @@ def prefs():
 @app.get("/api/tasks")
 def tasks():
     data = get_tasks("pending")
-
     return [
         {
             "id": t[0],
@@ -206,7 +209,7 @@ def tasks():
 
 
 # ========================
-# CONVERSATIONS (used by ChatPage)
+# CHAT HISTORY
 # ========================
 @app.get("/api/conversations")
 def conversations():
@@ -215,22 +218,21 @@ def conversations():
 
 
 # ========================
-# CHAT ENGINE
+# CHAT ENGINE (ROBUST)
 # ========================
 @app.post("/api/chat")
 async def chat(payload: dict):
-    user_text = payload.get("message", "").strip()
-
-    if not user_text:
-        return {"reply": "Say something."}
-
-    save_conversation("user", user_text)
-    log_memory_event("conversation", user_text[:80], importance=4)
-
-    if not GROQ_API_KEY:
-        return {"reply": "GROQ_API_KEY missing in environment."}
-
     try:
+        user_text = payload.get("message", "").strip()
+        if not user_text:
+            return {"reply": "Say something."}
+
+        save_conversation("user", user_text)
+        log_memory_event("conversation", user_text[:80], importance=4)
+
+        if not GROQ_API_KEY:
+            return {"reply": "GROQ_API_KEY missing."}
+
         client = Groq(api_key=GROQ_API_KEY)
 
         history = get_conversation_history(limit=6)
@@ -265,28 +267,55 @@ async def chat(payload: dict):
         return {"reply": reply}
 
     except Exception as e:
-        return {"reply": f"ORA error: {str(e)[:150]}"}
+        print("[CHAT ERROR]", traceback.format_exc())
+        return {"reply": "ORA temporarily unavailable."}
 
 
 # ========================
-# KNOWLEDGE UPLOAD
+# KNOWLEDGE UPLOAD (STABLE FIX)
 # ========================
+def safe_filename(name: str):
+    return f"{uuid.uuid4().hex}_{os.path.basename(name)}"
+
+
 @app.post("/api/knowledge/upload")
 async def upload(file: UploadFile = File(...), tags: str = Form("")):
-    filepath = os.path.join(UPLOADS_PATH, file.filename)
+    try:
+        if not file:
+            raise HTTPException(status_code=400, detail="No file provided")
 
-    with open(filepath, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+        filename = safe_filename(file.filename)
+        filepath = os.path.join(UPLOADS_PATH, filename)
 
-    chunks = store_document(filepath, file.filename, tags=tags)
+        size = 0
 
-    return {
-        "status": "stored",
-        "filename": file.filename,
-        "chunks": chunks
-    }
+        with open(filepath, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+
+                if size > MAX_FILE_SIZE:
+                    f.close()
+                    os.remove(filepath)
+                    raise HTTPException(status_code=413, detail="File too large")
+
+                f.write(chunk)
+
+        result = store_document(filepath, filename, tags=tags)
+
+        return {
+            "status": "stored",
+            "filename": filename,
+            "chunks": result
+        }
+
+    except Exception as e:
+        print("[UPLOAD ERROR]", traceback.format_exc())
+        return {"error": str(e)}
 
 
+# ========================
+# KNOWLEDGE BASE
+# ========================
 @app.get("/api/knowledge/documents")
 def documents():
     return get_all_documents()
@@ -294,10 +323,10 @@ def documents():
 
 @app.delete("/api/knowledge/documents/{filename}")
 def delete_doc(filename: str):
-    deleted = delete_document(filename)
+    delete_document(filename)
 
     path = os.path.join(UPLOADS_PATH, filename)
     if os.path.exists(path):
         os.remove(path)
 
-    return {"deleted_chunks": deleted}
+    return {"status": "deleted"}
