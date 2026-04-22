@@ -1,6 +1,5 @@
 import os
 import json
-import shutil
 import uuid
 import traceback
 
@@ -64,7 +63,7 @@ async def lifespan(app: FastAPI):
         init_tasks_table()
         init_profile()
         log_memory_event("system", "ORA API started", importance=6)
-    except Exception as e:
+    except Exception:
         print("[INIT ERROR]", traceback.format_exc())
 
     yield
@@ -74,11 +73,11 @@ app = FastAPI(title="ORA Backend", lifespan=lifespan)
 
 
 # ========================
-# CORS
+# CORS (IMPORTANT FIX)
 # ========================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL] if FRONTEND_URL != "*" else ["*"],
+    allow_origins=["*"],  # 🔥 force open (fix Vercel issues)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -106,6 +105,7 @@ def root():
 
 
 @app.get("/api/health")
+@app.head("/api/health")  # 🔥 FIX HEAD requests (Render ping)
 def health():
     return {"status": "ORA online"}
 
@@ -120,16 +120,20 @@ def status():
         if not row:
             return {"status": "warming_up"}
 
-        data = json.loads(row[0])
+        try:
+            data = json.loads(row[0])
+        except Exception:
+            return {"status": "error", "detail": "Invalid system data"}
+
         return {
-            "cpu": data.get("cpu_percent"),
-            "ram": data.get("ram_percent"),
-            "disk_free_gb": data.get("disk_free_gb"),
+            "cpu": data.get("cpu_percent", 0),
+            "ram": data.get("ram_percent", 0),
+            "disk_free_gb": data.get("disk_free_gb", 0),
             "last_updated": row[1]
         }
 
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
+    except Exception:
+        return {"status": "error", "detail": traceback.format_exc()}
 
 
 # ========================
@@ -150,14 +154,17 @@ def alerts():
             }
             for a in data
         ]
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        return []  # 🔥 prevent frontend crash
 
 
 @app.post("/api/alerts/{alert_id}/ack")
 def ack(alert_id: int):
-    acknowledge_alert(alert_id)
-    return {"status": "acknowledged"}
+    try:
+        acknowledge_alert(alert_id)
+        return {"status": "acknowledged"}
+    except Exception:
+        return {"status": "error"}
 
 
 # ========================
@@ -165,35 +172,41 @@ def ack(alert_id: int):
 # ========================
 @app.get("/api/memory/profile")
 def profile():
-    return get_all_profile()
+    return get_all_profile() or {}
 
 
 @app.get("/api/memory/events")
 def events():
-    data = get_recent_events(limit=20)
-    return [
-        {
-            "type": e[0],
-            "summary": e[1],
-            "importance": e[3],
-            "timestamp": e[4]
-        }
-        for e in data
-    ]
+    try:
+        data = get_recent_events(limit=20)
+        return [
+            {
+                "type": e[0],
+                "summary": e[1],
+                "importance": e[3],
+                "timestamp": e[4]
+            }
+            for e in data
+        ]
+    except Exception:
+        return []
 
 
 @app.get("/api/memory/preferences")
 def prefs():
-    data = get_preferences()
-    return [
-        {
-            "category": p[0],
-            "key": p[1],
-            "value": p[2],
-            "confidence": p[3]
-        }
-        for p in data
-    ]
+    try:
+        data = get_preferences()
+        return [
+            {
+                "category": p[0],
+                "key": p[1],
+                "value": p[2],
+                "confidence": p[3]
+            }
+            for p in data
+        ]
+    except Exception:
+        return []
 
 
 # ========================
@@ -201,17 +214,20 @@ def prefs():
 # ========================
 @app.get("/api/tasks")
 def tasks():
-    data = get_tasks("pending")
-    return [
-        {
-            "id": t[0],
-            "title": t[1],
-            "priority": t[2],
-            "created_at": t[3],
-            "due_at": t[4]
-        }
-        for t in data
-    ]
+    try:
+        data = get_tasks("pending")
+        return [
+            {
+                "id": t[0],
+                "title": t[1],
+                "priority": t[2],
+                "created_at": t[3],
+                "due_at": t[4]
+            }
+            for t in data
+        ]
+    except Exception:
+        return []
 
 
 # ========================
@@ -219,12 +235,15 @@ def tasks():
 # ========================
 @app.get("/api/conversations")
 def conversations():
-    data = get_conversation_history(limit=50)
-    return [{"role": r, "content": c} for r, c in data]
+    try:
+        data = get_conversation_history(limit=50)
+        return [{"role": r, "content": c} for r, c in data]
+    except Exception:
+        return []
 
 
 # ========================
-# CHAT ENGINE (STABLE + GROUNDED)
+# CHAT ENGINE
 # ========================
 @app.post("/api/chat")
 async def chat(payload: dict):
@@ -241,15 +260,11 @@ async def chat(payload: dict):
 
         client = Groq(api_key=GROQ_API_KEY)
 
-        # 🔥 KNOWLEDGE RETRIEVAL (anti hallucination)
         knowledge_context = search_and_format(user_text, n_results=4)
-
         system_prompt = build_system_prompt(query=user_text)
 
         if knowledge_context:
             system_prompt += "\n\n" + knowledge_context
-        else:
-            system_prompt += "\n\nNo relevant documents found in memory."
 
         history = get_conversation_history(limit=6)
 
@@ -292,9 +307,6 @@ def safe_filename(name: str):
 @app.post("/api/knowledge/upload")
 async def upload(file: UploadFile = File(...), tags: str = Form("")):
     try:
-        if not file:
-            raise HTTPException(status_code=400, detail="No file provided")
-
         filename = safe_filename(file.filename)
         filepath = os.path.join(UPLOADS_PATH, filename)
 
@@ -312,11 +324,7 @@ async def upload(file: UploadFile = File(...), tags: str = Form("")):
 
         result = store_document(filepath, filename, tags=tags)
 
-        return {
-            "status": "stored",
-            "filename": filename,
-            "chunks": result
-        }
+        return {"status": "stored", "filename": filename, "chunks": result}
 
     except Exception:
         print("[UPLOAD ERROR]", traceback.format_exc())
@@ -328,15 +336,21 @@ async def upload(file: UploadFile = File(...), tags: str = Form("")):
 # ========================
 @app.get("/api/knowledge/documents")
 def documents():
-    return get_all_documents()
+    try:
+        return get_all_documents()
+    except Exception:
+        return []
 
 
 @app.delete("/api/knowledge/documents/{filename}")
 def delete_doc(filename: str):
-    delete_document(filename)
+    try:
+        delete_document(filename)
 
-    path = os.path.join(UPLOADS_PATH, filename)
-    if os.path.exists(path):
-        os.remove(path)
+        path = os.path.join(UPLOADS_PATH, filename)
+        if os.path.exists(path):
+            os.remove(path)
 
-    return {"status": "deleted"}
+        return {"status": "deleted"}
+    except Exception:
+        return {"status": "error"}
