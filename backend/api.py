@@ -41,6 +41,7 @@ from knowledge import (
     store_document,
     get_all_documents,
     delete_document,
+    search_and_format,   # 🔥 IMPORTANT FIX
     UPLOADS_PATH
 )
 
@@ -218,7 +219,7 @@ def conversations():
 
 
 # ========================
-# CHAT ENGINE (ROBUST)
+# CHAT ENGINE (FIXED + GROUNDED)
 # ========================
 @app.post("/api/chat")
 async def chat(payload: dict):
@@ -235,12 +236,22 @@ async def chat(payload: dict):
 
         client = Groq(api_key=GROQ_API_KEY)
 
+        # 🔥 RETRIEVAL STEP (FIX FOR HALLUCINATION)
+        knowledge_context = search_and_format(user_text, n_results=4)
+
+        system_prompt = build_system_prompt(query=user_text)
+
+        if knowledge_context:
+            system_prompt += "\n\n" + knowledge_context
+        else:
+            system_prompt += "\n\nNo relevant documents found in memory."
+
         history = get_conversation_history(limit=6)
 
         messages = [
             {
                 "role": "system",
-                "content": build_system_prompt(query=user_text)
+                "content": system_prompt
             }
         ]
 
@@ -272,7 +283,7 @@ async def chat(payload: dict):
 
 
 # ========================
-# KNOWLEDGE UPLOAD (STABLE FIX)
+# KNOWLEDGE UPLOAD
 # ========================
 def safe_filename(name: str):
     return f"{uuid.uuid4().hex}_{os.path.basename(name)}"
