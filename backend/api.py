@@ -71,12 +71,25 @@ def monitoring_loop():
                 "timestamp": datetime.now().isoformat()
             }
 
-            log_event("system", data)
+            # ✅ FIX 1: json.dumps not str() — str() produces invalid JSON (single quotes)
+            log_event("system", json.dumps(data))
 
         except Exception as e:
             print("[MONITOR ERROR]", e)
 
         time.sleep(5)
+
+
+# ========================
+# TELEGRAM BOT THREAD
+# ========================
+def start_telegram():
+    try:
+        from telegram_bot import run_telegram_bot
+        print("[ORA] Telegram bot starting...")
+        run_telegram_bot()
+    except Exception as e:
+        print(f"[TELEGRAM] Failed to start: {e}")
 
 
 # ========================
@@ -90,11 +103,12 @@ async def lifespan(app: FastAPI):
         init_profile()
         log_memory_event("system", "ORA API started", importance=6)
 
-        # ✅ FIX: start monitoring thread here, inside lifespan
-        # (on_event startup is ignored when lifespan is set)
-        thread = threading.Thread(target=monitoring_loop, daemon=True)
-        thread.start()
+        # ✅ FIX 2: monitoring thread inside lifespan (on_event is ignored when lifespan is set)
+        threading.Thread(target=monitoring_loop, daemon=True).start()
         print("[ORA] Monitoring thread started")
+
+        # ✅ FIX 3: telegram was never launched from api.py — added here
+        threading.Thread(target=start_telegram, daemon=True).start()
 
     except Exception:
         print("[INIT ERROR]", traceback.format_exc())
