@@ -1,28 +1,52 @@
-from datetime import datetime
-import asyncio
+from datetime import datetime, timezone
+import logging
 
-from database import get_tasks
-from telegram_bot import notify
+# ✅ Proper absolute imports (FIX: Pylance issue)
+from backend.database import get_tasks
+from backend.telegram_bot import notify
+
+logger = logging.getLogger(__name__)
 
 
 def check_due_tasks():
-    tasks = get_tasks("pending")
-    now = datetime.now()
+    """
+    ORA V3 Scheduler Task Checker
+    Runs periodically to detect due tasks and send alerts
+    """
 
-    for t in tasks:
-        due_at = t[4]
+    try:
+        tasks = get_tasks("pending")
 
-        if not due_at:
-            continue
+        # ✅ Use UTC for production safety
+        now = datetime.now(timezone.utc)
 
-        try:
-            due_time = datetime.fromisoformat(due_at)
-            diff = (due_time - now).total_seconds()
+        for t in tasks:
+            task_id = t[0]
+            title = t[1]
+            due_at = t[4]
+            alerted = t[5] if len(t) > 5 else False
 
-            if 0 <= diff <= 60:
-                asyncio.run(
-                    notify(f"⏰ Task due: {t[1]}", is_alert=True)
-                )
+            if not due_at or alerted:
+                continue
 
-        except Exception as e:
-            print("[TASK ERROR]", e)
+            try:
+                due_time = datetime.fromisoformat(due_at)
+
+                # ensure timezone awareness
+                if due_time.tzinfo is None:
+                    due_time = due_time.replace(tzinfo=timezone.utc)
+
+                diff = (due_time - now).total_seconds()
+
+                # ⏰ trigger 1 min before due
+                if 0 <= diff <= 60:
+                    notify(f"⏰ ORA Task Due: {title}", is_alert=True)
+
+                    # optional: mark as alerted (if your DB supports it)
+                    # mark_task_alerted(task_id)
+
+            except Exception as inner_err:
+                logger.error(f"[TASK PARSE ERROR] {inner_err} | Task: {t}")
+
+    except Exception as e:
+        logger.error(f"[TASK CHECK FAILED] {e}")

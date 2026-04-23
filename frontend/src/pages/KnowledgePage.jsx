@@ -137,12 +137,19 @@ export default function KnowledgePage() {
       const res = await fetch(`${API}/api/knowledge/upload`, { method: "POST", body: form })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || "Upload failed")
+        throw new Error(err.error || err.detail || "Upload failed")
       }
       const data = await res.json()
-      setActiveJob({ job_id: data.job_id, filename: data.filename, status: "queued" })
+      // Upload is synchronous — result comes back directly (no job polling needed)
+      setMessage({
+        text: data.status === "skipped"
+          ? `${data.filename || file.name} already indexed (skipped).`
+          : `${data.filename || file.name} indexed — ${data.chunks || 0} chunks stored.`,
+        type: data.status === "error" ? "error" : "success"
+      })
       setTags("")
-      startPolling(data.job_id, data.filename)
+      setUploading(false)
+      loadDocs()
     } catch (e) {
       setMessage({ text: e.message || "Upload failed. Try again.", type: "error" })
       setUploading(false)
