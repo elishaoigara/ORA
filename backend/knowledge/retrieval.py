@@ -40,7 +40,7 @@ def fts_search(query: str, n_results: int = 10) -> list[dict]:
                     kc.importance,
                     rank
                 FROM knowledge_fts
-                JOIN knowledge_chunks kc ON knowledge_chunks.chunk_id = knowledge_fts.chunk_id
+                JOIN knowledge_chunks kc ON kc.chunk_id = knowledge_fts.chunk_id
                 WHERE knowledge_fts MATCH ?
                 ORDER BY rank
                 LIMIT ?

@@ -20,8 +20,12 @@ DB_PATH = "ora_knowledge.db"
 # ============================================================
 
 def init_vector_db():
-    """Create the chunks + embeddings table if it doesn't exist."""
+    """Create the chunks + embeddings table if it doesn't exist.
+    Also repairs a corrupted/mismatched FTS5 table on existing deployments.
+    """
     conn = sqlite3.connect(DB_PATH)
+
+    # Main chunks table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS knowledge_chunks (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,19 +42,30 @@ def init_vector_db():
             indexed_at  TEXT    NOT NULL
         )
     """)
-    # FTS5 mirror for hybrid search (Phase 4)
-    conn.execute("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
-        USING fts5(
-            chunk_id,
-            source,
-            section,
-            text,
-            content='knowledge_chunks',
-            content_rowid='id'
-        )
-    """)
-    # Feedback table for Phase 6 self-improvement
+    conn.commit()
+
+    # FTS5 table: drop and recreate if broken (column mismatch from old deploy)
+    try:
+        conn.execute("SELECT chunk_id FROM knowledge_fts LIMIT 1")
+    except Exception:
+        print("[DB] Rebuilding FTS5 table (schema repair)...")
+        conn.execute("DROP TABLE IF EXISTS knowledge_fts")
+        conn.execute("""
+            CREATE VIRTUAL TABLE knowledge_fts
+            USING fts5(
+                chunk_id,
+                source,
+                section,
+                text,
+                content='knowledge_chunks',
+                content_rowid='id'
+            )
+        """)
+        conn.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
+        conn.commit()
+        print("[DB] FTS5 table rebuilt OK.")
+
+    # Feedback table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS chunk_feedback (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,7 +76,8 @@ def init_vector_db():
             updated_at  TEXT
         )
     """)
-    # Insights table for Phase 7 distillation
+
+    # Insights table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS knowledge_insights (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,8 +88,11 @@ def init_vector_db():
             created_at      TEXT
         )
     """)
+
     conn.commit()
     conn.close()
+
+
 
 
 # ============================================================
@@ -95,7 +114,7 @@ def embed_text(text: str) -> Optional[list[float]]:
         client = Groq(api_key=GROQ_API_KEY)
 
         response = client.embeddings.create(
-            model="nomic-embed-text-v1_5",
+            model="nomic-embed-text-v1.5",
             input=text[:4096]  # model token limit
         )
 
