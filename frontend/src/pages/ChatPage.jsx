@@ -12,12 +12,18 @@ export default function ChatPage() {
 
   // load history
   useEffect(() => {
-    fetch(`${API}/api/conversation-history`)
-      .then(r => r.json())
-      .then(data => setMessages(Array.isArray(data) ? data : []))
-      .catch(() => {})
+    fetch(`${API}/conversation-history`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error("Failed to load history")
+        return r.json()
+      })
+      .then((data) => setMessages(Array.isArray(data) ? data : []))
+      .catch((err) => {
+        console.error("History error:", err)
+      })
   }, [])
 
+  // auto scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, loading])
@@ -28,20 +34,24 @@ export default function ChatPage() {
     const text = input.trim()
     setInput("")
 
-    // cancel previous request if still running
+    // cancel previous request
     if (abortRef.current) abortRef.current.abort()
     abortRef.current = new AbortController()
 
-    setMessages(prev => [...prev, { role: "user", content: text }])
+    setMessages((prev) => [...prev, { role: "user", content: text }])
     setLoading(true)
 
     try {
-      const res = await fetch(`${API}/api/chat`, {
+      const res = await fetch(`${API}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text }),
-        signal: abortRef.current.signal
+        signal: abortRef.current.signal,
       })
+
+      if (!res.ok) {
+        throw new Error(`Server error: ${res.status}`)
+      }
 
       const data = await res.json()
 
@@ -50,16 +60,18 @@ export default function ChatPage() {
         data?.error ||
         "[INVALID RESPONSE]"
 
-      setMessages(prev => [
+      setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: reply }
+        { role: "assistant", content: reply },
       ])
 
     } catch (err) {
       if (err.name !== "AbortError") {
-        setMessages(prev => [
+        console.error("Chat error:", err)
+
+        setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: "[CONNECTION ERROR]" }
+          { role: "assistant", content: "[CONNECTION ERROR]" },
         ])
       }
     }
@@ -139,7 +151,7 @@ export default function ChatPage() {
             className="chat-textarea"
             value={input}
             disabled={loading}
-            onChange={e => setInput(e.target.value)}
+            onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKey}
             placeholder="TRANSMIT MESSAGE // Enter to send"
             rows={2}
