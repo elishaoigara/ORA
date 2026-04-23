@@ -1,5 +1,4 @@
 import os
-import json
 import traceback
 import psutil
 
@@ -15,6 +14,7 @@ from groq import Groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
 
+# SAFE CLIENT INIT
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # ========================
@@ -31,12 +31,27 @@ app.add_middleware(
 )
 
 # ========================
+# SYSTEM PROMPT (ANTI-HALLUCINATION FIX)
+# ========================
+SYSTEM_PROMPT = """
+You are ORA, a strict factual AI assistant.
+
+RULES:
+- Never invent facts.
+- If unsure, say "I don't know".
+- Do not assume identity, files, or external data.
+- Be concise and grounded.
+"""
+
+# ========================
 # HEALTH (FIXED FOR UPTIME ROBOT)
 # ========================
 @app.api_route("/api/health", methods=["GET", "HEAD"])
-def health():
-    return JSONResponse({"status": "ORA online"})
-
+async def health(request: Request):
+    return JSONResponse(
+        content={"status": "ORA online"},
+        status_code=200
+    )
 
 # ========================
 # ROOT
@@ -45,52 +60,56 @@ def health():
 def root():
     return {"status": "ORA API running"}
 
-
 # ========================
-# CHAT (COST SAFE)
+# CHAT (PRODUCTION SAFE)
 # ========================
 @app.post("/api/chat")
 async def chat(payload: dict):
     try:
-        if not client:
-            return {"reply": "Groq not configured"}
+        if client is None:
+            return {"reply": "ERROR: GROQ_API_KEY not configured on server"}
 
         user_text = payload.get("message", "").strip()
         if not user_text:
-            return {"reply": "Empty message"}
+            return {"reply": "Please enter a message."}
 
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": "You are ORA AI."},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_text}
             ],
-            max_tokens=300,
-            temperature=0.7,
+            max_tokens=250,     # lower = more stable + less hallucination
+            temperature=0.3     # 🔥 IMPORTANT FIX (reduces hallucination)
         )
 
-        return {
-            "reply": response.choices[0].message.content
-        }
+        reply = response.choices[0].message.content
+
+        # safety cleanup (optional guardrail)
+        if reply is None:
+            reply = "I don't know."
+
+        return {"reply": reply}
 
     except Exception:
         print(traceback.format_exc())
-        return {"reply": "ORA error"}
-        
+        return {"reply": "ORA error. Please try again."}
 
 # ========================
-# STATUS (SAFE MONITOR)
+# STATUS (SYSTEM MONITOR)
 # ========================
 @app.get("/api/status")
 def status():
-    return {
-        "cpu": psutil.cpu_percent(),
-        "ram": psutil.virtual_memory().percent
-    }
-
+    try:
+        return {
+            "cpu": psutil.cpu_percent(interval=0.5),
+            "ram": psutil.virtual_memory().percent
+        }
+    except Exception:
+        return {"status": "error"}
 
 # ========================
-# TASK PLACEHOLDER
+# TASKS (PLACEHOLDER SAFE)
 # ========================
 @app.get("/api/tasks")
 def tasks():
