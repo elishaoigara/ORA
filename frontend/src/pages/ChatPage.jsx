@@ -10,16 +10,16 @@ export default function ChatPage() {
   const bottomRef = useRef(null)
   const abortRef = useRef(null)
 
-  // 🔥 SIMPLE backend check (no fake endpoints)
+  // ✅ backend check
   useEffect(() => {
-    fetch(`${API}/api/chat`, { method: "OPTIONS" })
+    fetch(`${API}/api/health`)
       .then(() => setBackendState("online"))
       .catch(() => setBackendState("cold"))
   }, [])
 
-  // ✅ load history (FIXED endpoint)
+  // ✅ FIXED: correct history endpoint
   useEffect(() => {
-    fetch(`${API}/api/conversation-history`)
+    fetch(`${API}/api/conversations`)
       .then(r => r.ok ? r.json() : [])
       .then(data => setMessages(Array.isArray(data) ? data : []))
       .catch(() => {})
@@ -70,7 +70,7 @@ export default function ChatPage() {
         ...prev,
         {
           role: "assistant",
-          content: "⚠ Backend unavailable or waking up...",
+          content: "⚠ ORA temporarily unavailable.",
           isError: true
         }
       ])
