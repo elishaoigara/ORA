@@ -1,43 +1,67 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import API from "../api"
 
+const COLD_START_TIMEOUT_MS = 60_000
+const PING_INTERVAL_MS      = 3_000
+
 export default function ChatPage() {
-  const [messages, setMessages] = useState([])
-  const [input, setInput] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [theNumber, setTheNumber] = useState(null)
+  const [messages, setMessages]         = useState([])
+  const [input, setInput]               = useState("")
+  const [loading, setLoading]           = useState(false)
+  const [theNumber, setTheNumber]       = useState(null)
+  const [backendState, setBackendState] = useState("checking")
 
-  const bottomRef = useRef(null)
+  const bottomRef   = useRef(null)
   const textareaRef = useRef(null)
-  const abortRef = useRef(null)
+  const abortRef    = useRef(null)
+  const pingRef     = useRef(null)
+  const pingStart   = useRef(null)
 
-  // Load history on mount
-  useEffect(() => {
-    fetch(`${API}/api/conversations`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error("Failed to load history")
-        return r.json()
-      })
-      .then((data) => setMessages(Array.isArray(data) ? data : []))
-      .catch((err) => console.error("History error:", err))
+  const checkBackend = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/ping`, { signal: AbortSignal.timeout(5000) })
+      if (res.ok) {
+        setBackendState("online")
+        clearInterval(pingRef.current)
+        return true
+      }
+    } catch (_) {}
+    if (pingStart.current && Date.now() - pingStart.current > COLD_START_TIMEOUT_MS) {
+      setBackendState("offline")
+      clearInterval(pingRef.current)
+    } else {
+      setBackendState("cold_start")
+    }
+    return false
   }, [])
 
-  // Load "The Number" — today's single most important task
+  useEffect(() => {
+    pingStart.current = Date.now()
+    checkBackend().then(online => {
+      if (!online) pingRef.current = setInterval(checkBackend, PING_INTERVAL_MS)
+    })
+    return () => clearInterval(pingRef.current)
+  }, [checkBackend])
+
+  useEffect(() => {
+    fetch(`${API}/api/conversations`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setMessages(Array.isArray(data) ? data : []))
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
     fetch(`${API}/api/tasks`)
       .then(r => r.ok ? r.json() : [])
       .then(tasks => {
-        if (!Array.isArray(tasks) || tasks.length === 0) return
+        if (!Array.isArray(tasks) || !tasks.length) return
         const pri = { high: 3, medium: 2, low: 1 }
-        const top = [...tasks].sort((a, b) =>
-          (pri[b.priority] || 0) - (pri[a.priority] || 0)
-        )[0]
+        const top = [...tasks].sort((a, b) => (pri[b.priority] || 0) - (pri[a.priority] || 0))[0]
         setTheNumber(top)
       })
       .catch(() => {})
   }, [])
 
-  // Auto scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, loading])
@@ -60,7 +84,7 @@ export default function ChatPage() {
     setInput("")
     if (abortRef.current) abortRef.current.abort()
     abortRef.current = new AbortController()
-    setMessages((prev) => [...prev, { role: "user", content: text }])
+    setMessages(prev => [...prev, { role: "user", content: text }])
     setLoading(true)
     try {
       const res = await fetch(`${API}/api/chat`, {
@@ -69,36 +93,78 @@ export default function ChatPage() {
         body: JSON.stringify({ message: text }),
         signal: abortRef.current.signal,
       })
-      if (!res.ok) throw new Error(`Server error: ${res.status}`)
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`
+        try { detail = (await res.json()).detail || detail } catch (_) {}
+        throw new Error(detail)
+      }
       const data = await res.json()
-      setMessages((prev) => [...prev, {
+      setMessages(prev => [...prev, {
         role: "assistant",
-        content: data?.reply || data?.error || "[INVALID RESPONSE]",
+        content: data?.reply || "[EMPTY RESPONSE]",
         chunk_ids: data?.chunk_ids || [],
         query: text,
-        rated: null
+        rated: null,
+        isError: data?.error === true
       }])
     } catch (err) {
       if (err.name !== "AbortError") {
-        setMessages((prev) => [...prev, {
+        const isNetworkErr = err instanceof TypeError
+        const hint = isNetworkErr
+          ? `Cannot reach backend. Verify VITE_API_URL in Vercel. Current: ${API}`
+          : err.message || "Unknown error"
+        setMessages(prev => [...prev, {
           role: "assistant",
-          content: "[CONNECTION ERROR] — Ensure VITE_API_URL is set correctly in Vercel environment variables"
+          content: `⚠ ${hint}`,
+          isError: true
         }])
       }
     }
     setLoading(false)
   }
 
-  const onKey = (e) => {
+  const onKey = e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() }
+  }
+
+  const BackendBanner = () => {
+    if (backendState === "online") return null
+    const base = {
+      margin: "0 1.5rem 1rem", padding: "0.6rem 1rem",
+      borderRadius: 4, fontSize: "0.78rem",
+      fontFamily: "Share Tech Mono, monospace",
+    }
+    if (backendState === "checking") return (
+      <div style={{ ...base, background: "rgba(100,100,100,0.12)", border: "1px solid var(--border2)", color: "var(--text3)" }}>
+        ◌ Connecting to ORA backend…
+      </div>
+    )
+    if (backendState === "cold_start") return (
+      <div style={{ ...base, background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.3)", color: "var(--amber)" }}>
+        ⏳ ORA is waking up (Render cold start — ~30s). You can type while waiting.
+      </div>
+    )
+    return (
+      <div style={{ ...base, background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.3)", color: "var(--red)" }}>
+        ✕ Backend unreachable. Verify VITE_API_URL in Vercel.{" "}
+        Current: <code style={{ fontSize: "0.72rem" }}>{API}</code>
+      </div>
+    )
   }
 
   return (
     <div className="chat-page">
       <div className="chat-header">
         <div className="page-title">// Neural Link</div>
-        <div className="page-sub">Direct channel to ORA · Context-aware intelligence system</div>
+        <div className="page-sub">
+          Direct channel to ORA · Context-aware intelligence system
+          {backendState === "online" && (
+            <span style={{ marginLeft: 12, color: "var(--green)", fontSize: "0.6rem" }}>● LIVE</span>
+          )}
+        </div>
       </div>
+
+      <BackendBanner />
 
       {theNumber && messages.length === 0 && (
         <div style={{
@@ -131,7 +197,11 @@ export default function ChatPage() {
           <div key={i} className={`msg ${m.role === "user" ? "user" : "ora"}`}>
             <div className="msg-avatar">{m.role === "user" ? "EL" : "◎"}</div>
             <div className="msg-bubble" style={{ flex: 1 }}>
-              {m.role === "assistant" && <div className="msg-label">ORA // RESPONSE</div>}
+              {m.role === "assistant" && (
+                <div className="msg-label" style={m.isError ? { color: "var(--red)" } : {}}>
+                  {m.isError ? "ORA // ERROR" : "ORA // RESPONSE"}
+                </div>
+              )}
               <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
               {m.role === "assistant" && m.chunk_ids?.length > 0 && (
                 <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
@@ -167,10 +237,25 @@ export default function ChatPage() {
 
       <div className="chat-input-area">
         <div className="chat-input-row">
-          <textarea ref={textareaRef} className="chat-textarea" value={input} disabled={loading}
-            onChange={(e) => setInput(e.target.value)} onKeyDown={onKey}
-            placeholder="TRANSMIT MESSAGE // Enter to send" rows={2} />
-          <button className="btn-send" onClick={send} disabled={loading || !input.trim()}>
+          <textarea
+            ref={textareaRef}
+            className="chat-textarea"
+            value={input}
+            disabled={loading}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={onKey}
+            placeholder={
+              backendState === "cold_start"
+                ? "ORA warming up — message will send when ready…"
+                : "TRANSMIT MESSAGE // Enter to send"
+            }
+            rows={2}
+          />
+          <button
+            className="btn-send"
+            onClick={send}
+            disabled={loading || !input.trim() || backendState === "offline"}
+          >
             {loading ? "..." : "SEND ▶"}
           </button>
         </div>
