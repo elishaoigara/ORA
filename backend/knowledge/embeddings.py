@@ -112,17 +112,25 @@ def _get_model():
     if _model is None:
         try:
             from sentence_transformers import SentenceTransformer
-            # all-MiniLM-L6-v2: 22MB, 384 dims, fast on CPU, MIT licence.
-            # Downloaded to /opt/ora-data/models on first run (persistent disk).
             from config import DATA_DIR
             import os
             cache_dir = os.path.join(DATA_DIR, "models")
             os.makedirs(cache_dir, exist_ok=True)
-            _model = SentenceTransformer(
-                "all-MiniLM-L6-v2",
-                cache_folder=cache_dir
-            )
-            print("[EMBED] sentence-transformers model loaded (all-MiniLM-L6-v2)")
+            # Use ONNX backend: avoids full PyTorch install (~50MB vs ~800MB).
+            # Falls back to default backend if onnxruntime not available.
+            try:
+                _model = SentenceTransformer(
+                    "all-MiniLM-L6-v2",
+                    backend="onnx",
+                    cache_folder=cache_dir
+                )
+                print("[EMBED] Model loaded with ONNX backend (all-MiniLM-L6-v2)")
+            except Exception:
+                _model = SentenceTransformer(
+                    "all-MiniLM-L6-v2",
+                    cache_folder=cache_dir
+                )
+                print("[EMBED] Model loaded with default backend (all-MiniLM-L6-v2)")
         except Exception as e:
             print(f"[EMBED] Model load failed: {e}")
             _model = None
