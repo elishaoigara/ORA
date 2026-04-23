@@ -365,7 +365,8 @@ async def chat(payload: dict):
 
         messages = [{"role": "system", "content": system_prompt}]
 
-        for role, content in history[:-1]:
+        # FIX: get_conversation_history returns (role, content, timestamp) — unpack all 3
+        for role, content, _timestamp in history[:-1]:
             messages.append({
                 "role": "user" if role == "user" else "assistant",
                 "content": content
@@ -521,9 +522,10 @@ async def feedback(payload: dict):
 def conversations():
     try:
         history = get_conversation_history(limit=50)
+        # FIX: get_conversation_history returns (role, content, timestamp) — unpack all 3
         return [
             {"role": role, "content": content}
-            for role, content in history
+            for role, content, _timestamp in history
         ]
     except Exception:
         return []
