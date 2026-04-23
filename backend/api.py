@@ -46,6 +46,10 @@ from knowledge import (
     get_all_documents,
     delete_document,
     search_and_format,
+    on_upload,
+    record_useful,
+    record_not_useful,
+    get_insights_for_source,
     UPLOADS_PATH
 )
 
@@ -53,7 +57,7 @@ from knowledge import (
 # ENV
 # ========================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "").strip()
+FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
@@ -70,10 +74,13 @@ def monitoring_loop():
                 "disk_free_gb": psutil.disk_usage("/").free / (1024 ** 3),
                 "timestamp": datetime.now().isoformat()
             }
-            # json.dumps not str() — str() produces invalid JSON (single quotes)
+
+            # ✅ FIX 1: json.dumps not str() — str() produces invalid JSON (single quotes)
             log_event("system", json.dumps(data))
+
         except Exception as e:
             print("[MONITOR ERROR]", e)
+
         time.sleep(5)
 
 
@@ -100,9 +107,11 @@ async def lifespan(app: FastAPI):
         init_profile()
         log_memory_event("system", "ORA API started", importance=6)
 
+        # ✅ FIX 2: monitoring thread inside lifespan (on_event is ignored when lifespan is set)
         threading.Thread(target=monitoring_loop, daemon=True).start()
         print("[ORA] Monitoring thread started")
 
+        # ✅ FIX 3: telegram was never launched from api.py — added here
         threading.Thread(target=start_telegram, daemon=True).start()
 
     except Exception:
@@ -117,14 +126,10 @@ app = FastAPI(title="ORA Backend", lifespan=lifespan)
 # ========================
 # CORS
 # ========================
-# FIX: if FRONTEND_URL is empty or not set, allow all origins so Vercel can connect.
-# Once FRONTEND_URL is set in Render env, it locks down to that origin only.
-allowed_origins = [FRONTEND_URL] if FRONTEND_URL else ["*"]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=False if not FRONTEND_URL else True,
+    allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -153,7 +158,7 @@ def root():
 @app.get("/api/health")
 @app.head("/api/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ORA online"}
 
 
 # ========================
@@ -162,33 +167,21 @@ def health():
 @app.get("/api/status")
 def status():
     try:
-        # FIX: Always return live psutil data immediately — never block on DB.
-        # The DB row from monitoring_loop is only used for last_updated timestamp.
-        # This means ORA status goes ON instantly after cold start, not after 5s+ wait.
-        cpu = psutil.cpu_percent(interval=0.1)
-        ram = psutil.virtual_memory().percent
-        disk_free_gb = psutil.disk_usage("/").free / (1024 ** 3)
-        now = datetime.now().isoformat()
+        row = get_system_stats()
+        if not row:
+            return {"status": "warming_up"}
 
-        # Try to get last_updated from DB (best-effort, non-blocking)
-        last_updated = now
-        try:
-            row = get_system_stats()
-            if row:
-                last_updated = row[1]
-        except Exception:
-            pass
+        data = json.loads(row[0])
 
         return {
-            "cpu": round(cpu, 1),
-            "ram": round(ram, 1),
-            "disk_free_gb": round(disk_free_gb, 2),
-            "last_updated": last_updated
+            "cpu": data.get("cpu_percent", 0),
+            "ram": data.get("ram_percent", 0),
+            "disk_free_gb": data.get("disk_free_gb", 0),
+            "last_updated": row[1]
         }
 
     except Exception:
-        print("[STATUS ERROR]", traceback.format_exc())
-        return {"status": "error"}
+        return {"status": "error", "detail": traceback.format_exc()}
 
 
 # ========================
@@ -286,67 +279,12 @@ def tasks():
 
 
 # ========================
-# KNOWLEDGE
-# ========================
-@app.get("/api/knowledge/documents")
-def list_documents():
-    try:
-        return get_all_documents()
-    except Exception:
-        return []
-
-
-@app.post("/api/knowledge/upload")
-async def upload_file(file: UploadFile = File(...), tags: str = Form("")):
-    try:
-        file_content = await file.read()
-        if len(file_content) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=400, detail="File too large")
-
-        filename = file.filename
-        filepath = os.path.join(UPLOADS_PATH, filename)
-        with open(filepath, "wb") as f:
-            f.write(file_content)
-
-        result = store_document(filepath, filename, tags=tags)
-        return {
-            "filename": filename,
-            "chunks": result.get("chunks", 0),
-            "status": result.get("status", "stored")
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        print("[UPLOAD ERROR]", traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/api/knowledge/documents/{filename}")
-def remove_document(filename: str):
-    try:
-        delete_document(filename)
-        filepath = os.path.join(UPLOADS_PATH, filename)
-        if os.path.exists(filepath):
-            os.remove(filepath)
-        return {"status": "deleted"}
-    except Exception:
-        raise HTTPException(status_code=500, detail="Delete failed")
-
-
-# ========================
 # CHAT ENGINE
 # ========================
-@app.get("/api/conversation-history")
-def get_conversation_history_api():
-    try:
-        history = get_conversation_history(limit=20)
-        return [
-            {"role": h[0], "content": h[1], "timestamp": h[2]}
-            for h in history
-        ]
-    except Exception:
-        return []
 
+# In-memory store of last retrieved chunk_ids per "session" (keyed by query)
+# Used for the feedback loop — maps query hash → [chunk_ids]
+_last_chunks: dict = {}
 
 @app.post("/api/chat")
 async def chat(payload: dict):
@@ -359,21 +297,47 @@ async def chat(payload: dict):
         log_memory_event("conversation", user_text[:80], importance=4)
 
         if not GROQ_API_KEY:
-            return {"reply": "GROQ_API_KEY missing — set it in Render environment variables."}
+            return {"reply": "GROQ_API_KEY missing."}
 
         client = Groq(api_key=GROQ_API_KEY)
 
+        # ── Phase 4+5: Hybrid retrieval ──────────────────────
+        from knowledge.retrieval import retrieve, format_context
+        from knowledge.feedback import log_query, auto_signal_from_conversation
+
+        retrieved_chunks = retrieve(user_text, n_results=5)
+        knowledge_context = format_context(retrieved_chunks)
+
+        # Log retrieved chunks for feedback loop (Phase 6)
+        chunk_ids = [c.get("chunk_id", "") for c in retrieved_chunks]
+        log_query(user_text, chunk_ids)
+
+        # Auto-signal: if previous query exists, check if this is a follow-up or rephrasing
+        prev_query = _last_chunks.get("query")
+        prev_chunks = _last_chunks.get("chunks", [])
+        if prev_query and prev_chunks:
+            auto_signal_from_conversation(prev_query, prev_chunks, user_text)
+
+        # Store current for next turn
+        _last_chunks["query"] = user_text
+        _last_chunks["chunks"] = retrieved_chunks
+
+        # ── Build prompt ──────────────────────────────────────
         system_prompt = build_system_prompt(query=user_text)
 
-        history = get_conversation_history(limit=20)
+        if knowledge_context:
+            system_prompt += (
+                "\n\n========================\n"
+                "VERIFIED KNOWLEDGE (use ONLY this — cite filename)\n"
+                "========================\n"
+                + knowledge_context
+            )
+
+        history = get_conversation_history(limit=6)
 
         messages = [{"role": "system", "content": system_prompt}]
 
-        # FIX: history rows have 3 columns (role, content, timestamp).
-        # Unpack all three — ignore timestamp when building messages.
-        for row in history[:-1]:
-            role = row[0]
-            content = row[1]
+        for role, content in history[:-1]:
             messages.append({
                 "role": "user" if role == "user" else "assistant",
                 "content": content
@@ -393,8 +357,118 @@ async def chat(payload: dict):
         save_conversation("assistant", reply)
         log_memory_event("conversation", "ORA replied", importance=3)
 
-        return {"reply": reply}
+        # Return chunk_ids so frontend can send feedback signals
+        return {
+            "reply": reply,
+            "chunk_ids": chunk_ids  # frontend can pass these back to /api/feedback
+        }
 
     except Exception:
         print("[CHAT ERROR]", traceback.format_exc())
         return {"reply": "ORA temporarily unavailable."}
+
+
+# ========================
+# KNOWLEDGE BASE
+# ========================
+
+@app.post("/api/knowledge/upload")
+async def upload_knowledge(file: UploadFile = File(...), tags: str = Form("")):
+    """Upload and fully index a document through the pipeline."""
+    try:
+        filepath = os.path.join(UPLOADS_PATH, file.filename)
+
+        content = await file.read()
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=413, detail="File too large (10MB max)")
+
+        with open(filepath, "wb") as f:
+            f.write(content)
+
+        # Run full pipeline (extract → chunk → embed → distill → notify)
+        result = on_upload(filepath, file.filename, tags=tags)
+
+        log_memory_event("knowledge", f"Indexed: {file.filename}", importance=6)
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception:
+        print("[UPLOAD ERROR]", traceback.format_exc())
+        raise HTTPException(status_code=500, detail="Upload failed")
+
+
+@app.get("/api/knowledge/documents")
+def list_documents():
+    """List all indexed documents."""
+    try:
+        return get_all_documents()
+    except Exception:
+        return []
+
+
+@app.delete("/api/knowledge/documents/{filename}")
+def remove_document(filename: str):
+    """Delete a document and all its chunks, embeddings, and insights."""
+    try:
+        delete_document(filename)
+        log_memory_event("knowledge", f"Deleted: {filename}", importance=4)
+        return {"status": "deleted", "filename": filename}
+    except Exception:
+        raise HTTPException(status_code=500, detail="Delete failed")
+
+
+@app.get("/api/knowledge/documents/{filename}/insights")
+def document_insights(filename: str):
+    """Get distilled insights for a specific document."""
+    try:
+        return get_insights_for_source(filename)
+    except Exception:
+        return []
+
+
+# ========================
+# FEEDBACK LOOP
+# ========================
+
+@app.post("/api/feedback")
+async def feedback(payload: dict):
+    """
+    Receive explicit feedback signal from frontend.
+    Called when user clicks thumbs up/down on an ORA response.
+
+    payload: { chunk_ids: [...], query: "...", useful: true/false }
+    """
+    try:
+        chunk_ids = payload.get("chunk_ids", [])
+        query = payload.get("query", "")
+        useful = payload.get("useful", True)
+
+        for cid in chunk_ids:
+            if useful:
+                record_useful(cid, query)
+            else:
+                record_not_useful(cid, query)
+
+        return {"status": "recorded", "chunks": len(chunk_ids)}
+
+    except Exception:
+        return {"status": "error"}
+
+
+# ========================
+# CONVERSATIONS
+# ========================
+
+@app.get("/api/conversations")
+def conversations():
+    """Return conversation history for the chat page."""
+    try:
+        history = get_conversation_history(limit=50)
+        return [
+            {"role": role, "content": content}
+            for role, content in history
+        ]
+    except Exception:
+        return []
