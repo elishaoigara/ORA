@@ -2,8 +2,8 @@ import os
 import json
 import uuid
 import traceback
-import time
 import psutil
+import threading
 
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -27,17 +27,17 @@ UPLOADS_PATH = os.getenv("UPLOADS_DIR", "uploads")
 os.makedirs(UPLOADS_PATH, exist_ok=True)
 
 # ========================
-# GLOBAL CLIENT (FIXED)
+# GROQ CLIENT (GLOBAL - COST SAFE)
 # ========================
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # ========================
-# BACKGROUND JOB STATE
+# STATE
 # ========================
 _upload_jobs = {}
 
 # ========================
-# IMPORTS (your modules)
+# IMPORT YOUR MODULES
 # ========================
 from database import (
     get_recent_alerts,
@@ -49,37 +49,32 @@ from database import (
     init_db,
     init_tasks_table,
     log_event,
-    log_alert
 )
 
-from memory.events import get_recent_events, log_memory_event
+from memory.events import log_memory_event, get_recent_events
 from memory.profile import get_all_profile, init_profile
 from memory.preferences import get_preferences
 
 from context import build_system_prompt
-
 from knowledge import (
-    store_document,
     get_all_documents,
     delete_document,
-    search_and_format,
     on_upload,
-    get_insights_for_source
 )
 
 # ========================
-# SCHEDULER (APScheduler)
+# SCHEDULER
 # ========================
 scheduler = BackgroundScheduler()
 
 
 # ========================
-# SYSTEM MONITOR JOB (REPLACED THREAD LOOP)
+# SYSTEM MONITOR (LOW COST)
 # ========================
 def system_monitor_job():
     try:
         data = {
-            "cpu_percent": psutil.cpu_percent(interval=1),
+            "cpu_percent": psutil.cpu_percent(interval=0.5),
             "ram_percent": psutil.virtual_memory().percent,
             "disk_free_gb": psutil.disk_usage("/").free / (1024 ** 3),
             "timestamp": datetime.now().isoformat()
@@ -90,7 +85,7 @@ def system_monitor_job():
 
 
 # ========================
-# CORE LOOP JOB (SCHEDULER SAFE VERSION)
+# CORE JOB (SAFE)
 # ========================
 def core_job():
     try:
@@ -101,33 +96,21 @@ def core_job():
 
 
 # ========================
-# INIT SCHEDULER
+# INIT SCHEDULER (FIXED)
 # ========================
 def init_scheduler():
-    # system monitoring every 5 sec
-    scheduler.add_job(
-        system_monitor_job,
-        trigger="interval",
-        seconds=5,
-        id="system_monitor"
-    )
+    if not scheduler.running:
+        scheduler.add_job(system_monitor_job, "interval", seconds=5, id="monitor")
+        scheduler.add_job(core_job, "interval", seconds=1800, id="core")
 
-    # core evaluation every 30 min
-    scheduler.add_job(
-        core_job,
-        trigger="interval",
-        seconds=1800,
-        id="core_loop"
-    )
-
-    scheduler.start()
-    print("[ORA] Scheduler started")
+        scheduler.start()
+        print("[ORA] Scheduler started")
 
 
 # ========================
-# BACKGROUND KNOWLEDGE PIPELINE
+# BACKGROUND PIPELINE
 # ========================
-def run_pipeline_job(job_id: str, filepath: str, filename: str, tags: str):
+def run_pipeline_job(job_id, filepath, filename, tags):
     _upload_jobs[job_id]["status"] = "processing"
 
     try:
@@ -139,19 +122,18 @@ def run_pipeline_job(job_id: str, filepath: str, filename: str, tags: str):
             "finished_at": datetime.now().isoformat()
         })
 
-        log_memory_event("knowledge", f"Indexed: {filename}", importance=6)
+        log_memory_event("knowledge", f"Indexed {filename}", importance=6)
 
     except Exception:
-        err = traceback.format_exc()
         _upload_jobs[job_id].update({
             "status": "error",
-            "error": err,
+            "error": traceback.format_exc(),
             "finished_at": datetime.now().isoformat()
         })
 
 
 # ========================
-# FASTAPI APP
+# FASTAPI LIFESPAN
 # ========================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -170,16 +152,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ORA Backend", lifespan=lifespan)
 
+
 # ========================
-# CORS
+# CORS (SAFE DEFAULT)
 # ========================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
+    allow_origins=[FRONTEND_URL] if FRONTEND_URL != "*" else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # ========================
 # STATIC FILES
@@ -201,15 +185,13 @@ def health():
 
 
 # ========================
-# CHAT (IMPROVED)
+# CHAT (COST OPTIMIZED)
 # ========================
-_last_chunks = {}
-
 @app.post("/api/chat")
 async def chat(payload: dict):
     try:
         if not client:
-            return {"reply": "GROQ not configured"}
+            return {"reply": "Groq not configured"}
 
         user_text = payload.get("message", "").strip()
         if not user_text:
@@ -220,7 +202,7 @@ async def chat(payload: dict):
 
         system_prompt = build_system_prompt(user_text)
 
-        history = get_conversation_history(limit=6)
+        history = get_conversation_history(limit=4)  # 🔥 reduced cost
 
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -235,7 +217,7 @@ async def chat(payload: dict):
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
-            max_tokens=500,
+            max_tokens=350,   # 🔥 cost control
             temperature=0.7,
         )
 
@@ -252,7 +234,7 @@ async def chat(payload: dict):
 
 
 # ========================
-# KNOWLEDGE UPLOAD (FIXED: BackgroundTasks)
+# KNOWLEDGE UPLOAD (SAFE BG TASK)
 # ========================
 @app.post("/api/knowledge/upload")
 async def upload_knowledge(
@@ -290,11 +272,17 @@ async def upload_knowledge(
     return {"status": "queued", "job_id": job_id}
 
 
+# ========================
+# JOB STATUS
+# ========================
 @app.get("/api/knowledge/status/{job_id}")
 def job_status(job_id: str):
     return _upload_jobs.get(job_id, {"error": "not found"})
 
 
+# ========================
+# KNOWLEDGE BASE
+# ========================
 @app.get("/api/knowledge/documents")
 def list_docs():
     return get_all_documents()
@@ -340,7 +328,7 @@ def alerts():
 @app.post("/api/alerts/{alert_id}/ack")
 def ack(alert_id: int):
     acknowledge_alert(alert_id)
-    return {"status": "acknowledged"}
+    return {"status": "ack"}
 
 
 # ========================
@@ -367,14 +355,6 @@ def prefs():
 @app.get("/api/tasks")
 def tasks():
     return get_tasks("pending")
-
-
-# ========================
-# FEEDBACK
-# ========================
-@app.post("/api/feedback")
-def feedback(payload: dict):
-    return {"status": "ok"}
 
 
 # ========================
