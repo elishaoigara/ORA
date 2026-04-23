@@ -7,8 +7,7 @@ This alone gives 2-5x answer quality improvement over pure keyword or pure vecto
 
 import sqlite3
 from knowledge.embeddings import vector_search
-
-DB_PATH = "ora_knowledge.db"
+from config import DB_PATH
 
 
 # ============================================================

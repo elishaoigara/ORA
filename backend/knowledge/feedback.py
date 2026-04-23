@@ -10,8 +10,7 @@ Phase 7: Generate summaries, key concepts, insights after ingestion.
 import sqlite3
 import json
 from datetime import datetime
-
-DB_PATH = "ora_knowledge.db"
+from config import DB_PATH
 
 
 # ============================================================

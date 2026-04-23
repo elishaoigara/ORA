@@ -222,7 +222,7 @@ def store_chunks(chunks: list[dict], tags: str = ""):
             stored += 1
         except Exception as e:
             print(f"[STORE] Insert failed: {e}")
-            chunk_ids.append(None)  # keep alignment
+            chunk_ids[-1] = None  # mark this cid as failed (already appended above)
 
     conn.commit()
 

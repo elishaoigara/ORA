@@ -1,4 +1,5 @@
 import re
+import json
 from database import log_event
 
 
@@ -23,7 +24,7 @@ def process_sms(text):
     if not data:
         return None
 
-    log_event("finance", data)
+    log_event("finance", json.dumps(data))
     return data
 
 

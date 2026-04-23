@@ -85,7 +85,7 @@ def run_cycle():
         f"Disk: {data['disk_free_gb']:.1f}GB"
     )
 
-    log_event("system", data)
+    import json as _json; log_event("system", _json.dumps(data))
 
     context = {
         "cpu": data["cpu_percent"],
@@ -229,3 +229,17 @@ def startup():
     start_intelligence_layer()
 
     print("[ORA] Core systems online")
+
+# ─────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────
+if __name__ == "__main__":
+    startup()
+
+    t_telegram = threading.Thread(target=run_telegram_thread, daemon=True)
+    t_telegram.start()
+
+    t_ai_worker = threading.Thread(target=ai_worker, daemon=True)
+    t_ai_worker.start()
+
+    run_monitoring_loop()
