@@ -6,6 +6,14 @@ import threading
 import time
 import psutil
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+
+# ========================
+# BACKGROUND JOB REGISTRY
+# ========================
+# Maps job_id -> { status, filename, result, error, started_at }
+_upload_jobs: dict = {}
+_job_executor = ThreadPoolExecutor(max_workers=2)  # limit concurrent ingestions
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -372,31 +380,82 @@ async def chat(payload: dict):
 # KNOWLEDGE BASE
 # ========================
 
+def _run_pipeline_job(job_id: str, filepath: str, filename: str, tags: str):
+    """
+    Runs the full ingestion pipeline in a background thread.
+    Updates _upload_jobs[job_id] with progress and final result.
+    Never raises — all errors are captured in the job record.
+    """
+    _upload_jobs[job_id]["status"] = "processing"
+    try:
+        result = on_upload(filepath, filename, tags=tags)
+        _upload_jobs[job_id].update({
+            "status": "done",
+            "result": result,
+            "finished_at": datetime.now().isoformat()
+        })
+        log_memory_event("knowledge", f"Indexed: {filename}", importance=6)
+    except Exception:
+        err = traceback.format_exc()
+        print(f"[UPLOAD JOB {job_id}] ERROR:\n{err}")
+        _upload_jobs[job_id].update({
+            "status": "error",
+            "error": err,
+            "finished_at": datetime.now().isoformat()
+        })
+
+
 @app.post("/api/knowledge/upload")
 async def upload_knowledge(file: UploadFile = File(...), tags: str = Form("")):
-    """Upload and fully index a document through the pipeline."""
+    """
+    Upload a document and kick off async background indexing.
+    Returns immediately with a job_id the client can poll via
+    GET /api/knowledge/status/{job_id}.
+    """
     try:
-        filepath = os.path.join(UPLOADS_PATH, file.filename)
-
         content = await file.read()
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(status_code=413, detail="File too large (10MB max)")
 
+        safe_name = os.path.basename(file.filename or "upload")
+        filepath = os.path.join(UPLOADS_PATH, safe_name)
+
         with open(filepath, "wb") as f:
             f.write(content)
 
-        # Run full pipeline (extract → chunk → embed → distill → notify)
-        result = on_upload(filepath, file.filename, tags=tags)
+        job_id = str(uuid.uuid4())
+        _upload_jobs[job_id] = {
+            "status": "queued",
+            "filename": safe_name,
+            "started_at": datetime.now().isoformat(),
+            "result": None,
+            "error": None
+        }
 
-        log_memory_event("knowledge", f"Indexed: {file.filename}", importance=6)
+        # Submit to thread-pool — does NOT block the async event loop
+        _job_executor.submit(_run_pipeline_job, job_id, filepath, safe_name, tags)
 
-        return result
+        return {
+            "status": "queued",
+            "job_id": job_id,
+            "filename": safe_name,
+            "message": "Indexing started. Poll /api/knowledge/status/{job_id} for progress."
+        }
 
     except HTTPException:
         raise
     except Exception:
         print("[UPLOAD ERROR]", traceback.format_exc())
         raise HTTPException(status_code=500, detail="Upload failed")
+
+
+@app.get("/api/knowledge/status/{job_id}")
+def upload_status(job_id: str):
+    """Poll the status of a background upload/indexing job."""
+    job = _upload_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 @app.get("/api/knowledge/documents")
