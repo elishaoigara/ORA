@@ -5,125 +5,150 @@ export default function ChatPage() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
+  const [theNumber, setTheNumber] = useState(null)
 
   const bottomRef = useRef(null)
   const textareaRef = useRef(null)
   const abortRef = useRef(null)
 
-  // load history
+  // Load history on mount
   useEffect(() => {
-    fetch(`${API}/conversation-history`)
+    fetch(`${API}/api/conversations`)
       .then(async (r) => {
         if (!r.ok) throw new Error("Failed to load history")
         return r.json()
       })
       .then((data) => setMessages(Array.isArray(data) ? data : []))
-      .catch((err) => {
-        console.error("History error:", err)
-      })
+      .catch((err) => console.error("History error:", err))
   }, [])
 
-  // auto scroll
+  // Load "The Number" — today's single most important task
+  useEffect(() => {
+    fetch(`${API}/api/tasks`)
+      .then(r => r.ok ? r.json() : [])
+      .then(tasks => {
+        if (!Array.isArray(tasks) || tasks.length === 0) return
+        const pri = { high: 3, medium: 2, low: 1 }
+        const top = [...tasks].sort((a, b) =>
+          (pri[b.priority] || 0) - (pri[a.priority] || 0)
+        )[0]
+        setTheNumber(top)
+      })
+      .catch(() => {})
+  }, [])
+
+  // Auto scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, loading])
 
+  const sendFeedback = async (msg, useful) => {
+    if (!msg.chunk_ids?.length) return
+    try {
+      await fetch(`${API}/api/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chunk_ids: msg.chunk_ids, query: msg.query || "", useful })
+      })
+      setMessages(prev => prev.map(m => m === msg ? { ...m, rated: useful ? "up" : "down" } : m))
+    } catch (e) { console.error("Feedback error:", e) }
+  }
+
   const send = async () => {
     if (!input.trim() || loading) return
-
     const text = input.trim()
     setInput("")
-
-    // cancel previous request
     if (abortRef.current) abortRef.current.abort()
     abortRef.current = new AbortController()
-
     setMessages((prev) => [...prev, { role: "user", content: text }])
     setLoading(true)
-
     try {
-      const res = await fetch(`${API}/chat`, {
+      const res = await fetch(`${API}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text }),
         signal: abortRef.current.signal,
       })
-
-      if (!res.ok) {
-        throw new Error(`Server error: ${res.status}`)
-      }
-
+      if (!res.ok) throw new Error(`Server error: ${res.status}`)
       const data = await res.json()
-
-      const reply =
-        data?.reply ||
-        data?.error ||
-        "[INVALID RESPONSE]"
-
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: reply },
-      ])
-
+      setMessages((prev) => [...prev, {
+        role: "assistant",
+        content: data?.reply || data?.error || "[INVALID RESPONSE]",
+        chunk_ids: data?.chunk_ids || [],
+        query: text,
+        rated: null
+      }])
     } catch (err) {
       if (err.name !== "AbortError") {
-        console.error("Chat error:", err)
-
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: "[CONNECTION ERROR]" },
-        ])
+        setMessages((prev) => [...prev, {
+          role: "assistant",
+          content: "[CONNECTION ERROR] — Ensure VITE_API_URL is set correctly in Vercel environment variables"
+        }])
       }
     }
-
     setLoading(false)
   }
 
   const onKey = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      send()
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() }
   }
 
   return (
     <div className="chat-page">
-
       <div className="chat-header">
         <div className="page-title">// Neural Link</div>
-        <div className="page-sub">
-          Direct channel to ORA · Context-aware intelligence system
-        </div>
+        <div className="page-sub">Direct channel to ORA · Context-aware intelligence system</div>
       </div>
 
-      <div className="chat-messages">
+      {theNumber && messages.length === 0 && (
+        <div style={{
+          margin: "0 1.5rem 1rem", padding: "0.75rem 1rem",
+          background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.25)",
+          borderLeft: "3px solid var(--amber)", borderRadius: 4,
+        }}>
+          <div style={{ fontFamily: "Share Tech Mono, monospace", fontSize: "0.62rem", color: "var(--text3)", letterSpacing: 2, marginBottom: 4 }}>
+            TODAY'S NUMBER
+          </div>
+          <div style={{ fontFamily: "Share Tech Mono, monospace", fontSize: "0.9rem", color: "var(--amber)", textShadow: "0 0 10px rgba(245,158,11,0.4)" }}>
+            {theNumber.title}
+          </div>
+          <div style={{ fontSize: "0.7rem", color: "var(--text3)", marginTop: 2 }}>
+            Priority: {theNumber.priority?.toUpperCase()} · Focus here first
+          </div>
+        </div>
+      )}
 
+      <div className="chat-messages">
         {messages.length === 0 && (
           <div className="empty" style={{ marginTop: "4rem" }}>
             <div className="empty-icon">◎</div>
-            <div className="glow" style={{ marginBottom: 8 }}>
-              ORA STANDING BY
-            </div>
+            <div className="glow" style={{ marginBottom: 8 }}>ORA STANDING BY</div>
             <div>Ask about tasks, files, system state, or anything else</div>
           </div>
         )}
 
         {messages.map((m, i) => (
-          <div
-            key={i}
-            className={`msg ${m.role === "user" ? "user" : "ora"}`}
-          >
-            <div className="msg-avatar">
-              {m.role === "user" ? "EL" : "◎"}
-            </div>
-
-            <div className="msg-bubble">
-              {m.role === "assistant" && (
-                <div className="msg-label">ORA // RESPONSE</div>
+          <div key={i} className={`msg ${m.role === "user" ? "user" : "ora"}`}>
+            <div className="msg-avatar">{m.role === "user" ? "EL" : "◎"}</div>
+            <div className="msg-bubble" style={{ flex: 1 }}>
+              {m.role === "assistant" && <div className="msg-label">ORA // RESPONSE</div>}
+              <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
+              {m.role === "assistant" && m.chunk_ids?.length > 0 && (
+                <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
+                  <span style={{ fontSize: "0.62rem", color: "var(--text3)", fontFamily: "Share Tech Mono, monospace" }}>RATE:</span>
+                  <button onClick={() => sendFeedback(m, true)} disabled={!!m.rated} style={{
+                    background: "none", border: `1px solid ${m.rated === "up" ? "var(--green)" : "var(--border2)"}`,
+                    color: m.rated === "up" ? "var(--green)" : "var(--text3)", cursor: m.rated ? "default" : "pointer",
+                    padding: "2px 7px", fontSize: "0.7rem", borderRadius: 3,
+                  }}>▲ USEFUL</button>
+                  <button onClick={() => sendFeedback(m, false)} disabled={!!m.rated} style={{
+                    background: "none", border: `1px solid ${m.rated === "down" ? "var(--red)" : "var(--border2)"}`,
+                    color: m.rated === "down" ? "var(--red)" : "var(--text3)", cursor: m.rated ? "default" : "pointer",
+                    padding: "2px 7px", fontSize: "0.7rem", borderRadius: 3,
+                  }}>▼ NOT USEFUL</button>
+                  {m.rated && <span style={{ fontSize: "0.62rem", color: "var(--text3)" }}>· logged</span>}
+                </div>
               )}
-              <div style={{ whiteSpace: "pre-wrap" }}>
-                {m.content}
-              </div>
             </div>
           </div>
         ))}
@@ -133,41 +158,23 @@ export default function ChatPage() {
             <div className="msg-avatar">◎</div>
             <div className="msg-bubble">
               <div className="msg-label">ORA // PROCESSING</div>
-              <div className="thinking-dots">
-                <span>▪</span><span>▪</span><span>▪</span>
-              </div>
+              <div className="thinking-dots"><span>▪</span><span>▪</span><span>▪</span></div>
             </div>
           </div>
         )}
-
         <div ref={bottomRef} />
       </div>
 
       <div className="chat-input-area">
         <div className="chat-input-row">
-
-          <textarea
-            ref={textareaRef}
-            className="chat-textarea"
-            value={input}
-            disabled={loading}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKey}
-            placeholder="TRANSMIT MESSAGE // Enter to send"
-            rows={2}
-          />
-
-          <button
-            className="btn-send"
-            onClick={send}
-            disabled={loading || !input.trim()}
-          >
+          <textarea ref={textareaRef} className="chat-textarea" value={input} disabled={loading}
+            onChange={(e) => setInput(e.target.value)} onKeyDown={onKey}
+            placeholder="TRANSMIT MESSAGE // Enter to send" rows={2} />
+          <button className="btn-send" onClick={send} disabled={loading || !input.trim()}>
             {loading ? "..." : "SEND ▶"}
           </button>
-
         </div>
       </div>
-
     </div>
   )
 }
