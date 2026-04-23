@@ -13,25 +13,17 @@ from memory.events import log_memory_event, summarize_old_events
 from briefing import send_morning_briefing
 from scheduler import start_scheduler
 
-# ─────────────────────────────────────────
-# AI BUDGET CONTROLLER IMPORT (NEW)
-# ─────────────────────────────────────────
 from ai_budget import ai_budget
-
-# ─────────────────────────────────────────
-# INTELLIGENCE IMPORTS
-# ─────────────────────────────────────────
 from intelligence.pattern_engine import run_pattern_analysis
 
-
 # ─────────────────────────────────────────
-# GLOBAL CONTROL LAYER
+# GLOBAL STATE
 # ─────────────────────────────────────────
 ai_queue = Queue()
 decision_cache = {}
 
 last_ai_call = 0
-AI_COOLDOWN = 60  # seconds
+AI_COOLDOWN = 60
 
 
 # ─────────────────────────────────────────
@@ -51,7 +43,7 @@ def collect_data():
 
 
 # ─────────────────────────────────────────
-# AI CONTROL HELPERS (SAFE GATING)
+# AI CONTROL LOGIC
 # ─────────────────────────────────────────
 def should_use_ai(data):
     return (
@@ -73,11 +65,11 @@ def can_call_ai():
 
 
 def get_cache_key(context):
-    return f"{round(context["cpu"])}.{round(context["ram"])}.{round(context["disk_free_gb"])}"
+    return f"{round(context['cpu'])}.{round(context['ram'])}.{round(context['disk_free_gb'])}"
 
 
 # ─────────────────────────────────────────
-# MONITORING CYCLE
+# MAIN CYCLE
 # ─────────────────────────────────────────
 def run_cycle():
     now = datetime.now().strftime("%H:%M:%S")
@@ -88,9 +80,9 @@ def run_cycle():
         return
 
     print(
-        f"  CPU: {data["cpu_percent"]}% | "
-        f"RAM: {data["ram_percent"]}% | "
-        f"Disk: {data["disk_free_gb"]:.1f}GB"
+        f"  CPU: {data['cpu_percent']}% | "
+        f"RAM: {data['ram_percent']}% | "
+        f"Disk: {data['disk_free_gb']:.1f}GB"
     )
 
     log_event("system", data)
@@ -104,13 +96,13 @@ def run_cycle():
 
     key = get_cache_key(context)
 
-    # 1. CACHE HIT (NO AI EVER)
+    # 1. CACHE HIT
     if key in decision_cache:
         print("  [CACHE] Using cached decision")
         execute(decision_cache[key])
         return
 
-    # 2. RULE ENGINE FIRST
+    # 2. RULE ENGINE
     decision = decide(context)
 
     if decision.get("actions"):
@@ -118,18 +110,18 @@ def run_cycle():
         execute(decision)
         return
 
-    # 3. QUEUE GUARD (PREVENT SPAM)
+    # 3. AI QUEUE LIMIT
     if ai_queue.qsize() > 3:
         print("[AI] Queue full — skipping request")
         return
 
-    # 4. AI ONLY IF NEEDED + COOLDOWN + BUDGET CONTROL
+    # 4. AI GATING
     if should_use_ai(data) and can_call_ai() and ai_budget.can_use_ai():
         print("  [AI] Queuing decision request...")
         ai_queue.put((key, context))
         return
 
-    # 5. SAFE FALLBACK
+    # 5. FALLBACK
     decision = {
         "reasoning": ["system stable / no AI needed"],
         "actions": []
@@ -140,7 +132,7 @@ def run_cycle():
 
 
 # ─────────────────────────────────────────
-# AI WORKER (RATE CONTROLLED + BUDGETED)
+# AI WORKER (FIXED)
 # ─────────────────────────────────────────
 def ai_worker():
     while True:
@@ -151,6 +143,7 @@ def ai_worker():
 
             if not ai_budget.can_use_ai():
                 print("[AI WORKER] BLOCKED by AI budget controller")
+                ai_queue.task_done()
                 continue
 
             try:
@@ -167,12 +160,14 @@ def ai_worker():
             decision_cache[key] = decision
             execute(decision)
 
+            ai_queue.task_done()
+
         except Exception as e:
             print(f"[WORKER ERROR] {e}")
 
 
 # ─────────────────────────────────────────
-# MONITORING LOOP
+# MONITOR LOOP
 # ─────────────────────────────────────────
 def run_monitoring_loop():
     while True:
@@ -194,11 +189,12 @@ def run_telegram_thread():
         return
 
     time.sleep(3)
-    print("[TELEGRAM] Starting bot in dedicated thread...")
+    print("[TELEGRAM] Starting bot...")
+
+    from telegram_bot import run_telegram_bot
 
     while True:
         try:
-            from telegram_bot import run_telegram_bot
             run_telegram_bot()
         except Exception as e:
             print(f"[TELEGRAM ERROR] {e} — restarting in 10s")
@@ -210,31 +206,17 @@ def run_telegram_thread():
 # ─────────────────────────────────────────
 def start_intelligence_layer():
     jobs = [
-        {
-            "hour": 7,
-            "minute": 0,
-            "fn": send_morning_briefing,
-            "name": "morning_briefing"
-        },
-        {
-            "hour": 23,
-            "minute": 0,
-            "fn": run_pattern_analysis,
-            "name": "daily_pattern_analysis"
-        },
-        {
-            "hour": 2,
-            "minute": 0,
-            "fn": summarize_old_events,
-            "name": "summarize_old_events"
-        },
+        {"hour": 7, "minute": 0, "fn": send_morning_briefing, "name": "morning_briefing"},
+        {"hour": 23, "minute": 0, "fn": run_pattern_analysis, "name": "daily_pattern_analysis"},
+        {"hour": 2, "minute": 0, "fn": summarize_old_events, "name": "summarize_old_events"},
     ]
+
     start_scheduler(jobs)
-    print("[ORA] Scheduler started — daily briefing at 07:00 Nairobi")
+    print("[ORA] Scheduler started")
 
 
 # ─────────────────────────────────────────
-# STARTUP (FIXED FOR RENDER)
+# STARTUP
 # ─────────────────────────────────────────
 def startup():
     print("[ORA] Initializing systems...")
@@ -244,7 +226,6 @@ def startup():
     init_profile()
     log_memory_event("system", "ORA started", importance=6)
 
-    # ONLY SAFE COMPONENT HERE
     start_intelligence_layer()
 
-    print("[ORA] Core systems online (API mode)")
+    print("[ORA] Core systems online")
