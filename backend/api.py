@@ -11,9 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 # ========================
 # BACKGROUND JOB REGISTRY
 # ========================
-# Maps job_id -> { status, filename, result, error, started_at }
 _upload_jobs: dict = {}
-_job_executor = ThreadPoolExecutor(max_workers=2)  # limit concurrent ingestions
+_job_executor = ThreadPoolExecutor(max_workers=2)
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -34,7 +33,8 @@ from database import (
     save_conversation,
     init_db,
     init_tasks_table,
-    log_event
+    log_event,
+    log_alert
 )
 
 # ========================
@@ -69,7 +69,6 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
-# Persistent paths come from config (resolves to /opt/ora-data on Render)
 from config import UPLOADS_DIR as UPLOADS_PATH
 
 
@@ -85,13 +84,9 @@ def monitoring_loop():
                 "disk_free_gb": psutil.disk_usage("/").free / (1024 ** 3),
                 "timestamp": datetime.now().isoformat()
             }
-
-            # ✅ FIX 1: json.dumps not str() — str() produces invalid JSON (single quotes)
             log_event("system", json.dumps(data))
-
         except Exception as e:
             print("[MONITOR ERROR]", e)
-
         time.sleep(5)
 
 
@@ -108,6 +103,39 @@ def start_telegram():
 
 
 # ========================
+# SCHEDULER + CORE ORCHESTRATOR
+# ========================
+def start_ora_scheduler():
+    try:
+        from scheduler import start_scheduler
+        from briefing import send_morning_briefing
+        from core import evaluate_state
+        from mpesa_engine import init_mpesa_table
+
+        init_mpesa_table()
+
+        jobs = [
+            {"hour": 7, "minute": 0, "fn": send_morning_briefing, "name": "morning_briefing"},
+            {"hour": 20, "minute": 0, "fn": lambda: log_memory_event("scheduler", "Evening check", 4), "name": "evening_check"},
+        ]
+        start_scheduler(jobs)
+        print("[ORA] Scheduler activated")
+
+        def core_loop():
+            while True:
+                try:
+                    evaluate_state()
+                except Exception as e:
+                    print(f"[CORE LOOP ERROR] {e}")
+                time.sleep(1800)
+
+        threading.Thread(target=core_loop, daemon=True).start()
+        print("[ORA] Core orchestrator running")
+    except Exception as e:
+        print(f"[SCHEDULER ERROR] {e}")
+
+
+# ========================
 # INIT
 # ========================
 @asynccontextmanager
@@ -118,12 +146,12 @@ async def lifespan(app: FastAPI):
         init_profile()
         log_memory_event("system", "ORA API started", importance=6)
 
-        # ✅ FIX 2: monitoring thread inside lifespan (on_event is ignored when lifespan is set)
         threading.Thread(target=monitoring_loop, daemon=True).start()
         print("[ORA] Monitoring thread started")
 
-        # ✅ FIX 3: telegram was never launched from api.py — added here
         threading.Thread(target=start_telegram, daemon=True).start()
+
+        threading.Thread(target=start_ora_scheduler, daemon=True).start()
 
     except Exception:
         print("[INIT ERROR]", traceback.format_exc())
@@ -181,16 +209,13 @@ def status():
         row = get_system_stats()
         if not row:
             return {"status": "warming_up"}
-
         data = json.loads(row[0])
-
         return {
             "cpu": data.get("cpu_percent", 0),
             "ram": data.get("ram_percent", 0),
             "disk_free_gb": data.get("disk_free_gb", 0),
             "last_updated": row[1]
         }
-
     except Exception:
         return {"status": "error", "detail": traceback.format_exc()}
 
@@ -292,9 +317,6 @@ def tasks():
 # ========================
 # CHAT ENGINE
 # ========================
-
-# In-memory store of last retrieved chunk_ids per "session" (keyed by query)
-# Used for the feedback loop — maps query hash → [chunk_ids]
 _last_chunks: dict = {}
 
 @app.post("/api/chat")
@@ -312,28 +334,23 @@ async def chat(payload: dict):
 
         client = Groq(api_key=GROQ_API_KEY)
 
-        # ── Phase 4+5: Hybrid retrieval ──────────────────────
         from knowledge.retrieval import retrieve, format_context
         from knowledge.feedback import log_query, auto_signal_from_conversation
 
         retrieved_chunks = retrieve(user_text, n_results=5)
         knowledge_context = format_context(retrieved_chunks)
 
-        # Log retrieved chunks for feedback loop (Phase 6)
         chunk_ids = [c.get("chunk_id", "") for c in retrieved_chunks]
         log_query(user_text, chunk_ids)
 
-        # Auto-signal: if previous query exists, check if this is a follow-up or rephrasing
         prev_query = _last_chunks.get("query")
         prev_chunks = _last_chunks.get("chunks", [])
         if prev_query and prev_chunks:
             auto_signal_from_conversation(prev_query, prev_chunks, user_text)
 
-        # Store current for next turn
         _last_chunks["query"] = user_text
         _last_chunks["chunks"] = retrieved_chunks
 
-        # ── Build prompt ──────────────────────────────────────
         system_prompt = build_system_prompt(query=user_text)
 
         if knowledge_context:
@@ -368,10 +385,9 @@ async def chat(payload: dict):
         save_conversation("assistant", reply)
         log_memory_event("conversation", "ORA replied", importance=3)
 
-        # Return chunk_ids so frontend can send feedback signals
         return {
             "reply": reply,
-            "chunk_ids": chunk_ids  # frontend can pass these back to /api/feedback
+            "chunk_ids": chunk_ids
         }
 
     except Exception:
@@ -384,11 +400,6 @@ async def chat(payload: dict):
 # ========================
 
 def _run_pipeline_job(job_id: str, filepath: str, filename: str, tags: str):
-    """
-    Runs the full ingestion pipeline in a background thread.
-    Updates _upload_jobs[job_id] with progress and final result.
-    Never raises — all errors are captured in the job record.
-    """
     _upload_jobs[job_id]["status"] = "processing"
     try:
         result = on_upload(filepath, filename, tags=tags)
@@ -410,11 +421,6 @@ def _run_pipeline_job(job_id: str, filepath: str, filename: str, tags: str):
 
 @app.post("/api/knowledge/upload")
 async def upload_knowledge(file: UploadFile = File(...), tags: str = Form("")):
-    """
-    Upload a document and kick off async background indexing.
-    Returns immediately with a job_id the client can poll via
-    GET /api/knowledge/status/{job_id}.
-    """
     try:
         content = await file.read()
         if len(content) > MAX_FILE_SIZE:
@@ -435,7 +441,6 @@ async def upload_knowledge(file: UploadFile = File(...), tags: str = Form("")):
             "error": None
         }
 
-        # Submit to thread-pool — does NOT block the async event loop
         _job_executor.submit(_run_pipeline_job, job_id, filepath, safe_name, tags)
 
         return {
@@ -454,7 +459,6 @@ async def upload_knowledge(file: UploadFile = File(...), tags: str = Form("")):
 
 @app.get("/api/knowledge/status/{job_id}")
 def upload_status(job_id: str):
-    """Poll the status of a background upload/indexing job."""
     job = _upload_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -463,7 +467,6 @@ def upload_status(job_id: str):
 
 @app.get("/api/knowledge/documents")
 def list_documents():
-    """List all indexed documents."""
     try:
         return get_all_documents()
     except Exception:
@@ -472,7 +475,6 @@ def list_documents():
 
 @app.delete("/api/knowledge/documents/{filename}")
 def remove_document(filename: str):
-    """Delete a document and all its chunks, embeddings, and insights."""
     try:
         delete_document(filename)
         log_memory_event("knowledge", f"Deleted: {filename}", importance=4)
@@ -483,7 +485,6 @@ def remove_document(filename: str):
 
 @app.get("/api/knowledge/documents/{filename}/insights")
 def document_insights(filename: str):
-    """Get distilled insights for a specific document."""
     try:
         return get_insights_for_source(filename)
     except Exception:
@@ -496,12 +497,6 @@ def document_insights(filename: str):
 
 @app.post("/api/feedback")
 async def feedback(payload: dict):
-    """
-    Receive explicit feedback signal from frontend.
-    Called when user clicks thumbs up/down on an ORA response.
-
-    payload: { chunk_ids: [...], query: "...", useful: true/false }
-    """
     try:
         chunk_ids = payload.get("chunk_ids", [])
         query = payload.get("query", "")
@@ -514,7 +509,6 @@ async def feedback(payload: dict):
                 record_not_useful(cid, query)
 
         return {"status": "recorded", "chunks": len(chunk_ids)}
-
     except Exception:
         return {"status": "error"}
 
@@ -525,12 +519,92 @@ async def feedback(payload: dict):
 
 @app.get("/api/conversations")
 def conversations():
-    """Return conversation history for the chat page."""
     try:
         history = get_conversation_history(limit=50)
         return [
             {"role": role, "content": content}
             for role, content in history
         ]
+    except Exception:
+        return []
+
+
+# ========================
+# THE NUMBER
+# ========================
+
+@app.get("/api/the-number")
+def the_number():
+    try:
+        from core import get_the_number
+        result = get_the_number()
+        if result:
+            return result
+        return {"status": "empty", "message": "No tasks queued"}
+    except Exception:
+        return {"status": "error", "detail": traceback.format_exc()}
+
+
+# ========================
+# M-PESA ENGINE
+# ========================
+
+@app.post("/api/mpesa/ingest")
+async def mpesa_ingest(payload: dict):
+    try:
+        from mpesa_engine import ingest_sms
+        sms = payload.get("sms", "").strip()
+        if not sms:
+            return {"status": "error", "message": "No SMS provided"}
+        result = ingest_sms(sms)
+
+        if result.get("alert"):
+            alert = result["alert"]
+            log_alert(
+                rule_name="mpesa_spend_alert",
+                message=alert["message"],
+                severity=alert["severity"]
+            )
+            try:
+                from telegram_bot import notify
+                notify(alert["message"])
+            except Exception:
+                pass
+
+        return result
+    except Exception:
+        return {"status": "error", "detail": traceback.format_exc()}
+
+
+@app.get("/api/mpesa/summary")
+def mpesa_summary():
+    try:
+        from mpesa_engine import get_today_spend, get_average_daily_spend, get_daily_summary
+        today = get_today_spend()
+        avg = get_average_daily_spend()
+        daily = get_daily_summary(days=7)
+        return {
+            "today": today,
+            "average_daily": round(avg, 2),
+            "last_7_days": daily
+        }
+    except Exception:
+        return {"status": "error"}
+
+
+@app.get("/api/mpesa/transactions")
+def mpesa_transactions(limit: int = 20):
+    try:
+        from mpesa_engine import get_recent_transactions
+        return get_recent_transactions(limit=limit)
+    except Exception:
+        return []
+
+
+@app.get("/api/mpesa/recurring")
+def mpesa_recurring():
+    try:
+        from mpesa_engine import get_recurring_patterns
+        return get_recurring_patterns()
     except Exception:
         return []
