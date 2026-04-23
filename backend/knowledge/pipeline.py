@@ -19,12 +19,7 @@ from knowledge.ingest import load_document, chunk_document
 from knowledge.embeddings import init_vector_db, store_chunks, delete_source
 from knowledge.retrieval import retrieve, format_context
 from knowledge.feedback import distill_document, log_query
-
-DB_PATH = "ora_knowledge.db"
-INDEX_PATH = "ora_index.json"
-UPLOADS_PATH = "uploads"
-
-os.makedirs(UPLOADS_PATH, exist_ok=True)
+from config import DB_PATH, INDEX_PATH, UPLOADS_DIR as UPLOADS_PATH
 
 # Initialize DB tables on import
 init_vector_db()

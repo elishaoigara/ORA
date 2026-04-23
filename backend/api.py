@@ -69,6 +69,9 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
+# Persistent paths come from config (resolves to /opt/ora-data on Render)
+from config import UPLOADS_DIR as UPLOADS_PATH
+
 
 # ========================
 # BACKGROUND MONITOR

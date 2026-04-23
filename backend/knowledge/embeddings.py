@@ -11,8 +11,7 @@ import json
 import sqlite3
 import numpy as np
 from typing import Optional
-
-DB_PATH = "ora_knowledge.db"
+from config import DB_PATH
 
 
 # ============================================================
