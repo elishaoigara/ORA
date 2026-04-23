@@ -2,7 +2,7 @@
 ORA Knowledge — Phase 3
 Embedding generation via Groq API + SQLite vector store.
 
-Uses: Groq nomic-embed-text (free tier, fast)
+Uses: sentence-transformers all-MiniLM-L6-v2 (local, CPU, no API key)
 Stores: embeddings as JSON blobs in SQLite (no external vector DB needed)
 Retrieves: cosine similarity via numpy
 """
@@ -98,59 +98,63 @@ def init_vector_db():
 # EMBEDDING GENERATION
 # ============================================================
 
-# Max chunks embedded per document — prevents runaway ingestion on huge PDFs.
-# At ~0.3s per batch call, 100 chunks = ~1 call = fast. Tune up if needed.
-MAX_CHUNKS_PER_DOC = 120
-GROQ_EMBED_BATCH   = 96   # Groq accepts up to 96 inputs per embedding call
+# Max chunks embedded per document.
+# sentence-transformers runs locally so there's no API rate limit.
+MAX_CHUNKS_PER_DOC = 150
+_EMBED_BATCH_SIZE  = 64   # sentence-transformers batch size (tune to RAM)
+
+# Lazy-loaded model singleton — loaded once on first embed call.
+_model = None
+
+def _get_model():
+    """Load the embedding model once and cache it."""
+    global _model
+    if _model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            # all-MiniLM-L6-v2: 22MB, 384 dims, fast on CPU, MIT licence.
+            # Downloaded to /opt/ora-data/models on first run (persistent disk).
+            from config import DATA_DIR
+            import os
+            cache_dir = os.path.join(DATA_DIR, "models")
+            os.makedirs(cache_dir, exist_ok=True)
+            _model = SentenceTransformer(
+                "all-MiniLM-L6-v2",
+                cache_folder=cache_dir
+            )
+            print("[EMBED] sentence-transformers model loaded (all-MiniLM-L6-v2)")
+        except Exception as e:
+            print(f"[EMBED] Model load failed: {e}")
+            _model = None
+    return _model
 
 
 def embed_text(text: str) -> Optional[list[float]]:
-    """Single-text embedding. Used for query embedding at search time."""
-    results = _embed_batch_groq([text])
+    """Single-text embedding — used for query embedding at search time."""
+    results = embed_batch([text])
     return results[0] if results else None
 
 
-def _embed_batch_groq(texts: list[str]) -> list[Optional[list[float]]]:
+def embed_batch(texts: list[str]) -> list[Optional[list[float]]]:
     """
-    Call Groq embeddings API with a batch of texts in ONE request.
-    Returns a list of embeddings (None for any slot that failed).
-    Groq supports up to 96 inputs per call.
+    Embed a list of texts locally using sentence-transformers.
+    Processed in batches to control memory usage.
+    Returns list of float lists (or None on failure).
     """
-    try:
-        from config import GROQ_API_KEY
-        if not GROQ_API_KEY:
-            return [None] * len(texts)
-
-        from groq import Groq
-        client = Groq(api_key=GROQ_API_KEY)
-
-        # Truncate each text to model token limit
-        inputs = [t[:4096] for t in texts]
-
-        response = client.embeddings.create(
-            model="nomic-embed-text-v1.5",
-            input=inputs
-        )
-
-        # Response items are ordered by index
-        results = [None] * len(inputs)
-        for item in response.data:
-            results[item.index] = item.embedding
-
-        return results
-
-    except Exception as e:
-        print(f"[EMBED] Batch failed: {e}")
+    model = _get_model()
+    if model is None:
         return [None] * len(texts)
 
-
-def embed_batch(texts: list[str]) -> list[Optional[list[float]]]:
-    """Embed multiple texts in efficient batches."""
-    all_results = []
-    for i in range(0, len(texts), GROQ_EMBED_BATCH):
-        batch = texts[i:i + GROQ_EMBED_BATCH]
-        all_results.extend(_embed_batch_groq(batch))
-    return all_results
+    all_embeddings = []
+    try:
+        for i in range(0, len(texts), _EMBED_BATCH_SIZE):
+            batch = texts[i:i + _EMBED_BATCH_SIZE]
+            vecs = model.encode(batch, show_progress_bar=False)
+            all_embeddings.extend([v.tolist() for v in vecs])
+        return all_embeddings
+    except Exception as e:
+        print(f"[EMBED] Batch encode failed: {e}")
+        return [None] * len(texts)
 
 
 # ============================================================
@@ -214,9 +218,9 @@ def store_chunks(chunks: list[dict], tags: str = ""):
 
     conn.commit()
 
-    # ── Step 2: batch-embed all texts in as few API calls as possible ──
+    # ── Step 2: batch-embed all texts locally ──
     texts = [c["text"] for c in chunks]
-    print(f"[EMBED] Batching {len(texts)} chunks in {(len(texts)-1)//GROQ_EMBED_BATCH + 1} API call(s)...")
+    print(f"[EMBED] Encoding {len(texts)} chunks locally...")
     embeddings = embed_batch(texts)
 
     # ── Step 3: write embeddings back ──
