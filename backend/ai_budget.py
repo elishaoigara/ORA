@@ -1,9 +1,7 @@
 import time
 import threading
+from datetime import datetime, date
 
-# ─────────────────────────────────────────
-# GLOBAL AI BUDGET CONTROLLER (HARD STOP)
-# ─────────────────────────────────────────
 
 class AIBudgetController:
     def __init__(self,
@@ -19,21 +17,23 @@ class AIBudgetController:
         self.lock = threading.Lock()
         self.ai_enabled = True
 
-        self.last_reset = time.time()
+        self.current_day = date.today()
 
     # ─────────────────────────────────────────
-    # DAILY RESET
+    # SAFE DAILY RESET (calendar-based)
     # ─────────────────────────────────────────
     def reset_if_new_day(self):
-        if time.time() - self.last_reset > 86400:
+        today = date.today()
+
+        if today != self.current_day:
             with self.lock:
                 self.used_tokens = 0
                 self.ai_enabled = True
-                self.last_reset = time.time()
+                self.current_day = today
                 print("[AI BUDGET] Daily reset completed")
 
     # ─────────────────────────────────────────
-    # CHECK IF AI IS ALLOWED (SAFE VERSION)
+    # CHECK AI PERMISSION (FAST PATH)
     # ─────────────────────────────────────────
     def can_use_ai(self):
         self.reset_if_new_day()
@@ -42,45 +42,41 @@ class AIBudgetController:
             if not self.ai_enabled:
                 return False
 
-            # HARD SAFETY CHECK (before overflow)
-            if self.used_tokens + self.estimated_tokens > self.daily_limit:
-                self.ai_enabled = False
-                print("[AI BUDGET] HARD STOP ACTIVATED (pre-check limit)")
-                return False
-
-            return True
+            return (self.used_tokens + self.estimated_tokens) <= self.daily_limit
 
     # ─────────────────────────────────────────
-    # REGISTER AI USAGE (SAFE VERSION)
+    # REGISTER USAGE (ATOMIC)
     # ─────────────────────────────────────────
     def register_call(self, tokens=None):
-        with self.lock:
-            cost = tokens or self.estimated_tokens
+        cost = tokens or self.estimated_tokens
 
-            # Prevent accidental overflow tracking
-            if self.used_tokens + cost > self.daily_limit:
-                self.used_tokens = self.daily_limit
-                self.ai_enabled = False
-                print("[AI BUDGET] HARD STOP (overflow prevented)")
+        with self.lock:
+            if not self.ai_enabled:
                 return False
 
-            self.used_tokens += cost
+            projected = self.used_tokens + cost
 
-            print(f"[AI BUDGET] Used: {self.used_tokens}/{self.daily_limit}")
-
-            # Soft warning zone
-            if self.used_tokens >= self.soft_limit:
-                print("[AI BUDGET] WARNING: approaching limit")
-
-            # Hard stop
-            if self.used_tokens >= self.daily_limit:
+            # HARD STOP
+            if projected >= self.daily_limit:
+                self.used_tokens = self.daily_limit
                 self.ai_enabled = False
-                print("[AI BUDGET] AI DISABLED (hard limit reached)")
+                print("[AI BUDGET] HARD STOP REACHED")
+                return False
+
+            self.used_tokens = projected
+
+            # soft limit behavior (IMPORTANT CHANGE)
+            if self.used_tokens >= self.soft_limit:
+                print("[AI BUDGET] WARNING: soft limit reached (throttling AI)")
+
+                # optional throttle effect (NEW)
+                self.ai_enabled = True
+                time.sleep(0.2)  # small global slowdown signal
 
             return True
 
     # ─────────────────────────────────────────
-    # MANUAL OVERRIDE
+    # OVERRIDE CONTROL
     # ─────────────────────────────────────────
     def force_enable(self):
         with self.lock:
