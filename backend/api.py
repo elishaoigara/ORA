@@ -3,7 +3,6 @@ import json
 import uuid
 import traceback
 import psutil
-import threading
 
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -27,7 +26,7 @@ UPLOADS_PATH = os.getenv("UPLOADS_DIR", "uploads")
 os.makedirs(UPLOADS_PATH, exist_ok=True)
 
 # ========================
-# GROQ CLIENT (GLOBAL - COST SAFE)
+# GROQ CLIENT
 # ========================
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
@@ -37,7 +36,7 @@ client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 _upload_jobs = {}
 
 # ========================
-# IMPORT YOUR MODULES
+# IMPORT MODULES
 # ========================
 from database import (
     get_recent_alerts,
@@ -69,7 +68,7 @@ scheduler = BackgroundScheduler()
 
 
 # ========================
-# SYSTEM MONITOR (LOW COST)
+# SYSTEM MONITOR
 # ========================
 def system_monitor_job():
     try:
@@ -85,7 +84,7 @@ def system_monitor_job():
 
 
 # ========================
-# CORE JOB (SAFE)
+# CORE JOB
 # ========================
 def core_job():
     try:
@@ -96,13 +95,12 @@ def core_job():
 
 
 # ========================
-# INIT SCHEDULER (FIXED)
+# INIT SCHEDULER (SAFE)
 # ========================
 def init_scheduler():
     if not scheduler.running:
         scheduler.add_job(system_monitor_job, "interval", seconds=5, id="monitor")
         scheduler.add_job(core_job, "interval", seconds=1800, id="core")
-
         scheduler.start()
         print("[ORA] Scheduler started")
 
@@ -133,7 +131,7 @@ def run_pipeline_job(job_id, filepath, filename, tags):
 
 
 # ========================
-# FASTAPI LIFESPAN
+# LIFESPAN
 # ========================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -154,11 +152,11 @@ app = FastAPI(title="ORA Backend", lifespan=lifespan)
 
 
 # ========================
-# CORS (SAFE DEFAULT)
+# CORS
 # ========================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL] if FRONTEND_URL != "*" else ["*"],
+    allow_origins=["*"] if FRONTEND_URL == "*" else [FRONTEND_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -172,20 +170,23 @@ app.mount("/uploads", StaticFiles(directory=UPLOADS_PATH), name="uploads")
 
 
 # ========================
-# HEALTH
+# ROOT
 # ========================
 @app.get("/")
 def root():
     return {"status": "ORA backend running"}
 
 
-@app.get("/api/health")
+# ========================
+# HEALTH (FIXED FOR UPTIMEROBOT)
+# ========================
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 def health():
     return {"status": "ORA online"}
 
 
 # ========================
-# CHAT (COST OPTIMIZED)
+# CHAT
 # ========================
 @app.post("/api/chat")
 async def chat(payload: dict):
@@ -202,7 +203,7 @@ async def chat(payload: dict):
 
         system_prompt = build_system_prompt(user_text)
 
-        history = get_conversation_history(limit=4)  # 🔥 reduced cost
+        history = get_conversation_history(limit=4)
 
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -217,7 +218,7 @@ async def chat(payload: dict):
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
-            max_tokens=350,   # 🔥 cost control
+            max_tokens=350,
             temperature=0.7,
         )
 
@@ -234,7 +235,7 @@ async def chat(payload: dict):
 
 
 # ========================
-# KNOWLEDGE UPLOAD (SAFE BG TASK)
+# UPLOAD KNOWLEDGE
 # ========================
 @app.post("/api/knowledge/upload")
 async def upload_knowledge(
