@@ -1,12 +1,18 @@
 """
-ORA Telegram Bot — optimized for Render free tier + Groq cost control (STABLE)
+ORA Telegram Bot — Stable Production Version
+Fixes:
+- No threading (prevents race + timeout bugs)
+- Safe Groq calls
+- Proper error visibility
+- Reliable response handling
 """
 
-print("[TELEGRAM] Loading bot v3 (stable)...")
+print("[TELEGRAM] Loading bot v4 (stable fixed)...")
 
 import time
 import requests
 import traceback
+
 from datetime import datetime
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GROQ_API_KEY
@@ -14,7 +20,6 @@ from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GROQ_API_KEY
 from database import (
     save_conversation,
     get_conversation_history,
-    get_tasks,
 )
 
 from memory.events import log_memory_event
@@ -23,14 +28,12 @@ from groq import Groq
 
 
 # ========================
-# CONFIG SAFETY
+# CONFIG
 # ========================
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN)
-
 BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}" if TELEGRAM_ENABLED else None
 
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-
 ALLOWED_CHAT_ID = int(TELEGRAM_CHAT_ID) if TELEGRAM_CHAT_ID else None
 
 print(f"[TELEGRAM] Enabled: {TELEGRAM_ENABLED}")
@@ -38,49 +41,24 @@ print(f"[TELEGRAM] Allowed Chat ID: {ALLOWED_CHAT_ID}")
 
 
 # ========================
-# COST CACHE (SAFE LIMIT)
+# CACHE (safe)
 # ========================
-RESPONSE_CACHE = {}
+CACHE = {}
 CACHE_TTL = 300
-MAX_CACHE_SIZE = 100
 
 
-def get_cache(text):
-    item = RESPONSE_CACHE.get(text)
+def get_cache(key):
+    item = CACHE.get(key)
     if not item:
         return None
-
     if time.time() - item["time"] > CACHE_TTL:
-        del RESPONSE_CACHE[text]
+        del CACHE[key]
         return None
-
-    return item["response"]
-
-
-def set_cache(text, response):
-    if len(RESPONSE_CACHE) > MAX_CACHE_SIZE:
-        RESPONSE_CACHE.clear()  # prevent memory leak
-
-    RESPONSE_CACHE[text] = {
-        "response": response,
-        "time": time.time()
-    }
+    return item["value"]
 
 
-# ========================
-# INTENT ROUTER
-# ========================
-def route_intent(text: str):
-    text = text.lower()
-
-    if text.startswith("/status"):
-        return "status"
-    if text.startswith("/task"):
-        return "task"
-    if text.startswith("/start"):
-        return "start"
-
-    return "chat"
+def set_cache(key, value):
+    CACHE[key] = {"value": value, "time": time.time()}
 
 
 # ========================
@@ -89,7 +67,6 @@ def route_intent(text: str):
 def tg_send(chat_id, text):
     if not TELEGRAM_ENABLED:
         return None
-
     try:
         r = requests.post(
             f"{BASE}/sendMessage",
@@ -105,14 +82,13 @@ def tg_send(chat_id, text):
 def tg_edit(chat_id, message_id, text):
     if not TELEGRAM_ENABLED or not message_id:
         return
-
     try:
         requests.post(
             f"{BASE}/editMessageText",
             json={
                 "chat_id": chat_id,
                 "message_id": message_id,
-                "text": text
+                "text": text,
             },
             timeout=10,
         )
@@ -123,31 +99,36 @@ def tg_edit(chat_id, message_id, text):
 def tg_get_updates(offset=None):
     if not TELEGRAM_ENABLED:
         return []
-
     try:
         params = {"timeout": 15}
         if offset:
             params["offset"] = offset
 
-        r = requests.get(
-            f"{BASE}/getUpdates",
-            params=params,
-            timeout=20
-        )
-
+        r = requests.get(f"{BASE}/getUpdates", params=params, timeout=20)
         return r.json().get("result", [])
-
     except Exception as e:
         print("[TG POLL ERROR]", e)
         return []
 
 
 # ========================
-# AI RESPONSE (OPTIMIZED)
+# INTENT ROUTER
 # ========================
-def ai_respond(text):
+def route_intent(text: str):
+    t = text.lower()
+    if t.startswith("/start"):
+        return "start"
+    if t.startswith("/status"):
+        return "status"
+    return "chat"
+
+
+# ========================
+# AI CORE (FIXED)
+# ========================
+def ai_respond(text: str):
     if not client:
-        return "Groq not configured."
+        return "Groq is not configured."
 
     cached = get_cache(text)
     if cached:
@@ -168,12 +149,12 @@ def ai_respond(text):
 
         messages.append({"role": "user", "content": text})
 
+        # IMPORTANT: no timeout param (Groq SDK issue source)
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama3-70b-8192",
             messages=messages,
             max_tokens=300,
             temperature=0.6,
-            timeout=20,
         )
 
         reply = response.choices[0].message.content.strip()
@@ -183,46 +164,29 @@ def ai_respond(text):
         return reply
 
     except Exception as e:
-        print("[GROQ ERROR]", e)
-        return "ORA is temporarily unavailable."
+        print("[GROQ ERROR]", str(e))
+        traceback.print_exc()
+        return f"ORA AI error: {str(e)}"
 
 
 # ========================
-# HANDLERS
+# CHAT HANDLER (FIXED)
 # ========================
-def handle_status(chat_id):
-    try:
-        import psutil
-        cpu = psutil.cpu_percent()
-        ram = psutil.virtual_memory().percent
-
-        tg_send(chat_id, f"CPU: {cpu}%\nRAM: {ram}%")
-
-    except Exception:
-        tg_send(chat_id, "Status error")
-
-
 def handle_chat(chat_id, text):
     msg_id = tg_send(chat_id, "thinking...")
 
-    result = {"reply": None}
+    try:
+        save_conversation("user", text)
+        log_memory_event("conversation", text[:80], importance=4)
 
-    def _do_ai():
-        try:
-            save_conversation("user", text)
-            log_memory_event("conversation", text[:80], importance=4)
-            result["reply"] = ai_respond(text)
-            save_conversation("assistant", result["reply"])
-        except Exception:
-            print(traceback.format_exc())
-            result["reply"] = "Error processing request."
+        reply = ai_respond(text)
 
-    import threading
-    t = threading.Thread(target=_do_ai)
-    t.start()
-    t.join(timeout=25)  # max 25s wait
+        save_conversation("assistant", reply)
 
-    reply = result["reply"] or "ORA timed out — please try again."
+    except Exception as e:
+        print("[HANDLE CHAT ERROR]", str(e))
+        traceback.print_exc()
+        reply = "Error processing request."
 
     if msg_id:
         tg_edit(chat_id, msg_id, reply)
@@ -231,31 +195,44 @@ def handle_chat(chat_id, text):
 
 
 # ========================
-# MAIN LOOP (RENDER SAFE)
+# STATUS
+# ========================
+def handle_status(chat_id):
+    try:
+        import psutil
+        cpu = psutil.cpu_percent()
+        ram = psutil.virtual_memory().percent
+        tg_send(chat_id, f"CPU: {cpu}%\nRAM: {ram}%")
+    except Exception as e:
+        tg_send(chat_id, f"Status error: {e}")
+
+
+# ========================
+# MAIN LOOP
 # ========================
 def run_telegram_bot():
     if not TELEGRAM_ENABLED:
-        print("[TELEGRAM] Disabled - no token")
+        print("[TELEGRAM] Disabled")
         return
 
-    print("[TELEGRAM] Bot running (stable mode)")
+    print("[TELEGRAM] Bot running (stable fixed mode)")
 
     offset = None
-    idle_sleep = 1
+    sleep_time = 1
 
     while True:
         try:
             updates = tg_get_updates(offset)
 
             if not updates:
-                time.sleep(idle_sleep)
-                idle_sleep = min(idle_sleep + 1, 5)
+                time.sleep(sleep_time)
+                sleep_time = min(sleep_time + 1, 5)
                 continue
 
-            idle_sleep = 1
+            sleep_time = 1
 
             for update in updates:
-                offset = update.get("update_id", 0) + 1
+                offset = update["update_id"] + 1
 
                 msg = update.get("message")
                 if not msg:
@@ -278,6 +255,6 @@ def run_telegram_bot():
                     handle_chat(chat_id, text)
 
         except Exception as e:
-            print("[BOT LOOP ERROR]", e)
-            print(traceback.format_exc())
+            print("[BOT LOOP ERROR]", str(e))
+            traceback.print_exc()
             time.sleep(3)
