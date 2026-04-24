@@ -44,6 +44,29 @@ def on_startup():
     init_mpesa_table()
     print("[API] Database initialized")
 
+    # ── Telegram Bot ──────────────────────────────────────────
+    import threading
+    from config import TELEGRAM_BOT_TOKEN
+
+    if TELEGRAM_BOT_TOKEN:
+        def _telegram_loop():
+            import time
+            time.sleep(3)  # wait for API to fully come up
+            print("[TELEGRAM] Starting bot thread...")
+            from telegram_bot import run_telegram_bot
+            while True:
+                try:
+                    run_telegram_bot()
+                except Exception as e:
+                    print(f"[TELEGRAM ERROR] {e} — restarting in 10s")
+                    time.sleep(10)
+
+        t = threading.Thread(target=_telegram_loop, daemon=True)
+        t.start()
+        print("[TELEGRAM] Bot thread launched")
+    else:
+        print("[TELEGRAM] No token set — bot disabled")
+
 
 # ========================
 # HEALTH
