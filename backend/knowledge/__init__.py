@@ -1,46 +1,26 @@
 """
 ORA Knowledge Package
 =====================
-
-Production-ready RAG pipeline:
-- Ingestion (PDF/DOCX/TXT/OCR)
-- Semantic chunking
-- Embeddings (local sentence-transformers or Groq hybrid)
-- Hybrid retrieval (FTS + vector)
-- Context formatting
-- Feedback loop
-- Document distillation
-- Background pipeline orchestration
-
-Drop-in replacement for legacy knowledge.py
+Fixed: removed UPLOADS_PATH from pipeline imports (it lives in config.py)
 """
 
-# ============================================================
-# PIPELINE (UPLOAD + INDEXING)
-# ============================================================
-
+# ── Pipeline (upload + indexing) ──────────────────────────────
 from knowledge.pipeline import (
     on_upload,
     store_document,
     get_all_documents,
     delete_document,
-    UPLOADS_PATH,
+    search_and_format,   # also exported here for convenience
 )
 
-# ============================================================
-# RETRIEVAL (RAG CORE)
-# ============================================================
-
+# ── Retrieval (RAG core) ──────────────────────────────────────
 from knowledge.retrieval import (
     retrieve,
     format_context,
     search_and_format,
 )
 
-# ============================================================
-# LEARNING LOOP (SELF IMPROVEMENT)
-# ============================================================
-
+# ── Learning loop ─────────────────────────────────────────────
 from knowledge.feedback import (
     log_query,
     record_useful,
@@ -50,19 +30,12 @@ from knowledge.feedback import (
     get_insights_for_source,
 )
 
-# ============================================================
-# EMBEDDINGS / VECTOR DB
-# ============================================================
-
+# ── Embeddings / vector DB ────────────────────────────────────
 from knowledge.embeddings import (
     init_vector_db,
     vector_search,
     embed_text,
 )
-
-# ============================================================
-# PUBLIC API (STABLE INTERFACE)
-# ============================================================
 
 __all__ = [
     # ingestion
@@ -70,13 +43,10 @@ __all__ = [
     "store_document",
     "get_all_documents",
     "delete_document",
-    "UPLOADS_PATH",
-
     # retrieval
     "retrieve",
     "search_and_format",
     "format_context",
-
     # learning
     "log_query",
     "record_useful",
@@ -84,7 +54,6 @@ __all__ = [
     "auto_signal_from_conversation",
     "get_top_chunks_by_feedback",
     "get_insights_for_source",
-
     # embeddings
     "init_vector_db",
     "vector_search",
