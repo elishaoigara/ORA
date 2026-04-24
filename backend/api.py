@@ -24,7 +24,6 @@ client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 # ========================
 app = FastAPI(title="ORA Backend")
 
-# 🔥 FIXED CORS (mobile + web safe on Render free tier)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,42 +37,45 @@ app.add_middleware(
 # ========================
 @app.on_event("startup")
 def on_startup():
-    from database import init_db, init_tasks_table
-    from memory.profile import init_profile
-    from mpesa_engine import init_mpesa_table
-    from knowledge.embeddings import init_vector_db
+    try:
+        from database import init_db, init_tasks_table
+        from memory.profile import init_profile
+        from mpesa_engine import init_mpesa_table
+        from knowledge.embeddings import init_vector_db
 
-    init_db()
-    init_tasks_table()
-    init_profile()
-    init_mpesa_table()
-    init_vector_db()
+        init_db()
+        init_tasks_table()
+        init_profile()
+        init_mpesa_table()
+        init_vector_db()
 
-    print("[API] Database initialized")
+        print("[ORA] DB INIT OK")
+
+    except Exception:
+        print("[ORA INIT ERROR]")
+        print(traceback.format_exc())
 
     # ========================
-    # TELEGRAM BOT (SAFE THREAD)
+    # TELEGRAM BOT (SAFE)
     # ========================
     from config import TELEGRAM_BOT_TOKEN
 
     if TELEGRAM_BOT_TOKEN:
-        def _telegram_loop():
-            time.sleep(3)
-            print("[TELEGRAM] Starting bot thread...")
 
+        def bot_loop():
+            time.sleep(3)
             from telegram_bot import run_telegram_bot
+
+            print("[TELEGRAM] STARTED")
 
             while True:
                 try:
                     run_telegram_bot()
                 except Exception as e:
-                    print(f"[TELEGRAM ERROR] {e} — restarting in 10s")
+                    print("[TELEGRAM ERROR]", e)
                     time.sleep(10)
 
-        threading.Thread(target=_telegram_loop, daemon=True).start()
-        print("[TELEGRAM] Bot thread launched")
-    else:
-        print("[TELEGRAM] Disabled (no token)")
+        threading.Thread(target=bot_loop, daemon=True).start()
 
 
 # ========================
@@ -90,24 +92,26 @@ def root():
 
 
 # ========================
-# STATUS
+# STATUS (LOW CPU FOR RENDER)
 # ========================
 @app.get("/api/status")
 def status():
     try:
         from datetime import datetime
+
         return {
-            "cpu": psutil.cpu_percent(interval=0.5),
+            "cpu": psutil.cpu_percent(interval=0.2),
             "ram": psutil.virtual_memory().percent,
-            "disk_free_gb": round(psutil.disk_usage("/").free / (1024 ** 3), 2),
-            "last_updated": datetime.now().isoformat(),
+            "disk_free_gb": round(psutil.disk_usage("/").free / (1024**3), 2),
+            "last_updated": datetime.utcnow().isoformat(),
         }
+
     except Exception:
         return {"status": "error"}
 
 
 # ========================
-# CHAT (FIXED FOR MOBILE)
+# CHAT (FIXED + KNOWLEDGE INTEGRATED)
 # ========================
 class ChatRequest(BaseModel):
     message: str
@@ -120,19 +124,38 @@ async def chat(payload: ChatRequest):
             return {"reply": "ERROR: GROQ_API_KEY not configured"}
 
         user_text = payload.message.strip()
-
         if not user_text:
             return {"reply": "Please enter a message."}
 
-        print("🔥 CHAT RECEIVED:", user_text)
-
-        from context import build_system_prompt
         from database import save_conversation, get_conversation_history
+        from context import build_system_prompt
 
-        system_prompt = build_system_prompt(query=user_text)
-
+        # ========================
+        # MEMORY
+        # ========================
         history = get_conversation_history(limit=6)
 
+        # ========================
+        # KNOWLEDGE BASE (IMPORTANT FIX)
+        # ========================
+        knowledge_context = ""
+        try:
+            from knowledge import search_and_format
+            knowledge_context = search_and_format(user_text, n_results=5) or ""
+        except Exception:
+            knowledge_context = ""
+
+        # ========================
+        # SYSTEM PROMPT
+        # ========================
+        system_prompt = build_system_prompt(query=user_text)
+
+        if knowledge_context:
+            system_prompt += f"\n\nKNOWLEDGE BASE:\n{knowledge_context}"
+
+        # ========================
+        # BUILD MESSAGES
+        # ========================
         messages = [{"role": "system", "content": system_prompt}]
 
         for role, content, _ in history:
@@ -143,6 +166,9 @@ async def chat(payload: ChatRequest):
 
         messages.append({"role": "user", "content": user_text})
 
+        # ========================
+        # GROQ CALL
+        # ========================
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
@@ -150,12 +176,18 @@ async def chat(payload: ChatRequest):
             temperature=0.4,
         )
 
-        reply = response.choices[0].message.content or "I don't know."
+        reply = response.choices[0].message.content or "No response"
 
+        # ========================
+        # SAVE MEMORY
+        # ========================
         save_conversation("user", user_text)
         save_conversation("assistant", reply)
 
-        return {"reply": reply}
+        return {
+            "reply": reply,
+            "source": "groq+knowledge"
+        }
 
     except Exception:
         print(traceback.format_exc())
@@ -169,7 +201,9 @@ async def chat(payload: ChatRequest):
 def conversations():
     try:
         from database import get_conversation_history
+
         rows = get_conversation_history(limit=50)
+
         return [
             {"role": r[0], "content": r[1], "timestamp": r[2]}
             for r in rows
@@ -185,7 +219,9 @@ def conversations():
 def get_tasks_endpoint():
     try:
         from database import get_tasks
+
         rows = get_tasks("pending")
+
         return [
             {
                 "id": r[0],
@@ -209,10 +245,7 @@ async def add_task(payload: dict):
         if not title:
             return JSONResponse({"error": "title required"}, status_code=400)
 
-        priority = payload.get("priority", "medium")
-        due_at = payload.get("due_at")
-
-        add_task(title, priority=priority, due_at=due_at)
+        add_task(title, priority=payload.get("priority", "medium"), due_at=payload.get("due_at"))
 
         return {"status": "created"}
 
@@ -241,7 +274,7 @@ async def delete_task(task_id: int):
 
 
 # ========================
-# ALERTS (FIXED PAYLOAD BUG)
+# ALERTS
 # ========================
 @app.get("/api/alerts")
 def get_alerts():
@@ -271,7 +304,6 @@ async def ack_alert(alert_id: int, payload: dict = None):
         from database import acknowledge_alert
 
         feedback = payload.get("feedback") if payload else None
-
         acknowledge_alert(alert_id, feedback=feedback)
 
         return {"status": "acknowledged"}
@@ -299,11 +331,7 @@ def the_number():
 @app.get("/api/mpesa/summary")
 def mpesa_summary():
     try:
-        from mpesa_engine import (
-            get_today_spend,
-            get_average_daily_spend,
-            get_daily_summary,
-        )
+        from mpesa_engine import get_today_spend, get_average_daily_spend, get_daily_summary
 
         return {
             "today": get_today_spend(),
@@ -371,9 +399,6 @@ def memory_profile():
         return {}
 
 
-# ========================
-# PREFERENCES
-# ========================
 @app.get("/api/memory/preferences")
 def memory_preferences():
     try:
