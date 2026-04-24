@@ -171,8 +171,9 @@ def ai_respond(text):
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
-            max_tokens=300,   # cheaper
+            max_tokens=300,
             temperature=0.6,
+            timeout=20,
         )
 
         reply = response.choices[0].message.content.strip()
@@ -204,22 +205,29 @@ def handle_status(chat_id):
 def handle_chat(chat_id, text):
     msg_id = tg_send(chat_id, "thinking...")
 
-    try:
-        save_conversation("user", text)
-        log_memory_event("conversation", text[:80], importance=4)
+    result = {"reply": None}
 
-        reply = ai_respond(text)
+    def _do_ai():
+        try:
+            save_conversation("user", text)
+            log_memory_event("conversation", text[:80], importance=4)
+            result["reply"] = ai_respond(text)
+            save_conversation("assistant", result["reply"])
+        except Exception:
+            print(traceback.format_exc())
+            result["reply"] = "Error processing request."
 
-        save_conversation("assistant", reply)
+    import threading
+    t = threading.Thread(target=_do_ai)
+    t.start()
+    t.join(timeout=25)  # max 25s wait
 
-        if msg_id:
-            tg_edit(chat_id, msg_id, reply)
-        else:
-            tg_send(chat_id, reply)
+    reply = result["reply"] or "ORA timed out — please try again."
 
-    except Exception:
-        print(traceback.format_exc())
-        tg_send(chat_id, "Error processing request")
+    if msg_id:
+        tg_edit(chat_id, msg_id, reply)
+    else:
+        tg_send(chat_id, reply)
 
 
 # ========================
