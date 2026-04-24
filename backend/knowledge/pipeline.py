@@ -21,8 +21,8 @@ from knowledge.retrieval import retrieve, format_context
 from knowledge.feedback import distill_document, log_query
 from config import DB_PATH, INDEX_PATH, UPLOADS_DIR as UPLOADS_PATH
 
-# Initialize DB tables on import
-init_vector_db()
+# DB tables are initialized lazily on first use (not at import time)
+# This prevents sentence-transformers from being loaded on startup
 
 
 # ============================================================

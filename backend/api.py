@@ -38,10 +38,12 @@ def on_startup():
     from database import init_db, init_tasks_table
     from memory.profile import init_profile
     from mpesa_engine import init_mpesa_table
+    from knowledge.embeddings import init_vector_db
     init_db()
     init_tasks_table()
     init_profile()
     init_mpesa_table()
+    init_vector_db()  # creates DB table only — does NOT load the embedding model
     print("[API] Database initialized")
 
     # ── Telegram Bot ──────────────────────────────────────────

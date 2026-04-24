@@ -52,16 +52,25 @@ def build_context(query=None):
         lines = [f"- [{a[3]}] {a[2]}" for a in unacked]
         sections.append("## ACTIVE ALERTS\n" + "\n".join(lines))
 
-    # KNOWLEDGE BASE — only when a query is given
+    # KNOWLEDGE BASE — only when a query is given, and only if model is already cached
     if query:
         try:
-            from knowledge import search_and_format
-            knowledge_context = search_and_format(query, n_results=4)
-            if knowledge_context:
-                sections.append(
-                    "## KNOWLEDGE BASE (uploaded documents)\n"
-                    + knowledge_context
-                )
+            from config import DATA_DIR
+            import os
+            model_cache = os.path.join(DATA_DIR, "models")
+            model_cached = os.path.exists(model_cache) and any(
+                f.startswith("sentence") or f.startswith("all-MiniLM")
+                for f in os.listdir(model_cache)
+            ) if os.path.exists(model_cache) else False
+
+            if model_cached:
+                from knowledge import search_and_format
+                knowledge_context = search_and_format(query, n_results=4)
+                if knowledge_context:
+                    sections.append(
+                        "## KNOWLEDGE BASE (uploaded documents)\n"
+                        + knowledge_context
+                    )
         except Exception as e:
             print(f"[CONTEXT] Knowledge search failed: {e}")
 
