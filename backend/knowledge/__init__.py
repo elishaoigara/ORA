@@ -1,48 +1,92 @@
 """
 ORA Knowledge Package
 =====================
-Replaces the single knowledge.py file with a full intelligence pipeline.
 
-Phases implemented:
-  1. Multi-format ingestion  (ingest.py)
-  2. Smart semantic chunking (ingest.py)
-  3. Embeddings via Groq     (embeddings.py)
-  4. Hybrid FTS + vector     (retrieval.py)
-  5. Context injection       (retrieval.py → format_context)
-  6. Self-improvement loop   (feedback.py)
-  7. Knowledge distillation  (feedback.py → distill_document)
-  8. Memory connection       (pipeline.py → _notify_upload links to Telegram)
-  9. Background pipeline     (pipeline.py → on_upload)
+Production-ready RAG pipeline:
+- Ingestion (PDF/DOCX/TXT/OCR)
+- Semantic chunking
+- Embeddings (local sentence-transformers or Groq hybrid)
+- Hybrid retrieval (FTS + vector)
+- Context formatting
+- Feedback loop
+- Document distillation
+- Background pipeline orchestration
 
-Public API (same as old knowledge.py — drop-in compatible with api.py):
+Drop-in replacement for legacy knowledge.py
 """
 
+# ============================================================
+# PIPELINE (UPLOAD + INDEXING)
+# ============================================================
+
 from knowledge.pipeline import (
+    on_upload,
     store_document,
     get_all_documents,
     delete_document,
-    search_and_format,
-    on_upload,
     UPLOADS_PATH,
 )
 
-from knowledge.retrieval import retrieve, format_context
-from knowledge.feedback import record_useful, record_not_useful, get_insights_for_source
-from knowledge.embeddings import init_vector_db
+# ============================================================
+# RETRIEVAL (RAG CORE)
+# ============================================================
+
+from knowledge.retrieval import (
+    retrieve,
+    format_context,
+    search_and_format,
+)
+
+# ============================================================
+# LEARNING LOOP (SELF IMPROVEMENT)
+# ============================================================
+
+from knowledge.feedback import (
+    log_query,
+    record_useful,
+    record_not_useful,
+    auto_signal_from_conversation,
+    get_top_chunks_by_feedback,
+    get_insights_for_source,
+)
+
+# ============================================================
+# EMBEDDINGS / VECTOR DB
+# ============================================================
+
+from knowledge.embeddings import (
+    init_vector_db,
+    vector_search,
+    embed_text,
+)
+
+# ============================================================
+# PUBLIC API (STABLE INTERFACE)
+# ============================================================
 
 __all__ = [
-    # Drop-in compatible (used by existing api.py)
+    # ingestion
+    "on_upload",
     "store_document",
     "get_all_documents",
     "delete_document",
-    "search_and_format",
     "UPLOADS_PATH",
-    # New capabilities
-    "on_upload",
+
+    # retrieval
     "retrieve",
+    "search_and_format",
     "format_context",
+
+    # learning
+    "log_query",
     "record_useful",
     "record_not_useful",
+    "auto_signal_from_conversation",
+    "get_top_chunks_by_feedback",
     "get_insights_for_source",
+
+    # embeddings
     "init_vector_db",
+    "vector_search",
+    "embed_text",
 ]
