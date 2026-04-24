@@ -1,5 +1,5 @@
 """
-ORA Backend API — Production (STABLE FINAL)
+ORA Backend API — Render Optimized (Free Tier Safe)
 """
 
 import os
@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Optional
 
 import psutil
-from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
@@ -23,32 +23,33 @@ from groq import Groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
+MAX_TOKENS = 250          # ↓ reduce cost + speed
+MODEL_NAME = "llama-3.3-70b-versatile"
+
 
 # ============================================================
-# LIFESPAN (STARTUP)
+# LIFESPAN (LIGHTWEIGHT STARTUP)
 # ============================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("[ORA] Starting up...")
+    print("[ORA] Starting...")
 
     try:
         from database import init_db, init_tasks_table
-
         init_db()
         init_tasks_table()
-
-        print("[ORA] Database initialized")
+        print("[ORA] DB Ready")
     except Exception:
-        print("[ORA ERROR] DB INIT FAILED")
+        print("[DB ERROR]")
         print(traceback.format_exc())
 
-    # ================= TELEGRAM =================
+    # TELEGRAM (LOW CPU MODE)
     try:
         from config import TELEGRAM_BOT_TOKEN
 
         if TELEGRAM_BOT_TOKEN:
-            def start_bot():
-                time.sleep(5)
+
+            def telegram_worker():
                 from telegram_bot import run_telegram_bot
 
                 print("[TELEGRAM] Worker started")
@@ -56,18 +57,19 @@ async def lifespan(app: FastAPI):
                 while True:
                     try:
                         run_telegram_bot()
+                        time.sleep(2)  # 🔥 prevents CPU spike
                     except Exception as e:
                         print("[TELEGRAM ERROR]", e)
-                        time.sleep(10)
+                        time.sleep(5)
 
-            threading.Thread(target=start_bot, daemon=True).start()
+            threading.Thread(target=telegram_worker, daemon=True).start()
 
     except Exception:
         print("[TELEGRAM INIT ERROR]")
         print(traceback.format_exc())
 
     yield
-    print("[ORA] Shutdown complete")
+    print("[ORA] Shutdown")
 
 
 # ============================================================
@@ -77,7 +79,7 @@ app = FastAPI(title="ORA Backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # fine for mobile + dev
+    allow_origins=["*"],  # mobile safe
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -85,14 +87,11 @@ app.add_middleware(
 
 
 # ============================================================
-# HEALTH
+# HEALTH (FAST)
 # ============================================================
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health(request: Request):
-    return {
-        "status": "ORA online",
-        "time": datetime.utcnow().isoformat()
-    }
+    return {"status": "ok"}
 
 
 @app.get("/")
@@ -101,23 +100,19 @@ def root():
 
 
 # ============================================================
-# STATUS
+# STATUS (LIGHTWEIGHT)
 # ============================================================
 @app.get("/api/status")
 def status():
-    try:
-        return {
-            "cpu": psutil.cpu_percent(interval=0.2),
-            "ram": psutil.virtual_memory().percent,
-            "disk": psutil.disk_usage("/").percent,
-            "time": datetime.utcnow().isoformat(),
-        }
-    except Exception:
-        return {"status": "error"}
+    return {
+        "cpu": psutil.cpu_percent(interval=0.1),  # ↓ faster
+        "ram": psutil.virtual_memory().percent,
+        "time": datetime.utcnow().isoformat(),
+    }
 
 
 # ============================================================
-# CHAT
+# CHAT (OPTIMIZED)
 # ============================================================
 class ChatRequest(BaseModel):
     message: str
@@ -127,7 +122,7 @@ class ChatRequest(BaseModel):
 async def chat(payload: ChatRequest):
     try:
         if not client:
-            return {"reply": "ORA: Missing GROQ_API_KEY"}
+            return {"reply": "ORA: Missing API key"}
 
         text = payload.message.strip()
         if not text:
@@ -136,39 +131,39 @@ async def chat(payload: ChatRequest):
         from database import save_conversation, get_conversation_history
         from context import build_system_prompt
 
-        # ===== MEMORY =====
-        history = get_conversation_history(limit=8)
+        # ===== MEMORY (LIMITED) =====
+        history = get_conversation_history(limit=5)  # 🔥 smaller
 
-        # ===== KNOWLEDGE =====
+        # ===== KNOWLEDGE (SAFE + LIGHT) =====
         knowledge_ctx = ""
+
         try:
             from knowledge.pipeline import search_and_format
-            knowledge_ctx = search_and_format(text, n_results=3) or ""
-        except Exception as e:
-            print("[KNOWLEDGE ERROR]", e)
+            knowledge_ctx = search_and_format(text, n_results=2) or ""
+        except Exception:
+            pass  # silent fail (important for stability)
 
         # ===== PROMPT =====
         system_prompt = build_system_prompt(query=text)
 
         if knowledge_ctx:
-            system_prompt += f"\n\nKNOWLEDGE:\n{knowledge_ctx}"
+            system_prompt += f"\n\nKNOWLEDGE:\n{knowledge_ctx[:500]}"  # 🔥 truncate
 
-        # ===== BUILD MESSAGES =====
         messages = [{"role": "system", "content": system_prompt}]
 
         for role, content, _ in history:
             messages.append({
                 "role": "user" if role == "user" else "assistant",
-                "content": content
+                "content": content[:300]  # 🔥 limit memory size
             })
 
         messages.append({"role": "user", "content": text})
 
-        # ===== GROQ CALL =====
+        # ===== GROQ CALL (CONTROLLED) =====
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",  # ✅ FIXED MODEL
+            model=MODEL_NAME,
             messages=messages,
-            max_tokens=400,
+            max_tokens=MAX_TOKENS,
             temperature=0.4,
         )
 
@@ -184,23 +179,6 @@ async def chat(payload: ChatRequest):
         print("[CHAT ERROR]")
         print(traceback.format_exc())
         return {"reply": "ORA error. Try again."}
-
-
-# ============================================================
-# CONVERSATIONS
-# ============================================================
-@app.get("/api/conversations")
-def conversations(limit: int = 30):
-    try:
-        from database import get_conversation_history
-        rows = get_conversation_history(limit=limit)
-
-        return [
-            {"role": r, "content": c, "timestamp": t}
-            for r, c, t in rows
-        ]
-    except Exception:
-        return []
 
 
 # ============================================================
@@ -239,26 +217,6 @@ def add_task(payload: TaskCreate):
         add_task(payload.title, payload.priority, payload.due_at)
         return {"status": "created"}
     except Exception:
-        raise HTTPException(500, "Failed to create task")
-
-
-@app.post("/api/tasks/{task_id}/complete")
-def complete_task(task_id: int):
-    try:
-        from database import complete_task
-        complete_task(task_id)
-        return {"status": "done"}
-    except Exception:
-        raise HTTPException(500, "Failed")
-
-
-@app.delete("/api/tasks/{task_id}")
-def delete_task(task_id: int):
-    try:
-        from database import delete_task
-        delete_task(task_id)
-        return {"status": "deleted"}
-    except Exception:
         raise HTTPException(500, "Failed")
 
 
@@ -269,7 +227,7 @@ def delete_task(task_id: int):
 def alerts():
     try:
         from database import get_recent_alerts
-        rows = get_recent_alerts(20)
+        rows = get_recent_alerts(10)  # 🔥 reduced load
 
         return [
             {
@@ -284,13 +242,3 @@ def alerts():
         ]
     except Exception:
         return []
-
-
-@app.post("/api/alerts/{alert_id}/ack")
-def ack(alert_id: int):
-    try:
-        from database import acknowledge_alert
-        acknowledge_alert(alert_id)
-        return {"status": "acknowledged"}
-    except Exception:
-        raise HTTPException(500, "Failed")

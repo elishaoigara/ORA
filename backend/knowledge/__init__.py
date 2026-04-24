@@ -1,7 +1,5 @@
 """
-ORA Knowledge Package
-=====================
-Fixed: removed UPLOADS_PATH from pipeline imports (it lives in config.py)
+ORA Knowledge Package (STABLE)
 """
 
 # ── Pipeline (upload + indexing) ──────────────────────────────
@@ -10,14 +8,13 @@ from knowledge.pipeline import (
     store_document,
     get_all_documents,
     delete_document,
-    search_and_format,   # also exported here for convenience
 )
 
 # ── Retrieval (RAG core) ──────────────────────────────────────
 from knowledge.retrieval import (
     retrieve,
     format_context,
-    search_and_format,
+    search_and_format,   # ✅ ONLY defined here
 )
 
 # ── Learning loop ─────────────────────────────────────────────
@@ -43,10 +40,12 @@ __all__ = [
     "store_document",
     "get_all_documents",
     "delete_document",
+
     # retrieval
     "retrieve",
     "search_and_format",
     "format_context",
+
     # learning
     "log_query",
     "record_useful",
@@ -54,6 +53,7 @@ __all__ = [
     "auto_signal_from_conversation",
     "get_top_chunks_by_feedback",
     "get_insights_for_source",
+
     # embeddings
     "init_vector_db",
     "vector_search",
