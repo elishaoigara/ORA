@@ -3,21 +3,11 @@ import traceback
 import psutil
 import threading
 import time
-import shutil
 
-from fastapi import FastAPI, Request, UploadFile, File, Form
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-
 from groq import Groq
-
-# ========================
-# CONFIG
-# ========================
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # ========================
 # APP
@@ -33,49 +23,60 @@ app.add_middleware(
 )
 
 # ========================
-# STARTUP
+# GROQ
 # ========================
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+
+# ============================================================
+# FIX 1 — DATABASE INITIALIZATION (CRITICAL)
+# ============================================================
 @app.on_event("startup")
-def on_startup():
+def startup():
+    """
+    THIS FIXES YOUR ERROR:
+    'no such table: conversations / tasks'
+    """
+
     try:
         from database import init_db, init_tasks_table
-        from memory.profile import init_profile
-        from mpesa_engine import init_mpesa_table
-        from knowledge.embeddings import init_vector_db
 
         init_db()
         init_tasks_table()
-        init_profile()
-        init_mpesa_table()
-        init_vector_db()
 
-        print("[ORA] DB INIT OK")
+        print("[ORA] DATABASE INITIALIZED SUCCESSFULLY")
 
-    except Exception:
-        print("[ORA INIT ERROR]")
+    except Exception as e:
+        print("[ORA DB INIT ERROR]", e)
         print(traceback.format_exc())
 
+
     # ========================
-    # TELEGRAM BOT (SAFE)
+    # TELEGRAM SAFE START
     # ========================
-    from config import TELEGRAM_BOT_TOKEN
+    try:
+        from config import TELEGRAM_BOT_TOKEN
 
-    if TELEGRAM_BOT_TOKEN:
+        if TELEGRAM_BOT_TOKEN:
 
-        def bot_loop():
-            time.sleep(3)
-            from telegram_bot import run_telegram_bot
+            def bot_runner():
+                time.sleep(3)
+                from telegram_bot import run_telegram_bot
 
-            print("[TELEGRAM] STARTED")
+                print("[TELEGRAM] BOT STARTED")
 
-            while True:
-                try:
-                    run_telegram_bot()
-                except Exception as e:
-                    print("[TELEGRAM ERROR]", e)
-                    time.sleep(10)
+                while True:
+                    try:
+                        run_telegram_bot()
+                    except Exception as e:
+                        print("[TELEGRAM ERROR]", e)
+                        time.sleep(5)
 
-        threading.Thread(target=bot_loop, daemon=True).start()
+            threading.Thread(target=bot_runner, daemon=True).start()
+
+    except Exception as e:
+        print("[TELEGRAM START ERROR]", e)
 
 
 # ========================
@@ -88,11 +89,11 @@ async def health(request: Request):
 
 @app.get("/")
 def root():
-    return {"status": "ORA API running"}
+    return {"status": "ORA running"}
 
 
 # ========================
-# STATUS (LOW CPU FOR RENDER)
+# STATUS
 # ========================
 @app.get("/api/status")
 def status():
@@ -102,8 +103,7 @@ def status():
         return {
             "cpu": psutil.cpu_percent(interval=0.2),
             "ram": psutil.virtual_memory().percent,
-            "disk_free_gb": round(psutil.disk_usage("/").free / (1024**3), 2),
-            "last_updated": datetime.utcnow().isoformat(),
+            "time": datetime.utcnow().isoformat()
         }
 
     except Exception:
@@ -111,7 +111,7 @@ def status():
 
 
 # ========================
-# CHAT (FIXED + KNOWLEDGE INTEGRATED)
+# CHAT
 # ========================
 class ChatRequest(BaseModel):
     message: str
@@ -120,42 +120,32 @@ class ChatRequest(BaseModel):
 @app.post("/api/chat")
 async def chat(payload: ChatRequest):
     try:
-        if client is None:
-            return {"reply": "ERROR: GROQ_API_KEY not configured"}
+        if not client:
+            return {"reply": "Groq not configured"}
 
         user_text = payload.message.strip()
         if not user_text:
-            return {"reply": "Please enter a message."}
+            return {"reply": "Empty message"}
 
+        # FIX: DB imports AFTER init_db
         from database import save_conversation, get_conversation_history
         from context import build_system_prompt
 
-        # ========================
-        # MEMORY
-        # ========================
         history = get_conversation_history(limit=6)
 
-        # ========================
-        # KNOWLEDGE BASE (IMPORTANT FIX)
-        # ========================
+        # OPTIONAL knowledge layer
         knowledge_context = ""
         try:
             from knowledge import search_and_format
             knowledge_context = search_and_format(user_text, n_results=5) or ""
         except Exception:
-            knowledge_context = ""
+            pass
 
-        # ========================
-        # SYSTEM PROMPT
-        # ========================
         system_prompt = build_system_prompt(query=user_text)
 
         if knowledge_context:
-            system_prompt += f"\n\nKNOWLEDGE BASE:\n{knowledge_context}"
+            system_prompt += f"\n\nKNOWLEDGE:\n{knowledge_context}"
 
-        # ========================
-        # BUILD MESSAGES
-        # ========================
         messages = [{"role": "system", "content": system_prompt}]
 
         for role, content, _ in history:
@@ -166,9 +156,6 @@ async def chat(payload: ChatRequest):
 
         messages.append({"role": "user", "content": user_text})
 
-        # ========================
-        # GROQ CALL
-        # ========================
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
@@ -176,244 +163,13 @@ async def chat(payload: ChatRequest):
             temperature=0.4,
         )
 
-        reply = response.choices[0].message.content or "No response"
+        reply = response.choices[0].message.content
 
-        # ========================
-        # SAVE MEMORY
-        # ========================
         save_conversation("user", user_text)
         save_conversation("assistant", reply)
 
-        return {
-            "reply": reply,
-            "source": "groq+knowledge"
-        }
+        return {"reply": reply}
 
-    except Exception:
-        print(traceback.format_exc())
-        return {"reply": "ORA error. Please try again."}
-
-
-# ========================
-# CONVERSATIONS
-# ========================
-@app.get("/api/conversations")
-def conversations():
-    try:
-        from database import get_conversation_history
-
-        rows = get_conversation_history(limit=50)
-
-        return [
-            {"role": r[0], "content": r[1], "timestamp": r[2]}
-            for r in rows
-        ]
-    except Exception:
-        return []
-
-
-# ========================
-# TASKS
-# ========================
-@app.get("/api/tasks")
-def get_tasks_endpoint():
-    try:
-        from database import get_tasks
-
-        rows = get_tasks("pending")
-
-        return [
-            {
-                "id": r[0],
-                "title": r[1],
-                "priority": r[2],
-                "created_at": r[3],
-                "due_at": r[4],
-            }
-            for r in rows
-        ]
-    except Exception:
-        return []
-
-
-@app.post("/api/tasks")
-async def add_task(payload: dict):
-    try:
-        from database import add_task
-
-        title = payload.get("title", "").strip()
-        if not title:
-            return JSONResponse({"error": "title required"}, status_code=400)
-
-        add_task(title, priority=payload.get("priority", "medium"), due_at=payload.get("due_at"))
-
-        return {"status": "created"}
-
-    except Exception:
-        return JSONResponse({"error": "failed"}, status_code=500)
-
-
-@app.post("/api/tasks/{task_id}/complete")
-async def complete_task(task_id: int):
-    try:
-        from database import complete_task
-        complete_task(task_id)
-        return {"status": "done"}
-    except Exception:
-        return JSONResponse({"error": "failed"}, status_code=500)
-
-
-@app.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: int):
-    try:
-        from database import delete_task
-        delete_task(task_id)
-        return {"status": "deleted"}
-    except Exception:
-        return JSONResponse({"error": "failed"}, status_code=500)
-
-
-# ========================
-# ALERTS
-# ========================
-@app.get("/api/alerts")
-def get_alerts():
-    try:
-        from database import get_recent_alerts
-
-        rows = get_recent_alerts(limit=20)
-
-        return [
-            {
-                "id": r[0],
-                "rule_name": r[1],
-                "message": r[2],
-                "severity": r[3],
-                "timestamp": r[4],
-                "acknowledged": bool(r[5]),
-            }
-            for r in rows
-        ]
-    except Exception:
-        return []
-
-
-@app.post("/api/alerts/{alert_id}/ack")
-async def ack_alert(alert_id: int, payload: dict = None):
-    try:
-        from database import acknowledge_alert
-
-        feedback = payload.get("feedback") if payload else None
-        acknowledge_alert(alert_id, feedback=feedback)
-
-        return {"status": "acknowledged"}
-
-    except Exception:
-        return JSONResponse({"error": "failed"}, status_code=500)
-
-
-# ========================
-# THE NUMBER
-# ========================
-@app.get("/api/the-number")
-def the_number():
-    try:
-        from core import get_the_number
-        result = get_the_number()
-        return result if result else {"status": "empty"}
-    except Exception:
-        return {"status": "empty"}
-
-
-# ========================
-# M-PESA
-# ========================
-@app.get("/api/mpesa/summary")
-def mpesa_summary():
-    try:
-        from mpesa_engine import get_today_spend, get_average_daily_spend, get_daily_summary
-
-        return {
-            "today": get_today_spend(),
-            "average_daily": get_average_daily_spend(),
-            "last_7_days": get_daily_summary(days=7),
-        }
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
-
-
-@app.post("/api/mpesa/sms")
-async def mpesa_ingest(payload: dict):
-    try:
-        from mpesa_engine import ingest_sms
-
-        sms = payload.get("sms", "").strip()
-        if not sms:
-            return JSONResponse({"error": "sms required"}, status_code=400)
-
-        return ingest_sms(sms)
-
-    except Exception:
-        return JSONResponse({"error": "failed"}, status_code=500)
-
-
-@app.get("/api/mpesa/transactions")
-def mpesa_transactions():
-    try:
-        from mpesa_engine import get_recent_transactions
-        return get_recent_transactions(limit=50)
-    except Exception:
-        return []
-
-
-# ========================
-# MEMORY
-# ========================
-@app.get("/api/memory/events")
-def memory_events():
-    try:
-        from memory.events import get_recent_events
-
-        rows = get_recent_events(limit=30)
-
-        return [
-            {
-                "event_type": r[0],
-                "summary": r[1],
-                "detail": r[2],
-                "importance": r[3],
-                "timestamp": r[4],
-            }
-            for r in rows
-        ]
-    except Exception:
-        return []
-
-
-@app.get("/api/memory/profile")
-def memory_profile():
-    try:
-        from memory.profile import get_all_profile
-        return get_all_profile()
-    except Exception:
-        return {}
-
-
-@app.get("/api/memory/preferences")
-def memory_preferences():
-    try:
-        from memory.preferences import get_preferences
-
-        rows = get_preferences()
-
-        return [
-            {
-                "category": r[0],
-                "key": r[1],
-                "value": r[2],
-                "confidence": r[3],
-            }
-            for r in rows
-        ]
-    except Exception:
-        return []
+        print(traceback.format_exc())
+        return {"reply": "ORA error"}

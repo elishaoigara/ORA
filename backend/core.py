@@ -1,203 +1,270 @@
 """
-ORA Core Orchestrator — The "prefrontal cortex"
-Gathers signals from all engines and decides autonomous actions.
+ORA Database Layer (Stable Production Version)
+Thread-safe SQLite + full schema initialization
 """
 
-import json
-from datetime import datetime, timedelta
-from database import get_tasks, log_alert
-from memory.events import get_recent_events, log_memory_event
-from memory.preferences import get_preferences
+import sqlite3
+import threading
+from datetime import datetime
+from config import DB_PATH
+
+# ============================================================
+# THREAD-SAFE CONNECTION HANDLING
+# ============================================================
+
+_thread_local = threading.local()
 
 
-# ─────────────────────────────────────────────
-# SIGNAL GATHERING
-# ─────────────────────────────────────────────
-
-def gather_signals() -> dict:
-    """Pull current state from all subsystems."""
-    signals = {}
-
-    try:
-        tasks = get_tasks("pending")
-        overdue = []
-        now = datetime.now()
-        for t in tasks:
-            if t[4]:
-                try:
-                    due = datetime.fromisoformat(t[4])
-                    if due < now:
-                        overdue.append(t)
-                except Exception:
-                    pass
-        signals["tasks"] = {"total": len(tasks), "overdue": overdue, "all": tasks}
-    except Exception as e:
-        signals["tasks"] = {"total": 0, "overdue": [], "all": [], "error": str(e)}
-
-    try:
-        events = get_recent_events(limit=20)
-        signals["events"] = events
-    except Exception:
-        signals["events"] = []
-
-    try:
-        prefs = get_preferences()
-        signals["preferences"] = {p[1]: p[2] for p in prefs} if prefs else {}
-    except Exception:
-        signals["preferences"] = {}
-
-    return signals
+def get_conn():
+    """Get thread-local SQLite connection."""
+    if not hasattr(_thread_local, "conn") or _thread_local.conn is None:
+        _thread_local.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    return _thread_local.conn
 
 
-# ─────────────────────────────────────────────
-# DECISION ENGINE
-# ─────────────────────────────────────────────
-
-def decide(signals: dict) -> list:
-    actions = []
-    now = datetime.now()
-
-    # Rule 1: Overdue tasks → escalate
-    overdue = signals["tasks"].get("overdue", [])
-    for task in overdue[:3]:
-        title = task[1]
-        actions.append({
-            "type": "alert",
-            "message": f"⚠️ OVERDUE: '{title}' — mark done or reschedule.",
-            "severity": "high"
-        })
-
-    # Rule 2: No activity in last 24h → nudge
-    events = signals.get("events", [])
-    if events:
-        try:
-            last_event_time = datetime.fromisoformat(events[0][4])
-            hours_since = (now - last_event_time).total_seconds() / 3600
-            if hours_since > 24:
-                actions.append({
-                    "type": "nudge",
-                    "message": f"👁 ORA has been dormant for {int(hours_since)}h. Check in with your system.",
-                    "severity": "low"
-                })
-        except Exception:
-            pass
-
-    # Rule 3: Too many high-priority tasks piling up
-    all_tasks = signals["tasks"].get("all", [])
-    high_pri = [t for t in all_tasks if t[2] == "high"]
-    if len(high_pri) >= 3:
-        actions.append({
-            "type": "nudge",
-            "message": f"🔴 {len(high_pri)} high-priority tasks queued. ORA recommends immediate triage.",
-            "severity": "medium"
-        })
-
-    return actions
+def close_conn():
+    """Close thread-local connection."""
+    if hasattr(_thread_local, "conn") and _thread_local.conn is not None:
+        _thread_local.conn.close()
+        _thread_local.conn = None
 
 
-# ─────────────────────────────────────────────
-# EXECUTION
-# ─────────────────────────────────────────────
+# ============================================================
+# INIT DATABASE (CRITICAL FIX)
+# ============================================================
 
-def execute_actions(actions: list):
-    for action in actions:
-        try:
-            if action["type"] in ("alert", "nudge"):
-                log_alert(
-                    rule_name="core_orchestrator",
-                    message=action["message"],
-                    severity=action.get("severity", "medium")
-                )
-                try:
-                    from telegram_bot import notify
-                    notify(action["message"])
-                except Exception:
-                    pass
-            log_memory_event("core", action["message"][:80], importance=5)
-        except Exception as e:
-            print(f"[CORE] execute error: {e}")
+def init_db():
+    """Create ALL required tables (runs on startup)."""
+    conn = get_conn()
+    c = conn.cursor()
+
+    # ======================
+    # CORE SYSTEM TABLES
+    # ======================
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT,
+            data TEXT,
+            timestamp TEXT
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_name TEXT,
+            message TEXT,
+            severity TEXT,
+            timestamp TEXT,
+            acknowledged INTEGER DEFAULT 0,
+            feedback TEXT DEFAULT NULL
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS profile (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT UNIQUE,
+            value TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS memory_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT,
+            summary TEXT,
+            detail TEXT,
+            importance INTEGER DEFAULT 5,
+            timestamp TEXT
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT,
+            key TEXT,
+            value TEXT,
+            confidence REAL DEFAULT 1.0,
+            updated_at TEXT
+        )
+    """)
+
+    c.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_preferences
+        ON preferences(category, key)
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            interaction_id TEXT,
+            ora_response TEXT,
+            user_rating INTEGER,
+            user_comment TEXT,
+            timestamp TEXT
+        )
+    """)
+
+    # ======================
+    # CHAT MEMORY (CRITICAL)
+    # ======================
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT,
+            content TEXT,
+            timestamp TEXT
+        )
+    """)
+
+    # ======================
+    # TASK SYSTEM (CRITICAL)
+    # ======================
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            status TEXT DEFAULT 'pending',
+            priority TEXT DEFAULT 'medium',
+            created_at TEXT,
+            due_at TEXT DEFAULT NULL,
+            completed_at TEXT DEFAULT NULL
+        )
+    """)
+
+    conn.commit()
+    close_conn()
+
+    print("[DB] Initialized successfully")
 
 
-# ─────────────────────────────────────────────
-# MAIN EVALUATE LOOP (called by scheduler)
-# ─────────────────────────────────────────────
+# ============================================================
+# EVENTS & ALERTS
+# ============================================================
 
-def evaluate_state():
-    print("[CORE] Evaluating system state...")
-    try:
-        signals = gather_signals()
-        actions = decide(signals)
-        if actions:
-            execute_actions(actions)
-            print(f"[CORE] Executed {len(actions)} actions")
-        else:
-            print("[CORE] No actions required")
-    except Exception as e:
-        print(f"[CORE ERROR] {e}")
+def log_event(source, data):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO events (source, data, timestamp) VALUES (?, ?, ?)",
+        (source, data, datetime.now().isoformat())
+    )
+    conn.commit()
+    close_conn()
 
 
-# ─────────────────────────────────────────────
-# "THE NUMBER" — today's single focus task
-# ─────────────────────────────────────────────
+def log_alert(rule_name, message, severity="medium"):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO alerts (rule_name, message, severity, timestamp) VALUES (?, ?, ?, ?)",
+        (rule_name, message, severity, datetime.now().isoformat())
+    )
+    conn.commit()
+    close_conn()
 
-def get_the_number() -> dict | None:
-    try:
-        tasks = get_tasks("pending")
-        if not tasks:
-            return None
 
-        now = datetime.now()
-        scored = []
+def get_recent_alerts(limit=10):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, rule_name, message, severity, timestamp, acknowledged
+        FROM alerts ORDER BY id DESC LIMIT ?
+    """, (limit,))
+    rows = c.fetchall()
+    close_conn()
+    return rows
 
-        for t in tasks:
-            task_id, title, priority, created_at, due_at = t[0], t[1], t[2], t[3], t[4]
-            score = 0
 
-            pri_scores = {"high": 20, "medium": 10, "low": 3}
-            score += pri_scores.get(priority, 0)
+def acknowledge_alert(alert_id, feedback=None):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE alerts SET acknowledged=1, feedback=? WHERE id=?",
+        (feedback, alert_id)
+    )
+    conn.commit()
+    close_conn()
 
-            if due_at:
-                try:
-                    due = datetime.fromisoformat(due_at)
-                    if due < now:
-                        days_overdue = (now - due).days
-                        score += 30 + (days_overdue * 5)
-                except Exception:
-                    pass
 
-            try:
-                created = datetime.fromisoformat(created_at)
-                days_old = (now - created).days
-                score += min(days_old * 2, 20)
-            except Exception:
-                pass
+# ============================================================
+# CHAT MEMORY
+# ============================================================
 
-            scored.append({
-                "id": task_id,
-                "title": title,
-                "priority": priority,
-                "due_at": due_at,
-                "score": score
-            })
+def save_conversation(role, content):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO conversations (role, content, timestamp) VALUES (?, ?, ?)",
+        (role, content, datetime.now().isoformat())
+    )
+    conn.commit()
+    close_conn()
 
-        best = sorted(scored, key=lambda x: x["score"], reverse=True)[0]
 
-        overdue = False
-        if best["due_at"]:
-            try:
-                overdue = datetime.fromisoformat(best["due_at"]) < now
-            except Exception:
-                pass
+def get_conversation_history(limit=20):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT role, content, timestamp
+        FROM conversations
+        ORDER BY id DESC LIMIT ?
+    """, (limit,))
+    rows = c.fetchall()
+    close_conn()
+    return list(reversed(rows))
 
-        return {
-            **best,
-            "overdue": overdue,
-            "reason": (
-                "overdue + high priority" if overdue and best["priority"] == "high" else
-                "overdue" if overdue else
-                f"{best['priority']} priority"
-            )
-        }
-    except Exception as e:
-        print(f"[THE NUMBER ERROR] {e}")
-        return None
+
+# ============================================================
+# TASK MANAGEMENT
+# ============================================================
+
+def add_task(title, priority="medium", due_at=None):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO tasks (title, priority, created_at, due_at) VALUES (?, ?, ?, ?)",
+        (title, priority, datetime.now().isoformat(), due_at)
+    )
+    conn.commit()
+    close_conn()
+
+
+def get_tasks(status="pending"):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, title, priority, created_at, due_at
+        FROM tasks
+        WHERE status=?
+        ORDER BY id DESC
+    """, (status,))
+    rows = c.fetchall()
+    close_conn()
+    return rows
+
+
+def complete_task(task_id):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE tasks SET status='done', completed_at=? WHERE id=?",
+        (datetime.now().isoformat(), task_id)
+    )
+    conn.commit()
+    close_conn()
+
+
+def delete_task(task_id):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+    conn.commit()
+    close_conn()
