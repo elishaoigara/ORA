@@ -203,3 +203,24 @@ def _safe_fts_query(query: str) -> str:
     # Wrap multi-word query as phrase search fallback
     words = cleaned.split()
     return " OR ".join(words[:8])  # cap at 8 terms
+
+def delete_source(source: str) -> int:
+    """
+    Delete all chunks for a given source from knowledge_chunks and FTS index.
+    Returns number of rows deleted.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("DELETE FROM knowledge_fts WHERE source = ?", (source,))
+        cur = conn.execute(
+            "DELETE FROM knowledge_chunks WHERE source = ?", (source,)
+        )
+        deleted = cur.rowcount
+        conn.commit()
+        return deleted
+    except Exception as e:
+        print(f"[EMBED] delete_source error: {e}")
+        return 0
+    finally:
+        conn.close()
+
