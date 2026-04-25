@@ -1,26 +1,24 @@
 """
-ORA Knowledge — Phase 3
-Embedding generation via Groq API + SQLite vector store.
+ORA Knowledge Embeddings — FTS-only (Render Free Tier Safe)
 
-Uses: sentence-transformers all-MiniLM-L6-v2 (local, CPU, no API key)
-Stores: embeddings as JSON blobs in SQLite (no external vector DB needed)
-Retrieves: cosine similarity via numpy
+sentence-transformers removed entirely.
+Search uses SQLite FTS5 (full-text search) — fast, zero RAM overhead.
+embed_text() returns None so callers stay compatible.
 """
 
-import json
 import sqlite3
-import numpy as np
 from typing import Optional
 from config import DB_PATH
 
 
-# ============================================================
-# DB SETUP — VECTOR TABLE
-# ============================================================
+MAX_CHUNKS_PER_DOC = 80   # lower cap = less RAM during indexing
 
+
+# ============================================================
+# DB SETUP
+# ============================================================
 def init_vector_db():
     conn = sqlite3.connect(DB_PATH)
-
     conn.execute("""
         CREATE TABLE IF NOT EXISTS knowledge_chunks (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +37,6 @@ def init_vector_db():
     """)
     conn.commit()
 
-    # FIX: safer FTS check
     try:
         conn.execute("SELECT 1 FROM knowledge_fts LIMIT 1")
     except Exception:
@@ -62,7 +59,6 @@ def init_vector_db():
             updated_at TEXT
         )
     """)
-
     conn.execute("""
         CREATE TABLE IF NOT EXISTS knowledge_insights (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,231 +69,137 @@ def init_vector_db():
             created_at TEXT
         )
     """)
-
     conn.commit()
     conn.close()
 
 
 # ============================================================
-# EMBEDDING CONFIG
+# EMBEDDING (stub — FTS does the work)
 # ============================================================
-
-MAX_CHUNKS_PER_DOC = 150
-_EMBED_BATCH_SIZE = 64
-
-_model = None
+def embed_text(text: str) -> None:
+    """No-op. FTS5 handles retrieval — no vector embeddings needed."""
+    return None
 
 
-def _get_model():
-    global _model
-    if _model is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-            _model = SentenceTransformer("all-MiniLM-L6-v2")
-            print("[EMBED] Model loaded")
-        except Exception as e:
-            print(f"[EMBED ERROR] {e}")
-            _model = None
-    return _model
+# Alias for any code still calling the old name
+def get_embedding_model():
+    return None
 
 
-def embed_batch(texts: list[str]) -> list[Optional[list[float]]]:
-    model = _get_model()
-    if not model:
-        return [None] * len(texts)
-
+# ============================================================
+# VECTOR SEARCH — implemented as FTS5 search
+# ============================================================
+def vector_search(query: str, n_results: int = 5, source_filter: Optional[str] = None) -> list[dict]:
+    """
+    FTS5 full-text search. Same interface as the old vector search.
+    Returns list of {chunk_id, source, text, score} dicts.
+    """
     try:
-        vectors = model.encode(texts, show_progress_bar=False)
-        return [v.tolist() for v in vectors]
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        # Clean query for FTS5 (strip special chars that break the parser)
+        safe_q = _safe_fts_query(query)
+        if not safe_q:
+            conn.close()
+            return []
+
+        if source_filter:
+            rows = conn.execute("""
+                SELECT kf.chunk_id, kf.source, kf.text,
+                       rank as score
+                FROM knowledge_fts kf
+                WHERE knowledge_fts MATCH ?
+                  AND kf.source = ?
+                ORDER BY rank
+                LIMIT ?
+            """, (safe_q, source_filter, n_results)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT chunk_id, source, text,
+                       rank as score
+                FROM knowledge_fts
+                WHERE knowledge_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (safe_q, n_results)).fetchall()
+
+        conn.close()
+        return [dict(r) for r in rows]
+
     except Exception as e:
-        print(f"[EMBED BATCH ERROR] {e}")
-        return [None] * len(texts)
-
-
-def embed_text(text: str):
-    return embed_batch([text])[0]
+        print(f"[EMBED] FTS search error: {e}")
+        return []
 
 
 # ============================================================
-# STORAGE (FIXED ALIGNMENT BUG HERE 🔥)
+# STORE CHUNKS (called by pipeline after chunking)
 # ============================================================
-
-def store_chunks(chunks: list[dict], tags: str = ""):
-    from datetime import datetime
-    import uuid
-
+def store_chunks(chunks: list[dict]) -> int:
+    """
+    Stores text chunks into knowledge_chunks + FTS index.
+    chunks: list of {chunk_id, source, doc_type, tags, section,
+                      page_num, chunk_index, text, importance, indexed_at}
+    Returns number stored.
+    """
     if not chunks:
         return 0
 
-    # limit chunks (Render safety)
-    if len(chunks) > MAX_CHUNKS_PER_DOC:
-        chunks = sorted(
-            chunks,
-            key=lambda c: c.get("importance", 0.5),
-            reverse=True
-        )[:MAX_CHUNKS_PER_DOC]
+    # Cap per-doc to avoid RAM/time blowout on large files
+    chunks = chunks[:MAX_CHUNKS_PER_DOC]
+    print(f"[EMBED] storing {len(chunks)} chunks (FTS only)...")
 
     conn = sqlite3.connect(DB_PATH)
-
-    now = datetime.now().isoformat()
-
-    all_texts = []
-    insert_map = []  # FIX: proper alignment tracking
-
-    # ========================================================
-    # STEP 1: INSERT + CHUNK TEXT EXPANSION
-    # ========================================================
-    for chunk in chunks:
-        raw_text = chunk["text"]
-
-        cid_base = str(uuid.uuid4())
-
-        # simple internal chunking (safe + consistent)
-        chunk_size = 500
-        overlap = 100
-
-        start = 0
-        idx = 0
-
-        while start < len(raw_text):
-            part = raw_text[start:start + chunk_size].strip()
-            if not part:
-                break
-
-            chunk_id = f"{cid_base}_{idx}"
-
-            conn.execute("""
-                INSERT OR IGNORE INTO knowledge_chunks
-                (chunk_id, source, doc_type, tags, section, page_num,
-                 chunk_index, text, importance, embedding, indexed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
-            """, (
-                chunk_id,
-                chunk["source"],
-                chunk.get("doc_type", "text"),
-                tags,
-                chunk.get("section", ""),
-                chunk.get("page_num", 1),
-                idx,
-                part,
-                chunk.get("importance", 0.5),
-                now
-            ))
-
-            all_texts.append(part)
-            insert_map.append(chunk_id)
-
-            start += chunk_size - overlap
-            idx += 1
-
-    conn.commit()
-
-    # ========================================================
-    # STEP 2: EMBEDDINGS
-    # ========================================================
-    print(f"[EMBED] encoding {len(all_texts)} chunks...")
-    embeddings = embed_batch(all_texts)
-
-    # ========================================================
-    # STEP 3: SAFE UPDATE (FIXED ZIP BUG)
-    # ========================================================
-    for i in range(len(insert_map)):
-        cid = insert_map[i]
-        emb = embeddings[i] if i < len(embeddings) else None
-
-        if emb:
-            conn.execute(
-                "UPDATE knowledge_chunks SET embedding=? WHERE chunk_id=?",
-                (json.dumps(emb), cid)
-            )
-
-    conn.commit()
-
-    # ========================================================
-    # STEP 4: FTS REBUILD
-    # ========================================================
+    stored = 0
     try:
-        conn.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
+        for c in chunks:
+            try:
+                conn.execute("""
+                    INSERT OR IGNORE INTO knowledge_chunks
+                    (chunk_id, source, doc_type, tags, section,
+                     page_num, chunk_index, text, importance,
+                     embedding, indexed_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,NULL,?)
+                """, (
+                    c["chunk_id"], c["source"], c.get("doc_type", ""),
+                    c.get("tags", ""), c.get("section", ""),
+                    c.get("page_num", 1), c.get("chunk_index", 0),
+                    c["text"], c.get("importance", 0.5),
+                    c["indexed_at"],
+                ))
+
+                # Keep FTS in sync
+                conn.execute("""
+                    INSERT OR IGNORE INTO knowledge_fts
+                    (chunk_id, source, section, text)
+                    VALUES (?,?,?,?)
+                """, (
+                    c["chunk_id"], c["source"],
+                    c.get("section", ""), c["text"]
+                ))
+                stored += 1
+            except Exception as e:
+                print(f"[EMBED] chunk insert error: {e}")
+                continue
+
         conn.commit()
-    except:
-        pass
+    finally:
+        conn.close()
 
-    conn.close()
-
-    print(f"[STORE] stored {len(insert_map)} chunks")
-    return len(insert_map)
+    return stored
 
 
 # ============================================================
-# VECTOR SEARCH (STABLE + CLEAN)
+# HELPERS
 # ============================================================
-
-def cosine_similarity(a, b):
-    va = np.array(a, dtype=np.float32)
-    vb = np.array(b, dtype=np.float32)
-
-    denom = np.linalg.norm(va) * np.linalg.norm(vb)
-    if denom == 0:
-        return 0.0
-
-    return float(np.dot(va, vb) / denom)
-
-
-def vector_search(query: str, n_results: int = 10):
-    query_emb = embed_text(query)
-    if not query_emb:
-        return []
-
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-
-    rows = conn.execute("""
-        SELECT chunk_id, source, section, page_num, text, importance, embedding
-        FROM knowledge_chunks
-        WHERE embedding IS NOT NULL
-        LIMIT 1000
-    """).fetchall()
-
-    conn.close()
-
-    results = []
-
-    for r in rows:
-        try:
-            emb = json.loads(r["embedding"])
-            score = cosine_similarity(query_emb, emb)
-
-            results.append({
-                "chunk_id": r["chunk_id"],
-                "text": r["text"],
-                "source": r["source"],
-                "section": r["section"],
-                "page_num": r["page_num"],
-                "importance": r["importance"],
-                "score": score,
-                "final_score": (score * 0.75) + (r["importance"] * 0.25),
-            })
-
-        except:
-            continue
-
-    results.sort(key=lambda x: -x["final_score"])
-    return results[:n_results]
-
-
-# ============================================================
-# DELETE
-# ============================================================
-
-def delete_source(filename: str):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM knowledge_chunks WHERE source=?", (filename,))
-    conn.execute("DELETE FROM knowledge_insights WHERE source=?", (filename,))
-
-    try:
-        conn.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
-    except:
-        pass
-
-    conn.commit()
-    conn.close()
+def _safe_fts_query(query: str) -> str:
+    """Strip FTS5 special chars to avoid parse errors."""
+    import re
+    # Remove FTS5 operators/punctuation that break queries
+    cleaned = re.sub(r'[^\w\s]', ' ', query)
+    cleaned = ' '.join(cleaned.split())
+    if not cleaned:
+        return ""
+    # Wrap multi-word query as phrase search fallback
+    words = cleaned.split()
+    return " OR ".join(words[:8])  # cap at 8 terms
