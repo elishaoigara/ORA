@@ -23,7 +23,7 @@ from groq import Groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-MAX_TOKENS = 250          # ↓ reduce cost + speed
+MAX_TOKENS = 250
 MODEL_NAME = "llama-3.3-70b-versatile"
 
 
@@ -43,7 +43,6 @@ async def lifespan(app: FastAPI):
         print("[DB ERROR]")
         print(traceback.format_exc())
 
-    # INIT M-PESA TABLE
     try:
         from mpesa_engine import init_mpesa_table
         init_mpesa_table()
@@ -52,7 +51,6 @@ async def lifespan(app: FastAPI):
         print("[MPESA INIT ERROR]")
         print(traceback.format_exc())
 
-    # INIT PROFILE DEFAULTS
     try:
         from memory.profile import init_profile
         init_profile()
@@ -61,7 +59,6 @@ async def lifespan(app: FastAPI):
         print("[PROFILE INIT ERROR]")
         print(traceback.format_exc())
 
-    # TELEGRAM (LOW CPU MODE)
     try:
         from config import TELEGRAM_BOT_TOKEN
 
@@ -69,13 +66,11 @@ async def lifespan(app: FastAPI):
 
             def telegram_worker():
                 from telegram_bot import run_telegram_bot
-
                 print("[TELEGRAM] Worker started")
-
                 while True:
                     try:
                         run_telegram_bot()
-                        time.sleep(2)  # 🔥 prevents CPU spike
+                        time.sleep(2)
                     except Exception as e:
                         print("[TELEGRAM ERROR]", e)
                         time.sleep(5)
@@ -97,7 +92,7 @@ app = FastAPI(title="ORA Backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # mobile safe
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -123,7 +118,7 @@ def root():
 @app.get("/api/status")
 def status():
     return {
-        "cpu": psutil.cpu_percent(interval=0.1),  # ↓ faster
+        "cpu": psutil.cpu_percent(interval=0.1),
         "ram": psutil.virtual_memory().percent,
         "time": datetime.utcnow().isoformat(),
     }
@@ -149,36 +144,30 @@ async def chat(payload: ChatRequest):
         from database import save_conversation, get_conversation_history
         from context import build_system_prompt
 
-        # ===== MEMORY (LIMITED) =====
-        history = get_conversation_history(limit=5)  # 🔥 smaller
+        history = get_conversation_history(limit=5)
 
-        # ===== KNOWLEDGE (SAFE + LIGHT) =====
         knowledge_ctx = ""
-
         try:
-            # FIX: search_and_format lives in knowledge.pipeline, not knowledge.retrieval
             from knowledge.pipeline import search_and_format
             knowledge_ctx = search_and_format(text, n_results=2) or ""
         except Exception:
-            pass  # silent fail (important for stability)
+            pass
 
-        # ===== PROMPT =====
         system_prompt = build_system_prompt(query=text)
 
         if knowledge_ctx:
-            system_prompt += f"\n\nKNOWLEDGE:\n{knowledge_ctx[:500]}"  # 🔥 truncate
+            system_prompt += f"\n\nKNOWLEDGE:\n{knowledge_ctx[:500]}"
 
         messages = [{"role": "system", "content": system_prompt}]
 
         for role, content, _ in history:
             messages.append({
                 "role": "user" if role == "user" else "assistant",
-                "content": content[:300]  # 🔥 limit memory size
+                "content": content[:300]
             })
 
         messages.append({"role": "user", "content": text})
 
-        # ===== GROQ CALL (CONTROLLED) =====
         response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
@@ -188,7 +177,6 @@ async def chat(payload: ChatRequest):
 
         reply = response.choices[0].message.content or "No response"
 
-        # ===== SAVE =====
         save_conversation("user", text)
         save_conversation("assistant", reply)
 
@@ -201,7 +189,7 @@ async def chat(payload: ChatRequest):
 
 
 # ============================================================
-# CONVERSATIONS  ← NEW
+# CONVERSATIONS
 # ============================================================
 @app.get("/api/conversations")
 def get_conversations(limit: int = 40):
@@ -230,7 +218,6 @@ def get_tasks(status: str = "pending"):
     try:
         from database import get_tasks
         rows = get_tasks(status)
-
         return [
             {
                 "id": r[0],
@@ -276,7 +263,7 @@ def delete_task(task_id: int):
 
 
 # ============================================================
-# THE NUMBER (AI-PRIORITIZED TOP TASK)  ← NEW
+# THE NUMBER (AI-PRIORITIZED TOP TASK)
 # ============================================================
 @app.get("/api/the-number")
 def the_number():
@@ -342,7 +329,6 @@ def alerts(limit: int = 10):
     try:
         from database import get_recent_alerts
         rows = get_recent_alerts(limit)
-
         return [
             {
                 "id": r[0],
@@ -369,7 +355,22 @@ def ack_alert(alert_id: int, feedback: Optional[str] = None):
 
 
 # ============================================================
-# M-PESA  ← NEW
+# ALERTS — ACK ALL  ← NEW (fixes mobile ackAllAlerts() 404)
+# ============================================================
+@app.post("/api/alerts/ack-all")
+def ack_all_alerts():
+    try:
+        from database import get_conn
+        conn = get_conn()
+        conn.execute("UPDATE alerts SET acknowledged=1 WHERE acknowledged=0")
+        conn.commit()
+        return {"status": "all acknowledged"}
+    except Exception:
+        raise HTTPException(500, "Failed to ack all alerts")
+
+
+# ============================================================
+# M-PESA
 # ============================================================
 class MpesaSMS(BaseModel):
     sms: str
@@ -418,7 +419,7 @@ def mpesa_transactions(limit: int = 20):
 
 
 # ============================================================
-# MEMORY  ← NEW
+# MEMORY
 # ============================================================
 @app.get("/api/memory/profile")
 def memory_profile():
@@ -497,7 +498,22 @@ def memory_important(min_importance: int = 7, limit: int = 10):
 
 
 # ============================================================
-# KNOWLEDGE  ← NEW
+# BRIEFING  ← NEW (fixes mobile /api/briefing 404)
+# ============================================================
+@app.get("/api/briefing")
+def get_briefing():
+    try:
+        from briefing import generate_briefing
+        text = generate_briefing()
+        return {"briefing": text, "timestamp": datetime.utcnow().isoformat()}
+    except Exception:
+        print("[BRIEFING ERROR]")
+        print(traceback.format_exc())
+        return {"briefing": "ORA standing by.", "timestamp": datetime.utcnow().isoformat()}
+
+
+# ============================================================
+# KNOWLEDGE
 # ============================================================
 @app.get("/api/knowledge/documents")
 def knowledge_documents():

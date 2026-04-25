@@ -2,7 +2,7 @@ import sqlite3
 from datetime import datetime
 import threading
 
-DB_PATH = "ora.db"
+from config import DB_PATH  # single source of truth — set via ORA_DATA_DIR env var
 
 # Thread-local storage for database connections
 _thread_local = threading.local()
@@ -84,7 +84,6 @@ def init_tasks_table():
 def log_event(source, data):
     conn = get_conn()
     c = conn.cursor()
-    # FIX: always store as string — json.dumps is called by caller for system events
     c.execute("INSERT INTO events (source, data, timestamp) VALUES (?, ?, ?)",
               (source, data, datetime.now().isoformat()))
     conn.commit()
@@ -139,7 +138,6 @@ def save_conversation(role, content):
 def get_conversation_history(limit=20):
     conn = get_conn()
     c = conn.cursor()
-    # Returns rows as (role, content, timestamp) tuples
     c.execute("SELECT role, content, timestamp FROM conversations ORDER BY id DESC LIMIT ?", (limit,))
     rows = c.fetchall()
     close_conn()
