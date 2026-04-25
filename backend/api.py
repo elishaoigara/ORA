@@ -1,5 +1,10 @@
 """
 ORA Backend API — Render Optimized (Free Tier Safe)
+Upgrades:
+  - /api/knowledge/upload  → multipart file upload for PDFs, DOCX, TXT, MD
+  - /api/chat              → document-first routing (reduces Groq token usage)
+  - All file handling size-capped at 10MB
+  - Background threading for indexing (non-blocking uploads)
 """
 
 import os
@@ -11,7 +16,7 @@ from datetime import datetime
 from typing import Optional
 
 import psutil
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
@@ -23,8 +28,13 @@ from groq import Groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-MAX_TOKENS = 250
+MAX_TOKENS = 350
 MODEL_NAME = "llama-3.3-70b-versatile"
+
+ALLOWED_UPLOAD_TYPES = {
+    ".pdf", ".docx", ".txt", ".md"
+}
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10MB hard cap
 
 
 # ============================================================
@@ -57,6 +67,15 @@ async def lifespan(app: FastAPI):
         print("[ORA] Profile initialized")
     except Exception:
         print("[PROFILE INIT ERROR]")
+        print(traceback.format_exc())
+
+    # Init vector DB on startup (lightweight — just creates tables)
+    try:
+        from knowledge.embeddings import init_vector_db
+        init_vector_db()
+        print("[ORA] Knowledge DB ready")
+    except Exception:
+        print("[KNOWLEDGE INIT ERROR]")
         print(traceback.format_exc())
 
     try:
@@ -125,7 +144,7 @@ def status():
 
 
 # ============================================================
-# CHAT (OPTIMIZED)
+# CHAT (UPGRADED — document-first routing)
 # ============================================================
 class ChatRequest(BaseModel):
     message: str
@@ -146,34 +165,53 @@ async def chat(payload: ChatRequest):
 
         history = get_conversation_history(limit=5)
 
+        # ── Step 1: Pull knowledge base context ──────────────────────
         knowledge_ctx = ""
         try:
             from knowledge.pipeline import search_and_format
-            knowledge_ctx = search_and_format(text, n_results=2) or ""
+            knowledge_ctx = search_and_format(text, n_results=3) or ""
         except Exception:
             pass
 
+        # ── Step 2: Build system prompt with KB injected ─────────────
         system_prompt = build_system_prompt(query=text)
 
         if knowledge_ctx:
-            system_prompt += f"\n\nKNOWLEDGE:\n{knowledge_ctx[:500]}"
+            # Cap at 600 chars to control token usage on Render free tier
+            system_prompt += f"\n\n## KNOWLEDGE BASE\n{knowledge_ctx[:600]}"
 
+        # ── Step 3: Assemble messages (capped history) ────────────────
         messages = [{"role": "system", "content": system_prompt}]
 
         for role, content, _ in history:
             messages.append({
                 "role": "user" if role == "user" else "assistant",
-                "content": content[:300]
+                "content": content[:250]   # trim history to save tokens
             })
 
         messages.append({"role": "user", "content": text})
 
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=messages,
-            max_tokens=MAX_TOKENS,
-            temperature=0.4,
-        )
+        # ── Step 4: Pick model by query length ────────────────────────
+        # Short queries → small model (cheaper, faster)
+        is_short = len(text.split()) < 10
+        model = "llama-3.1-8b-instant" if is_short else MODEL_NAME
+        max_tok = 200 if is_short else MAX_TOKENS
+
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tok,
+                temperature=0.4,
+            )
+        except Exception:
+            # Fallback to small model on any failure
+            response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=messages,
+                max_tokens=200,
+                temperature=0.4,
+            )
 
         reply = response.choices[0].message.content or "No response"
 
@@ -354,9 +392,6 @@ def ack_alert(alert_id: int, feedback: Optional[str] = None):
         raise HTTPException(500, "Failed")
 
 
-# ============================================================
-# ALERTS — ACK ALL  ← NEW (fixes mobile ackAllAlerts() 404)
-# ============================================================
 @app.post("/api/alerts/ack-all")
 def ack_all_alerts():
     try:
@@ -498,7 +533,7 @@ def memory_important(min_importance: int = 7, limit: int = 10):
 
 
 # ============================================================
-# BRIEFING  ← NEW (fixes mobile /api/briefing 404)
+# BRIEFING
 # ============================================================
 @app.get("/api/briefing")
 def get_briefing():
@@ -513,7 +548,7 @@ def get_briefing():
 
 
 # ============================================================
-# KNOWLEDGE
+# KNOWLEDGE — LIST / DELETE / SEARCH
 # ============================================================
 @app.get("/api/knowledge/documents")
 def knowledge_documents():
@@ -549,3 +584,84 @@ def knowledge_search(payload: KnowledgeQuery):
         return {"result": result}
     except Exception:
         return {"result": ""}
+
+
+# ============================================================
+# KNOWLEDGE — DOCUMENT UPLOAD  ← NEW
+# ============================================================
+def _run_indexing(filepath: str, filename: str, tags: str):
+    """Run indexing in background thread so the upload response is instant."""
+    try:
+        from knowledge.pipeline import on_upload
+        result = on_upload(filepath, filename, tags=tags, force=False)
+        print(f"[UPLOAD] Indexed {filename}: {result}")
+    except Exception as e:
+        print(f"[UPLOAD] Indexing failed for {filename}: {e}")
+
+
+@app.post("/api/knowledge/upload")
+async def knowledge_upload(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    tags: str = Form(default=""),
+):
+    """
+    Upload a document (PDF, DOCX, TXT, MD) to ORA's knowledge base.
+    - Validates file type and size before accepting
+    - Saves to persistent uploads dir (ORA_DATA_DIR/uploads)
+    - Indexes in background thread — returns immediately
+    - Deduplication: same file won't be re-indexed (uses MD5 hash)
+    """
+    try:
+        from config import UPLOADS_DIR
+
+        # ── Validate extension ────────────────────────────────────
+        filename = file.filename or "unknown"
+        ext = os.path.splitext(filename)[1].lower()
+
+        if ext not in ALLOWED_UPLOAD_TYPES:
+            raise HTTPException(
+                400,
+                f"Unsupported file type '{ext}'. Allowed: {', '.join(ALLOWED_UPLOAD_TYPES)}"
+            )
+
+        # ── Read + size-check ─────────────────────────────────────
+        data = await file.read()
+
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "File too large. Max 10MB.")
+
+        if len(data) == 0:
+            raise HTTPException(400, "Empty file.")
+
+        # ── Save to persistent disk ───────────────────────────────
+        safe_name = _safe_filename(filename)
+        dest = os.path.join(UPLOADS_DIR, safe_name)
+
+        with open(dest, "wb") as f:
+            f.write(data)
+
+        # ── Queue indexing in background (non-blocking) ───────────
+        background_tasks.add_task(_run_indexing, dest, safe_name, tags)
+
+        return {
+            "status": "accepted",
+            "filename": safe_name,
+            "size_kb": round(len(data) / 1024, 1),
+            "message": "File saved. Indexing in background — check /api/knowledge/documents in a few seconds.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception:
+        print("[UPLOAD ERROR]")
+        print(traceback.format_exc())
+        raise HTTPException(500, "Upload failed")
+
+
+def _safe_filename(name: str) -> str:
+    """Strip path separators and control chars from filename."""
+    import re
+    name = os.path.basename(name)
+    name = re.sub(r'[^\w.\-]', '_', name)
+    return name[:120]   # cap length
