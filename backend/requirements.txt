@@ -1,27 +1,13 @@
-# ORA Backend — Render Free Tier (512MB RAM)
-# Python 3.11 required — pydantic-core has no pre-built wheel for Python 3.14
-
-# --- Core --------------------------------------------------
-fastapi==0.115.0
+ï»¿fastapi==0.115.0
 uvicorn[standard]==0.30.6
 python-multipart==0.0.9
 pydantic==2.7.4
 python-dotenv==1.0.1
 psutil==5.9.8
-
-# --- AI / LLM ----------------------------------------------
 groq==0.13.0
-
-# --- Embeddings (local, no API cost) -----------------------
 sentence-transformers==3.0.1
 numpy==1.26.4
-
-# --- Document Parsing --------------------------------------
 pdfplumber==0.11.0
 python-docx==1.1.2
-
-# --- Telegram ----------------------------------------------
 python-telegram-bot==21.3
-
-# --- Scheduling --------------------------------------------
 apscheduler==3.10.4
