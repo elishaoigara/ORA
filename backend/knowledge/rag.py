@@ -1,4 +1,4 @@
-from knowledge.embeddings import get_embedding_model, vector_search
+﻿from knowledge.embeddings import embed_text, vector_search
 from knowledge import get_all_documents
 import numpy as np
 
@@ -7,7 +7,7 @@ import numpy as np
 # QUERY EMBEDDING
 # =========================
 def embed_query(query: str):
-    model = get_embedding_model()
+    model = embed_text
     return model.encode([query])[0]
 
 
@@ -75,3 +75,4 @@ def rag_search(query: str):
     raw = retrieve_documents(query, top_k=8)
     ranked = rerank_results(query, raw)
     return format_context(ranked)
+
