@@ -1,11 +1,6 @@
 """
-ORA Backend API — v2 (Render Free Tier Safe)
-Upgrades vs v1:
-  - Response cache (avoids repeat Groq calls)
-  - Smart query router (right model for right query)
-  - /api/knowledge/upload  — file upload with background indexing
-  - /api/knowledge/summary — per-document AI summary on demand
-  - /api/cache/stats       — debug endpoint
+ORA Backend API — v3 (Phase 1 + 2)
+Render free tier safe — every upgrade has zero extra RAM cost.
 """
 
 import os
@@ -14,7 +9,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 import psutil
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, BackgroundTasks
@@ -24,50 +19,47 @@ from groq import Groq
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-
 ALLOWED_UPLOAD_TYPES = {".pdf", ".docx", ".txt", ".md"}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
-# ============================================================
-# LIFESPAN
-# ============================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("[ORA] Starting...")
+    for fn, label in [
+        (lambda: __import__('database').init_db() or __import__('database').init_tasks_table(), "DB"),
+        (lambda: __import__('mpesa_engine').init_mpesa_table(), "M-Pesa"),
+        (lambda: __import__('memory.profile', fromlist=['init_profile']).init_profile(), "Profile"),
+        (lambda: __import__('knowledge.embeddings', fromlist=['init_vector_db']).init_vector_db(), "Knowledge DB"),
+        (lambda: __import__('intelligence.goals_engine', fromlist=['init_goals_table']).init_goals_table(), "Goals"),
+    ]:
+        try:
+            fn()
+            print(f"[ORA] {label} ready")
+        except Exception:
+            print(f"[ORA] {label} init error")
+            print(traceback.format_exc())
 
     try:
-        from database import init_db, init_tasks_table
-        init_db()
-        init_tasks_table()
-        print("[ORA] DB Ready")
+        from scheduler import start_scheduler
+        from intelligence.pattern_engine import run_pattern_analysis
+        from intelligence.prediction_engine import run_predictions
+        from intelligence.goals_engine import run_goal_checkin
+        start_scheduler([
+            {"hour": 7,  "minute": 0,  "fn": run_predictions,      "name": "morning_preds"},
+            {"hour": 18, "minute": 0,  "fn": run_predictions,      "name": "evening_preds"},
+            {"hour": 2,  "minute": 30, "fn": run_pattern_analysis,  "name": "daily_patterns"},
+            {"hour": 8,  "minute": 30, "fn": run_goal_checkin,     "name": "weekly_goals"},
+        ])
+        print("[ORA] Scheduler started")
     except Exception:
-        print(traceback.format_exc())
-
-    try:
-        from mpesa_engine import init_mpesa_table
-        init_mpesa_table()
-    except Exception:
-        print(traceback.format_exc())
-
-    try:
-        from memory.profile import init_profile
-        init_profile()
-    except Exception:
-        print(traceback.format_exc())
-
-    try:
-        from knowledge.embeddings import init_vector_db
-        init_vector_db()
-        print("[ORA] Knowledge DB ready")
-    except Exception:
-        print("[KNOWLEDGE INIT ERROR]")
+        print("[SCHEDULER ERROR]")
         print(traceback.format_exc())
 
     try:
         from config import TELEGRAM_BOT_TOKEN
         if TELEGRAM_BOT_TOKEN:
-            def telegram_worker():
+            def _tg():
                 from telegram_bot import run_telegram_bot
                 while True:
                     try:
@@ -76,7 +68,7 @@ async def lifespan(app: FastAPI):
                     except Exception as e:
                         print("[TELEGRAM ERROR]", e)
                         time.sleep(5)
-            threading.Thread(target=telegram_worker, daemon=True).start()
+            threading.Thread(target=_tg, daemon=True).start()
     except Exception:
         print(traceback.format_exc())
 
@@ -84,23 +76,12 @@ async def lifespan(app: FastAPI):
     print("[ORA] Shutdown")
 
 
-# ============================================================
-# APP
-# ============================================================
 app = FastAPI(title="ORA Backend", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"])
 
 
-# ============================================================
-# HEALTH / ROOT / STATUS
-# ============================================================
+# ── Health ────────────────────────────────────────────────────
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health(request: Request):
     return {"status": "ok"}
@@ -111,11 +92,9 @@ def root():
 
 @app.get("/api/status")
 def status():
-    return {
-        "cpu": psutil.cpu_percent(interval=0.1),
-        "ram": psutil.virtual_memory().percent,
-        "time": datetime.utcnow().isoformat(),
-    }
+    return {"cpu": psutil.cpu_percent(interval=0.1),
+            "ram": psutil.virtual_memory().percent,
+            "time": datetime.utcnow().isoformat()}
 
 @app.get("/api/cache/stats")
 def cache_stats():
@@ -126,9 +105,7 @@ def cache_stats():
         return {}
 
 
-# ============================================================
-# CHAT — with cache + router
-# ============================================================
+# ── Chat ──────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
     message: str
 
@@ -137,78 +114,81 @@ async def chat(payload: ChatRequest):
     try:
         if not client:
             return {"reply": "ORA: Missing API key"}
-
         text = payload.message.strip()
         if not text:
             return {"reply": "Empty message."}
 
         from database import save_conversation, get_conversation_history
         from context import build_system_prompt
-        from brain.router import classify, model_for   
+        from brain.router import classify, model_for
         import cache
 
-        # ── 1. Classify query ─────────────────────────────────
-        q_type = classify(text)
+        # 1. Intent parser — zero API cost
+        try:
+            from intent_parser import parse_intent, execute_intent
+            intent = parse_intent(text)
+            if intent:
+                result = execute_intent(intent)
+                if result:
+                    save_conversation("user", text)
+                    save_conversation("assistant", result)
+                    return {"reply": result, "intent": intent["type"], "query_type": "action"}
+        except Exception as e:
+            print(f"[INTENT] {e}")
 
-        # ── 2. Pull KB context ────────────────────────────────
+        # 2. Classify + KB
+        q_type = classify(text)
         knowledge_ctx = ""
         try:
             from knowledge.pipeline import search_and_format
-            n = 3 if q_type == "document" else 2
-            knowledge_ctx = search_and_format(text, n_results=n) or ""
+            knowledge_ctx = search_and_format(text, n_results=3 if q_type == "document" else 2) or ""
         except Exception:
             pass
 
-        # ── 3. Check cache (skip for document queries — always fresh) ──
+        # 3. Cache check
         if q_type != "document":
             cached = cache.get(text, knowledge_ctx)
             if cached:
                 save_conversation("user", text)
                 save_conversation("assistant", cached)
-                return {"reply": cached, "cached": True}
+                return {"reply": cached, "cached": True, "query_type": q_type}
 
-        # ── 4. Build prompt ───────────────────────────────────
+        # 4. Build prompt
         system_prompt = build_system_prompt(query=text)
         if knowledge_ctx:
             system_prompt += f"\n\n## KNOWLEDGE BASE\n{knowledge_ctx[:700]}"
 
+        try:
+            from intelligence.goals_engine import get_goals
+            goals = get_goals("active")
+            if goals:
+                glines = "\n".join(f"- {g['goal'][:60]} ({g['progress']}%)" for g in goals[:3])
+                system_prompt += f"\n\n## ACTIVE GOALS\n{glines}"
+        except Exception:
+            pass
+
         history = get_conversation_history(limit=4)
-        messages = [{"role": "system", "content": system_prompt}]
+        messages: list[Any] = [{"role": "system", "content": system_prompt}]
         for role, content, _ in history:
-            messages.append({
-                "role": "user" if role == "user" else "assistant",
-                "content": content[:200]
-            })
+            messages.append({"role": "user" if role == "user" else "assistant", "content": content[:200]})
         messages.append({"role": "user", "content": text})
 
-        # ── 5. Pick model via router ──────────────────────────
+        # 5. Model selection
         model, max_tok = model_for(q_type)
-
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=max_tok,
-                temperature=0.4,
-            )
+            response = client.chat.completions.create(model=model, messages=messages,
+                                                      max_tokens=max_tok, temperature=0.4)
         except Exception:
-            # Fallback to small model
-            response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=messages,
-                max_tokens=200,
-                temperature=0.4,
-            )
+            response = client.chat.completions.create(model="llama-3.1-8b-instant",
+                                                      messages=messages, max_tokens=200, temperature=0.4)
 
         reply = response.choices[0].message.content or "No response"
 
-        # ── 6. Cache + save ───────────────────────────────────
         if q_type != "document":
             cache.set(text, reply, knowledge_ctx)
 
         save_conversation("user", text)
         save_conversation("assistant", reply)
-
         return {"reply": reply, "query_type": q_type, "model": model}
 
     except Exception:
@@ -217,9 +197,7 @@ async def chat(payload: ChatRequest):
         return {"reply": "ORA error. Try again."}
 
 
-# ============================================================
-# CONVERSATIONS
-# ============================================================
+# ── Conversations ─────────────────────────────────────────────
 @app.get("/api/conversations")
 def get_conversations(limit: int = 40):
     try:
@@ -230,16 +208,14 @@ def get_conversations(limit: int = 40):
         return []
 
 
-# ============================================================
-# TASKS
-# ============================================================
+# ── Tasks ─────────────────────────────────────────────────────
 class TaskCreate(BaseModel):
     title: str
     priority: str = "medium"
     due_at: Optional[str] = None
 
 @app.get("/api/tasks")
-def get_tasks(status: str = "pending"):
+def get_tasks_ep(status: str = "pending"):
     try:
         from database import get_tasks
         rows = get_tasks(status)
@@ -275,9 +251,7 @@ def delete_task(task_id: int):
         raise HTTPException(500, "Failed")
 
 
-# ============================================================
-# THE NUMBER
-# ============================================================
+# ── The Number ────────────────────────────────────────────────
 @app.get("/api/the-number")
 def the_number():
     try:
@@ -293,11 +267,8 @@ def the_number():
                 overdue = datetime.fromisoformat(due_at) < datetime.now()
             except Exception:
                 pass
-        return {
-            "id": task_id, "title": title, "priority": priority,
-            "due_at": due_at, "overdue": overdue,
-            "score": score_task(top), "reason": _score_reason(top), "status": "ok",
-        }
+        return {"id": task_id, "title": title, "priority": priority, "due_at": due_at,
+                "overdue": overdue, "score": score_task(top), "reason": _score_reason(top), "status": "ok"}
     except Exception:
         print(traceback.format_exc())
         return {"status": "empty"}
@@ -305,27 +276,29 @@ def the_number():
 def _score_reason(task):
     _, title, priority, _, due_at = task
     parts = []
-    if priority == "high": parts.append("high priority")
+    if priority == "high":
+        parts.append("high priority")
     if due_at:
         try:
             diff = (datetime.fromisoformat(due_at) - datetime.now()).total_seconds()
             if diff < 0: parts.append("overdue")
             elif diff < 3600: parts.append("due within 1h")
             elif diff < 86400: parts.append("due today")
-        except Exception: pass
-    if "urgent" in title.lower(): parts.append("marked urgent")
+        except Exception:
+            pass
+    if "urgent" in title.lower():
+        parts.append("marked urgent")
     return ", ".join(parts) if parts else "top pending task"
 
 
-# ============================================================
-# ALERTS
-# ============================================================
+# ── Alerts ────────────────────────────────────────────────────
 @app.get("/api/alerts")
-def alerts(limit: int = 10):
+def alerts_ep(limit: int = 10):
     try:
         from database import get_recent_alerts
         rows = get_recent_alerts(limit)
-        return [{"id": r[0], "rule_name": r[1], "message": r[2], "severity": r[3], "timestamp": r[4], "acknowledged": bool(r[5])} for r in rows]
+        return [{"id": r[0], "rule_name": r[1], "message": r[2], "severity": r[3],
+                 "timestamp": r[4], "acknowledged": bool(r[5])} for r in rows]
     except Exception:
         return []
 
@@ -339,20 +312,18 @@ def ack_alert(alert_id: int, feedback: Optional[str] = None):
         raise HTTPException(500, "Failed")
 
 @app.post("/api/alerts/ack-all")
-def ack_all_alerts():
+def ack_all():
     try:
         from database import get_conn
         conn = get_conn()
         conn.execute("UPDATE alerts SET acknowledged=1 WHERE acknowledged=0")
         conn.commit()
-        return {"status": "all acknowledged"}
+        return {"status": "ok"}
     except Exception:
         raise HTTPException(500, "Failed")
 
 
-# ============================================================
-# M-PESA
-# ============================================================
+# ── M-Pesa ────────────────────────────────────────────────────
 class MpesaSMS(BaseModel):
     sms: str
 
@@ -362,19 +333,19 @@ def mpesa_ingest(payload: MpesaSMS):
         from mpesa_engine import ingest_sms
         return ingest_sms(payload.sms)
     except Exception:
-        raise HTTPException(500, "M-Pesa ingest failed")
+        raise HTTPException(500, "Failed")
 
 @app.get("/api/mpesa/summary")
 def mpesa_summary():
     try:
-        from mpesa_engine import get_today_spend, get_average_daily_spend, get_daily_summary, get_recent_transactions, get_recurring_patterns
-        return {
-            "today": get_today_spend(),
-            "average_daily": get_average_daily_spend(),
-            "last_7_days": get_daily_summary(days=7),
-            "recent_transactions": get_recent_transactions(limit=10),
-            "recurring": get_recurring_patterns(),
-        }
+        from mpesa_engine import (get_today_spend, get_average_daily_spend,
+                                   get_daily_summary, get_recent_transactions,
+                                   get_recurring_patterns)
+        return {"today": get_today_spend(),
+                "average_daily": get_average_daily_spend(),
+                "last_7_days": get_daily_summary(days=7),
+                "recent_transactions": get_recent_transactions(limit=10),
+                "recurring": get_recurring_patterns()}
     except Exception:
         print(traceback.format_exc())
         return {"status": "error"}
@@ -388,9 +359,7 @@ def mpesa_transactions(limit: int = 20):
         return []
 
 
-# ============================================================
-# MEMORY
-# ============================================================
+# ── Memory ────────────────────────────────────────────────────
 @app.get("/api/memory/profile")
 def memory_profile():
     try:
@@ -426,7 +395,8 @@ def memory_events(limit: int = 20, event_type: Optional[str] = None):
     try:
         from memory.events import get_recent_events
         rows = get_recent_events(limit=limit, event_type=event_type)
-        return [{"event_type": r[0], "summary": r[1], "detail": r[2], "importance": r[3], "timestamp": r[4]} for r in rows]
+        return [{"event_type": r[0], "summary": r[1], "detail": r[2],
+                 "importance": r[3], "timestamp": r[4]} for r in rows]
     except Exception:
         return []
 
@@ -435,14 +405,13 @@ def memory_important(min_importance: int = 7, limit: int = 10):
     try:
         from memory.events import get_important_events
         rows = get_important_events(min_importance=min_importance, limit=limit)
-        return [{"event_type": r[0], "summary": r[1], "detail": r[2], "importance": r[3], "timestamp": r[4]} for r in rows]
+        return [{"event_type": r[0], "summary": r[1], "detail": r[2],
+                 "importance": r[3], "timestamp": r[4]} for r in rows]
     except Exception:
         return []
 
 
-# ============================================================
-# BRIEFING
-# ============================================================
+# ── Briefing ──────────────────────────────────────────────────
 @app.get("/api/briefing")
 def get_briefing():
     try:
@@ -454,16 +423,64 @@ def get_briefing():
         return {"briefing": "ORA standing by.", "timestamp": datetime.utcnow().isoformat()}
 
 
-# ============================================================
-# KNOWLEDGE — LIST / DELETE / SEARCH
-# ============================================================
+# ── Goals ─────────────────────────────────────────────────────
+class GoalCreate(BaseModel):
+    goal: str
+    due_at: Optional[str] = None
+
+@app.get("/api/goals")
+def get_goals_ep(status: str = "active"):
+    try:
+        from intelligence.goals_engine import get_goals
+        return get_goals(status)
+    except Exception:
+        return []
+
+@app.post("/api/goals")
+def create_goal(payload: GoalCreate):
+    try:
+        from intelligence.goals_engine import add_goal
+        gid = add_goal(payload.goal, payload.due_at)
+        return {"status": "created", "id": gid}
+    except Exception:
+        raise HTTPException(500, "Failed")
+
+@app.post("/api/goals/{goal_id}/complete")
+def complete_goal_ep(goal_id: int):
+    try:
+        from intelligence.goals_engine import complete_goal
+        complete_goal(goal_id)
+        return {"status": "done"}
+    except Exception:
+        raise HTTPException(500, "Failed")
+
+@app.post("/api/goals/checkin")
+def trigger_checkin():
+    try:
+        from intelligence.goals_engine import run_goal_checkin
+        run_goal_checkin()
+        return {"status": "sent"}
+    except Exception:
+        raise HTTPException(500, "Failed")
+
+
+# ── Predictions ───────────────────────────────────────────────
+@app.get("/api/predictions")
+def get_predictions():
+    try:
+        from intelligence.prediction_engine import predict_needs
+        return predict_needs()
+    except Exception:
+        return []
+
+
+# ── Knowledge ─────────────────────────────────────────────────
 @app.get("/api/knowledge/documents")
 def knowledge_documents():
     try:
         from knowledge.pipeline import get_all_documents
         return get_all_documents()
     except Exception:
-        print(traceback.format_exc())
         return []
 
 @app.delete("/api/knowledge/documents/{filename}")
@@ -483,117 +500,74 @@ class KnowledgeQuery(BaseModel):
 def knowledge_search(payload: KnowledgeQuery):
     try:
         from knowledge.pipeline import search_and_format
-        result = search_and_format(payload.query, n_results=payload.n_results)
-        return {"result": result}
+        return {"result": search_and_format(payload.query, n_results=payload.n_results)}
     except Exception:
         return {"result": ""}
 
-
-# ============================================================
-# KNOWLEDGE — UPLOAD (background indexing)
-# ============================================================
 def _run_indexing(filepath: str, filename: str, tags: str):
     try:
         from knowledge.pipeline import on_upload
         result = on_upload(filepath, filename, tags=tags, force=False)
-        print(f"[UPLOAD] Indexed {filename}: {result}")
+        print(f"[UPLOAD] {filename}: {result}")
     except Exception as e:
-        print(f"[UPLOAD] Indexing failed for {filename}: {e}")
+        print(f"[UPLOAD] Failed {filename}: {e}")
 
 @app.post("/api/knowledge/upload")
-async def knowledge_upload(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    tags: str = Form(default=""),
-):
+async def knowledge_upload(background_tasks: BackgroundTasks,
+                            file: UploadFile = File(...), tags: str = Form(default="")):
     try:
         from config import UPLOADS_DIR
         filename = file.filename or "unknown"
         ext = os.path.splitext(filename)[1].lower()
         if ext not in ALLOWED_UPLOAD_TYPES:
-            raise HTTPException(400, f"Unsupported type '{ext}'. Allowed: {', '.join(ALLOWED_UPLOAD_TYPES)}")
+            raise HTTPException(400, f"Unsupported type '{ext}'")
         data = await file.read()
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "File too large. Max 10MB.")
-        if len(data) == 0:
+        if not data:
             raise HTTPException(400, "Empty file.")
         safe_name = _safe_filename(filename)
         dest = os.path.join(UPLOADS_DIR, safe_name)
         with open(dest, "wb") as f:
             f.write(data)
         background_tasks.add_task(_run_indexing, dest, safe_name, tags)
-        return {
-            "status": "accepted",
-            "filename": safe_name,
-            "size_kb": round(len(data) / 1024, 1),
-            "message": "File saved. Indexing in background — check /api/knowledge/documents in a few seconds.",
-        }
+        return {"status": "accepted", "filename": safe_name,
+                "size_kb": round(len(data) / 1024, 1),
+                "message": "Saved. Indexing in background."}
     except HTTPException:
         raise
     except Exception:
         print(traceback.format_exc())
         raise HTTPException(500, "Upload failed")
 
-
-# ============================================================
-# KNOWLEDGE — AI SUMMARY (on-demand, 1 Groq call per doc) ← NEW
-# ============================================================
 @app.get("/api/knowledge/summary/{filename}")
 def knowledge_summary(filename: str):
-    """
-    Returns an AI-generated summary for an indexed document.
-    Uses the stored summary if available (free).
-    Falls back to generating one via Groq if not (1 API call, cached after).
-    """
     try:
         from knowledge.pipeline import get_all_documents, search_and_format
         import cache
-
-        # Check stored summary first (zero cost)
         docs = get_all_documents()
         doc = next((d for d in docs if d["filename"] == filename), None)
         if not doc:
-            raise HTTPException(404, "Document not found")
-
+            raise HTTPException(404, "Not found")
         if doc.get("summary") and len(doc["summary"]) > 50:
             return {"filename": filename, "summary": doc["summary"], "source": "stored"}
-
-        # Check cache
-        cache_key = f"summary::{filename}"
-        cached = cache.get(cache_key)
+        ck = f"summary::{filename}"
+        cached = cache.get(ck)
         if cached:
             return {"filename": filename, "summary": cached, "source": "cached"}
-
-        # Generate via Groq (1 call, stored forever after)
         if not client:
             raise HTTPException(503, "AI unavailable")
-
-        # Pull top chunks from this document
         chunks = search_and_format(filename.replace("_", " ").replace("-", " "), n_results=5)
         if not chunks:
-            return {"filename": filename, "summary": "No content extracted.", "source": "empty"}
-
-        prompt = f"""Summarize this document in 3 concise bullet points. Be factual, no fluff.
-
-Document: {filename}
-Content:
-{chunks[:2000]}
-
-Return exactly 3 bullet points starting with •"""
-
-        response = client.chat.completions.create(
+            return {"filename": filename, "summary": "No content.", "source": "empty"}
+        resp = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=250,
-            temperature=0.3,
-        )
-        summary = response.choices[0].message.content.strip()
-
-        # Cache it
-        cache.set(cache_key, summary)
-
+            messages=[{"role": "user", "content":
+                f"Summarize in 3 bullet points starting with •:\n\nDoc: {filename}\n\n{chunks[:2000]}"}],
+            max_tokens=250, temperature=0.3)
+        summary = (resp.choices[0].message.content or "").strip()
+        cache.set(ck, summary)
         return {"filename": filename, "summary": summary, "source": "generated"}
-
     except HTTPException:
         raise
     except Exception:
@@ -601,6 +575,7 @@ Return exactly 3 bullet points starting with •"""
         raise HTTPException(500, "Summary failed")
 
 
+# ── Helpers ───────────────────────────────────────────────────
 def _safe_filename(name: str) -> str:
     import re
     name = os.path.basename(name)
