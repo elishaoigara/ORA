@@ -1,84 +1,59 @@
+"""
+ORA Router — Classifies queries and picks the right response strategy.
+All routes use Groq only. No external APIs.
+
+Query types:
+  simple   → short factual / greeting / task → small model, cached
+  document → asks about uploaded docs        → KB lookup first, then Groq
+  complex  → long / planning / reasoning     → big model, full context
+"""
+
 import re
-from dataclasses import dataclass
-from typing import Literal, Dict
 
 
-Intent = Literal[
-    "status",
-    "alerts",
-    "task",
-    "ack",
-    "reminder",
-    "mood",
-    "memory",
-    "chat"
-]
+# ── Keywords that signal document-related intent ──────────────
+_DOC_PATTERNS = re.compile(
+    r"\b(summarize|summary|document|pdf|file|uploaded|notes|report|"
+    r"according to|based on|from the|what does .* say|tell me about the)\b",
+    re.IGNORECASE,
+)
+
+_COMPLEX_PATTERNS = re.compile(
+    r"\b(plan|strategy|analyze|compare|explain|why|how should|"
+    r"what would|recommend|advice|steps|roadmap|breakdown)\b",
+    re.IGNORECASE,
+)
 
 
-@dataclass
-class RouteResult:
-    intent: Intent
-    confidence: float
-    use_llm: bool = False
+def classify(query: str) -> str:
+    """
+    Returns: 'simple' | 'document' | 'complex'
+    """
+    q = query.strip()
+
+    # Very short = simple
+    if len(q.split()) <= 6:
+        return "simple"
+
+    if _DOC_PATTERNS.search(q):
+        return "document"
+
+    if len(q) > 200 or _COMPLEX_PATTERNS.search(q):
+        return "complex"
+
+    return "simple"
 
 
-# =========================
-# TIER 1: FAST RULE ROUTES
-# =========================
-RULES = {
-    "status": r"^/\s*status",
-    "alerts": r"^/\s*alerts",
-    "task": r"^/\s*task",
-    "ack": r"^/\s*ack",
-    "reminder": r"^/\s*remind",
-    "mood": r"^/\s*mood",
-}
+def model_for(query_type: str) -> tuple[str, int]:
+    """
+    Returns (model_name, max_tokens) for the query type.
+    Groq only — tiered by cost.
+    """
+    if query_type == "simple":
+        return "llama-3.1-8b-instant", 180
 
+    if query_type == "document":
+        return "llama-3.1-8b-instant", 350   # KB does the heavy lifting
 
-MEMORY_KEYWORDS = [
-    "remember", "do you remember", "what did we discuss",
-    "earlier", "yesterday", "last time",
-    "previous chat", "what did i say", "recall"
-]
-
-
-# =========================
-# ROUTER CORE
-# =========================
-def classify_intent(text: str) -> RouteResult:
-    text = text.lower().strip()
-    text = re.sub(r"\s+", " ", text)
-
-    # -------------------------
-    # TIER 1: RULE MATCHING
-    # -------------------------
-    for intent, pattern in RULES.items():
-        if re.search(pattern, text):
-            return RouteResult(intent=intent, confidence=1.0, use_llm=False)
-
-    # -------------------------
-    # TIER 2: MEMORY DETECTION
-    # -------------------------
-    if any(k in text for k in MEMORY_KEYWORDS):
-        return RouteResult(intent="memory", confidence=0.85, use_llm=False)
-
-    # -------------------------
-    # TIER 2: SIMPLE HEURISTICS
-    # -------------------------
-    score_chat = 0.5
-
-    if "?" in text:
-        score_chat += 0.1
-
-    if len(text) < 10:
-        score_chat += 0.2
-
-    # If vague → escalate to LLM
-    if score_chat < 0.7:
-        return RouteResult(
-            intent="chat",
-            confidence=score_chat,
-            use_llm=True  # ONLY here we call Groq
-        )
-
-    return RouteResult(intent="chat", confidence=score_chat, use_llm=False)
+    # complex
+    return "llama-3.3-70b-versatile", 500
