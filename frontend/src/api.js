@@ -1,10 +1,10 @@
-// src/api.js
-
 const BASE_URL =
   import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
   "https://ora-oovf.onrender.com";
 
-/* unified request helper */
+/* =========================
+   CORE REQUEST HELPER
+   ========================= */
 async function request(path, options = {}) {
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
 
@@ -17,31 +17,86 @@ async function request(path, options = {}) {
   });
 
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err);
+    throw new Error(await res.text());
   }
 
   return res.json();
 }
 
 /* =========================
-   BACKEND ALIGNED ENDPOINTS
+   BACKEND MATCHED ENDPOINTS
    ========================= */
 
 export const health = () => request("/health");
-
 export const getStatus = () => request("/status");
-
 export const getAgentStatus = () => request("/agent/status");
 
-/* ⚠️ IMPORTANT: THIS DOES NOT EXIST IN YOUR BACKEND */
-export const getAlerts = () => request("/alerts"); // will 404 unless you add it
-
 export const getTasks = () => request("/tasks");
-
 export const getGoals = () => request("/goals");
-
 export const getCalendarToday = () => request("/calendar/today");
 
-/* default export */
+export const getMpesaSummary = () => request("/mpesa/summary");
+export const getConversations = () => request("/conversations");
+
+/* =========================
+   CHAT
+   ========================= */
+export const sendMessage = (message) =>
+  request("/chat", {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+
+/* =========================
+   PLACEHOLDER FEATURES (NO BACKEND YET)
+   ========================= */
+
+export const getAlerts = () => request("/agent/status"); // fallback mapping
+export const ackAlert = async () => ({ ok: true });
+export const ackAllAlerts = async () => ({ ok: true });
+
+export const getTheNumber = async () => ({ value: 0 });
+
+/* ========================= */
 export default BASE_URL;
+/* =========================
+   TASKS (REAL BACKEND)
+   ========================= */
+
+export const createTask = (data) =>
+  request("/tasks", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const completeTask = (taskId) =>
+  request(`/tasks/${taskId}/complete`, {
+    method: "POST",
+  });
+
+export const deleteTask = (taskId) =>
+  request(`/tasks/${taskId}`, {
+    method: "DELETE",
+  });
+
+/* =========================
+   MEMORY (PLACEHOLDERS for now)
+   ========================= */
+
+export const getProfile = async () => ({
+  name: "User",
+  email: "",
+});
+
+export const getPreferences = async () => ({
+  theme: "light",
+});
+
+export const getMemoryEvents = async () => ([]);
+
+/* =========================
+   GOOGLE AUTH (matches backend)
+   ========================= */
+
+export const getGoogleAuthStatus = () =>
+  request("/auth/google/status");
