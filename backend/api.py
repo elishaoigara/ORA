@@ -1,5 +1,5 @@
 """
-ORA Backend API — v3 (Phase 1 + 2)
+ORA Backend API — v3 (Phase 1 — Autonomous Agent Loop)
 Render free tier safe — every upgrade has zero extra RAM cost.
 """
 
@@ -42,10 +42,10 @@ async def lifespan(app: FastAPI):
             print(traceback.format_exc())
 
     # ── Scheduler — single shared APScheduler instance ──────────
-    # All jobs (core + intelligence) are registered on ONE scheduler
-    # to prevent duplicate job execution and SQLite race conditions.
+    # All jobs (core + intelligence + agent loop) registered on ONE scheduler.
     try:
-        from ora_scheduler import start_scheduler, get_scheduler
+        from ora_scheduler import start_scheduler
+        from agent import run_agent_cycle
         from intelligence.pattern_engine import run_pattern_analysis
         from intelligence.prediction_engine import run_predictions
         from intelligence.goals_engine import run_goal_checkin
@@ -54,13 +54,17 @@ async def lifespan(app: FastAPI):
         from intelligence.notifier import run_autonomous_notifications
 
         start_scheduler([
-            # Core jobs (cron)
-            {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": run_predictions,           "name": "morning_preds"},
-            {"trigger": "cron",     "hour": 18, "minute": 0,  "fn": run_predictions,           "name": "evening_preds"},
-            {"trigger": "cron",     "hour": 2,  "minute": 30, "fn": run_pattern_analysis,      "name": "daily_patterns"},
-            {"trigger": "cron",     "hour": 8,  "minute": 30, "fn": run_goal_checkin,          "name": "weekly_goals"},
-            {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": generate_daily_brief,      "name": "daily_brief"},
-            # Intelligence jobs (interval)
+            # ── Agent loop — the brain (every 5 min) ──────────
+            {"trigger": "interval", "minutes": 5,   "fn": run_agent_cycle,              "name": "agent_loop"},
+
+            # ── Core scheduled jobs (cron) ─────────────────────
+            {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": run_predictions,    "name": "morning_preds"},
+            {"trigger": "cron",     "hour": 18, "minute": 0,  "fn": run_predictions,    "name": "evening_preds"},
+            {"trigger": "cron",     "hour": 2,  "minute": 30, "fn": run_pattern_analysis, "name": "daily_patterns"},
+            {"trigger": "cron",     "hour": 8,  "minute": 30, "fn": run_goal_checkin,   "name": "weekly_goals"},
+            {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": generate_daily_brief, "name": "daily_brief"},
+
+            # ── Intelligence jobs (interval) ───────────────────
             {"trigger": "interval", "hours": 1,    "fn": run_pattern_analysis,          "name": "pattern_analysis"},
             {"trigger": "interval", "minutes": 10, "fn": run_proactive_checks,          "name": "proactive_checks"},
             {"trigger": "interval", "minutes": 5,  "fn": run_autonomous_notifications,  "name": "auto_notify"},
@@ -71,9 +75,6 @@ async def lifespan(app: FastAPI):
         print(traceback.format_exc())
 
     # ── Telegram — single poll loop with capped exponential backoff ──
-    # run_telegram_bot() already has its own inner while-True poll loop.
-    # The outer wrapper only restarts it if it ever exits (e.g. token error),
-    # with backoff that caps at 60 s to prevent CPU thrash on repeated failures.
     try:
         from config import TELEGRAM_BOT_TOKEN
         if TELEGRAM_BOT_TOKEN:
@@ -83,8 +84,8 @@ async def lifespan(app: FastAPI):
                 while True:
                     try:
                         from telegram_bot import run_telegram_bot
-                        run_telegram_bot()           # blocks until exception
-                        delay = 5                    # reset on clean exit (shouldn't happen normally)
+                        run_telegram_bot()
+                        delay = 5
                     except Exception as e:
                         print(f"[TELEGRAM ERROR] {e}")
                     time.sleep(delay)
@@ -95,10 +96,9 @@ async def lifespan(app: FastAPI):
         print(traceback.format_exc())
 
     # ── Keep-alive: intentionally REMOVED ───────────────────────
-    # Self-pinging the service does NOT prevent Render free-tier spin-down.
-    # Render only counts *external* traffic. Use an external uptime monitor
-    # (e.g. UptimeRobot or cron-job.org) to ping /api/health every 14 minutes.
-    # See: https://render.com/docs/free#spinning-down-on-idle
+    # Self-pinging does NOT prevent Render free-tier spin-down.
+    # Use an external uptime monitor (UptimeRobot / cron-job.org)
+    # to ping /api/health every 14 minutes from outside.
 
     yield
     print("[ORA] Shutdown")
@@ -131,6 +131,45 @@ def cache_stats():
         return stats()
     except Exception:
         return {}
+
+
+# ── Agent (Phase 1) ───────────────────────────────────────────
+@app.get("/api/agent/status")
+def agent_status():
+    """
+    Returns the current context snapshot so the dashboard
+    can show what ORA sees right now without waiting for the next cycle.
+    """
+    try:
+        from agent import gather_context, decide
+        ctx     = gather_context()
+        actions = decide(ctx)
+        return {
+            "timestamp":    ctx.get("timestamp"),
+            "tasks":        len(ctx.get("tasks", [])),
+            "overdue":      len(ctx.get("overdue", [])),
+            "goals":        len(ctx.get("goals", [])),
+            "spend_alert":  ctx.get("spend_alert"),
+            "predictions":  len(ctx.get("predictions", [])),
+            "pending_actions": [
+                {"type": a["type"], "key": a.get("key"), "message": a["message"]}
+                for a in actions
+            ],
+        }
+    except Exception:
+        print(traceback.format_exc())
+        return {"error": "agent context unavailable"}
+
+@app.post("/api/agent/run")
+def agent_run_now():
+    """Manually trigger one agent cycle (useful for testing)."""
+    try:
+        from agent import run_agent_cycle
+        run_agent_cycle()
+        return {"status": "cycle complete"}
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Agent cycle failed")
 
 
 # ── Chat ──────────────────────────────────────────────────────
@@ -181,7 +220,7 @@ async def chat(payload: ChatRequest):
                 save_conversation("assistant", cached)
                 return {"reply": cached, "cached": True, "query_type": q_type}
 
-        # 4. Build prompt
+        # 4. Build prompt — now includes agent context
         system_prompt = build_system_prompt(query=text)
         if knowledge_ctx:
             system_prompt += f"\n\n## KNOWLEDGE BASE\n{knowledge_ctx[:700]}"
