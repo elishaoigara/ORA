@@ -1,17 +1,16 @@
 """
 ORA Knowledge Embeddings — FTS-only (Render Free Tier Safe)
 
-sentence-transformers removed entirely.
-Search uses SQLite FTS5 (full-text search) — fast, zero RAM overhead.
-embed_text() returns None so callers stay compatible.
+- No sentence-transformers (zero RAM heavy ops)
+- Uses SQLite FTS5 for retrieval
+- Compatible with old vector interface
 """
 
 import sqlite3
-from typing import Optional
+from typing import Optional, List, Dict
 from config import DB_PATH
 
-
-MAX_CHUNKS_PER_DOC = 80   # lower cap = less RAM during indexing
+MAX_CHUNKS_PER_DOC = 80
 
 
 # ============================================================
@@ -19,6 +18,7 @@ MAX_CHUNKS_PER_DOC = 80   # lower cap = less RAM during indexing
 # ============================================================
 def init_vector_db():
     conn = sqlite3.connect(DB_PATH)
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS knowledge_chunks (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,8 +35,8 @@ def init_vector_db():
             indexed_at  TEXT    NOT NULL
         )
     """)
-    conn.commit()
 
+    # FTS5 table
     try:
         conn.execute("SELECT 1 FROM knowledge_fts LIMIT 1")
     except Exception:
@@ -46,59 +46,45 @@ def init_vector_db():
             CREATE VIRTUAL TABLE knowledge_fts
             USING fts5(chunk_id, source, section, text)
         """)
-        conn.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
         conn.commit()
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS chunk_feedback (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chunk_id TEXT,
-            query TEXT,
-            was_useful INTEGER DEFAULT 0,
-            boost REAL DEFAULT 0.0,
-            updated_at TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS knowledge_insights (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT,
-            insight_type TEXT,
-            content TEXT,
-            linked_chunks TEXT,
-            created_at TEXT
-        )
-    """)
     conn.commit()
     conn.close()
 
 
 # ============================================================
-# EMBEDDING (stub — FTS does the work)
+# EMBEDDING (NO-OP)
 # ============================================================
-def embed_text(text: str) -> None:
-    """No-op. FTS5 handles retrieval — no vector embeddings needed."""
+def embed_text(text: str):
     return None
 
 
-# Alias for any code still calling the old name
 def get_embedding_model():
     return None
 
 
 # ============================================================
-# VECTOR SEARCH — implemented as FTS5 search
+# SEARCH (FTS5)
 # ============================================================
-def vector_search(query: str, n_results: int = 5, source_filter: Optional[str] = None) -> list[dict]:
+def vector_search(
+    query: str,
+    top_k: int = 5,
+    source_filter: Optional[str] = None,
+    n_results: Optional[int] = None,   # backward compatibility
+) -> List[Dict]:
     """
-    FTS5 full-text search. Same interface as the old vector search.
-    Returns list of {chunk_id, source, text, score} dicts.
+    FTS5-based search replacing vector search.
+    Supports both top_k (new) and n_results (old).
     """
+
+    # backward compatibility layer
+    if n_results is not None:
+        top_k = n_results
+
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
 
-        # Clean query for FTS5 (strip special chars that break the parser)
         safe_q = _safe_fts_query(query)
         if not safe_q:
             conn.close()
@@ -106,51 +92,46 @@ def vector_search(query: str, n_results: int = 5, source_filter: Optional[str] =
 
         if source_filter:
             rows = conn.execute("""
-                SELECT kf.chunk_id, kf.source, kf.text,
-                       rank as score
-                FROM knowledge_fts kf
+                SELECT chunk_id, source, text,
+                       bm25(knowledge_fts) AS score
+                FROM knowledge_fts
                 WHERE knowledge_fts MATCH ?
-                  AND kf.source = ?
-                ORDER BY rank
+                  AND source = ?
+                ORDER BY score
                 LIMIT ?
-            """, (safe_q, source_filter, n_results)).fetchall()
+            """, (safe_q, source_filter, top_k)).fetchall()
         else:
             rows = conn.execute("""
                 SELECT chunk_id, source, text,
-                       rank as score
+                       bm25(knowledge_fts) AS score
                 FROM knowledge_fts
                 WHERE knowledge_fts MATCH ?
-                ORDER BY rank
+                ORDER BY score
                 LIMIT ?
-            """, (safe_q, n_results)).fetchall()
+            """, (safe_q, top_k)).fetchall()
 
         conn.close()
+
         return [dict(r) for r in rows]
 
     except Exception as e:
-        print(f"[EMBED] FTS search error: {e}")
+        print(f"[RAG ERROR] FTS search failed: {e}")
         return []
 
 
 # ============================================================
-# STORE CHUNKS (called by pipeline after chunking)
+# STORE CHUNKS
 # ============================================================
-def store_chunks(chunks: list[dict]) -> int:
-    """
-    Stores text chunks into knowledge_chunks + FTS index.
-    chunks: list of {chunk_id, source, doc_type, tags, section,
-                      page_num, chunk_index, text, importance, indexed_at}
-    Returns number stored.
-    """
+def store_chunks(chunks: List[Dict]) -> int:
     if not chunks:
         return 0
 
-    # Cap per-doc to avoid RAM/time blowout on large files
     chunks = chunks[:MAX_CHUNKS_PER_DOC]
-    print(f"[EMBED] storing {len(chunks)} chunks (FTS only)...")
+    print(f"[FTS] storing {len(chunks)} chunks...")
 
     conn = sqlite3.connect(DB_PATH)
     stored = 0
+
     try:
         for c in chunks:
             try:
@@ -161,28 +142,37 @@ def store_chunks(chunks: list[dict]) -> int:
                      embedding, indexed_at)
                     VALUES (?,?,?,?,?,?,?,?,?,NULL,?)
                 """, (
-                    c["chunk_id"], c["source"], c.get("doc_type", ""),
-                    c.get("tags", ""), c.get("section", ""),
-                    c.get("page_num", 1), c.get("chunk_index", 0),
-                    c["text"], c.get("importance", 0.5),
+                    c["chunk_id"],
+                    c["source"],
+                    c.get("doc_type", ""),
+                    c.get("tags", ""),
+                    c.get("section", ""),
+                    c.get("page_num", 1),
+                    c.get("chunk_index", 0),
+                    c["text"],
+                    c.get("importance", 0.5),
                     c["indexed_at"],
                 ))
 
-                # Keep FTS in sync
                 conn.execute("""
                     INSERT OR IGNORE INTO knowledge_fts
                     (chunk_id, source, section, text)
                     VALUES (?,?,?,?)
                 """, (
-                    c["chunk_id"], c["source"],
-                    c.get("section", ""), c["text"]
+                    c["chunk_id"],
+                    c["source"],
+                    c.get("section", ""),
+                    c["text"],
                 ))
+
                 stored += 1
+
             except Exception as e:
-                print(f"[EMBED] chunk insert error: {e}")
+                print(f"[FTS] insert error: {e}")
                 continue
 
         conn.commit()
+
     finally:
         conn.close()
 
@@ -193,34 +183,36 @@ def store_chunks(chunks: list[dict]) -> int:
 # HELPERS
 # ============================================================
 def _safe_fts_query(query: str) -> str:
-    """Strip FTS5 special chars to avoid parse errors."""
     import re
-    # Remove FTS5 operators/punctuation that break queries
-    cleaned = re.sub(r'[^\w\s]', ' ', query)
-    cleaned = ' '.join(cleaned.split())
+
+    cleaned = re.sub(r"[^\w\s]", " ", query)
+    cleaned = " ".join(cleaned.split())
+
     if not cleaned:
         return ""
-    # Wrap multi-word query as phrase search fallback
+
     words = cleaned.split()
-    return " OR ".join(words[:8])  # cap at 8 terms
+
+    # better ranking than OR spam
+    return " ".join(words[:8])
+
 
 def delete_source(source: str) -> int:
-    """
-    Delete all chunks for a given source from knowledge_chunks and FTS index.
-    Returns number of rows deleted.
-    """
     conn = sqlite3.connect(DB_PATH)
+
     try:
         conn.execute("DELETE FROM knowledge_fts WHERE source = ?", (source,))
         cur = conn.execute(
             "DELETE FROM knowledge_chunks WHERE source = ?", (source,)
         )
+
         deleted = cur.rowcount
         conn.commit()
         return deleted
+
     except Exception as e:
-        print(f"[EMBED] delete_source error: {e}")
+        print(f"[FTS] delete error: {e}")
         return 0
+
     finally:
         conn.close()
-
