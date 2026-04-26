@@ -11,7 +11,7 @@ from action_engine import execute
 from memory.profile import init_profile
 from memory.events import log_memory_event, summarize_old_events
 from briefing import send_morning_briefing
-from scheduler import start_scheduler
+from ora_scheduler import start_scheduler
 
 from ai_budget import ai_budget
 from intelligence.pattern_engine import run_pattern_analysis
@@ -167,6 +167,23 @@ def ai_worker():
 
 
 # ─────────────────────────────────────────
+# KEEP-ALIVE (Render free tier)
+# ─────────────────────────────────────────
+def run_keep_alive():
+    import os, requests as _req
+    url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not url:
+        return
+    time.sleep(20)
+    while True:
+        try:
+            _req.get(f"{url}/api/health", timeout=5)
+        except Exception:
+            pass
+        time.sleep(30)
+
+
+# ─────────────────────────────────────────
 # MONITOR LOOP
 # ─────────────────────────────────────────
 def run_monitoring_loop():
@@ -241,5 +258,8 @@ if __name__ == "__main__":
 
     t_ai_worker = threading.Thread(target=ai_worker, daemon=True)
     t_ai_worker.start()
+
+    t_keepalive = threading.Thread(target=run_keep_alive, daemon=True, name="keep-alive")
+    t_keepalive.start()
 
     run_monitoring_loop()
