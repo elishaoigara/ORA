@@ -1,6 +1,6 @@
 """
-ORA Knowledge — Phase 9 (Pipeline Orchestrator - FIXED)
-Production-safe ingestion pipeline with reliability fixes.
+ORA Knowledge — Phase 9 (Pipeline Orchestrator - CLEAN FIXED)
+Production-safe ingestion pipeline with correct embeddings API usage.
 """
 
 import os
@@ -88,24 +88,26 @@ def on_upload(filepath: str, filename: str, tags: str = "", force: bool = False)
     if not chunks:
         return {"status": "error", "reason": "no chunks generated"}
 
-    # ── 5. embed + store ──────────────────────────
+    # ── 5. FIX: attach metadata correctly ─────────
+    for c in chunks:
+        c["tags"] = tags
+        c["source"] = filename
+        c["doc_type"] = doc_type
+
+    # ── 6. embed + store ──────────────────────────
     try:
-        stored = store_chunks(chunks, tags=tags)
+        stored = store_chunks(chunks)
     except Exception as e:
         return {"status": "error", "reason": f"embedding failed: {e}"}
 
-    # IMPORTANT FIX:
-    # we regenerate IDs safely instead of relying on chunk objects
-    chunk_ids = []  # will be filled properly if needed later
-
-    # ── 6. distillation ───────────────────────────
+    # ── 7. distillation ───────────────────────────
     summary = ""
     try:
-        summary = distill_document(filename, full_text, chunk_ids)
+        summary = distill_document(filename, full_text, [])
     except Exception as e:
         print(f"[PIPELINE] distillation failed: {e}")
 
-    # ── 7. telegram notify ────────────────────────
+    # ── 8. telegram notify ────────────────────────
     try:
         from telegram_bot import notify
 
@@ -118,7 +120,7 @@ def on_upload(filepath: str, filename: str, tags: str = "", force: bool = False)
     except Exception as e:
         print(f"[PIPELINE] notify failed: {e}")
 
-    # ── 8. index update ───────────────────────────
+    # ── 9. index update ───────────────────────────
     index = _load_index()
     index[filename] = {
         "hash": _get_hash(filepath),
