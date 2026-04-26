@@ -19,7 +19,11 @@ from pydantic import BaseModel
 from groq import Groq
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+try:
+    client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+except Exception:
+    client = None
+    print("[ORA] Groq init failed")
 ALLOWED_UPLOAD_TYPES = {".pdf", ".docx", ".txt", ".md"}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
@@ -104,15 +108,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ORA Backend", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
-from api_calendar_routes import router as calendar_router
-app.include_router(calendar_router)
+try:
+    from api_calendar_routes import router as calendar_router
+    app.include_router(calendar_router)
+    print("[ORA] Calendar routes loaded")
+except Exception as e:
+    print("[ORA] Calendar routes NOT loaded:", e)
 
 
 # ── Health ────────────────────────────────────────────────────
+
+from fastapi import Request
+
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health(request: Request):
     return {"status": "ok"}
-
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"status": "ORA running"}
@@ -121,7 +131,7 @@ def root():
 def status():
     return {"cpu": psutil.cpu_percent(interval=0.1),
             "ram": psutil.virtual_memory().percent,
-            "time": datetime.utcnow().isoformat()}
+            "time": datetime.now().isoformat()}
 
 @app.get("/api/cache/stats")
 def cache_stats():
