@@ -51,6 +51,10 @@ async def lifespan(app: FastAPI):
         from intelligence.proactive_engine import run_proactive_checks
         from intelligence.planner_engine import generate_daily_brief
         from intelligence.notifier import run_autonomous_notifications
+        from connectors.drive import sync_drive
+        from connectors.gmail import sync_gmail
+        from connectors.rss import sync_rss
+        from connectors.github import get_github_summary as github_sync
 
         start_scheduler([
             {"trigger": "interval", "minutes": 5,   "fn": run_agent_cycle,             "name": "agent_loop"},
@@ -62,6 +66,11 @@ async def lifespan(app: FastAPI):
             {"trigger": "interval", "hours": 1,    "fn": run_pattern_analysis,         "name": "pattern_analysis"},
             {"trigger": "interval", "minutes": 10, "fn": run_proactive_checks,         "name": "proactive_checks"},
             {"trigger": "interval", "minutes": 5,  "fn": run_autonomous_notifications, "name": "auto_notify"},
+            # ── Phase 4: Data connectors ───────────────────────
+            {"trigger": "interval", "minutes": 30, "fn": sync_drive,  "name": "drive_sync"},
+            {"trigger": "interval", "minutes": 15, "fn": sync_gmail,  "name": "gmail_sync"},
+            {"trigger": "interval", "hours": 2,    "fn": sync_rss,    "name": "rss_sync"},
+            {"trigger": "interval", "hours": 1,    "fn": github_sync, "name": "github_sync"},
         ])
         print("[ORA] Scheduler started")
     except Exception:
@@ -298,89 +307,14 @@ def delete_task(task_id: int):
         raise HTTPException(500, "Failed")
 
 
-# ── The Number ────────────────────────────────────────────────
-@app.get("/api/the-number")
-def the_number():
+# ── M-Pesa ────────────────────────────────────────────────────
+@app.get("/api/mpesa/transactions")
+def mpesa_transactions(limit: int = 20):
     try:
-        from intelligence.priority_engine import get_prioritized_tasks, score_task
-        ranked = get_prioritized_tasks()
-        if not ranked:
-            return {"status": "empty"}
-        top = ranked[0]
-        task_id, title, priority, created_at, due_at = top
-        overdue = False
-        if due_at:
-            try:
-                overdue = datetime.fromisoformat(due_at) < datetime.now()
-            except Exception:
-                pass
-        return {"id": task_id, "title": title, "priority": priority, "due_at": due_at,
-                "overdue": overdue, "score": score_task(top), "reason": _score_reason(top), "status": "ok"}
-    except Exception:
-        print(traceback.format_exc())
-        return {"status": "empty"}
-
-def _score_reason(task):
-    _, title, priority, _, due_at = task
-    parts = []
-    if priority == "high":
-        parts.append("high priority")
-    if due_at:
-        try:
-            diff = (datetime.fromisoformat(due_at) - datetime.now()).total_seconds()
-            if diff < 0:       parts.append("overdue")
-            elif diff < 3600:  parts.append("due within 1h")
-            elif diff < 86400: parts.append("due today")
-        except Exception:
-            pass
-    if "urgent" in title.lower():
-        parts.append("marked urgent")
-    return ", ".join(parts) if parts else "top pending task"
-
-
-# ── Alerts ────────────────────────────────────────────────────
-@app.get("/api/alerts")
-def alerts_ep(limit: int = 10):
-    try:
-        from database import get_recent_alerts
-        rows = get_recent_alerts(limit)
-        return [{"id": r[0], "rule_name": r[1], "message": r[2], "severity": r[3],
-                 "timestamp": r[4], "acknowledged": bool(r[5])} for r in rows]
+        from mpesa_engine import get_recent_transactions
+        return get_recent_transactions(limit=limit)
     except Exception:
         return []
-
-@app.post("/api/alerts/{alert_id}/ack")
-def ack_alert(alert_id: int, feedback: Optional[str] = None):
-    try:
-        from database import acknowledge_alert
-        acknowledge_alert(alert_id, feedback)
-        return {"status": "acknowledged"}
-    except Exception:
-        raise HTTPException(500, "Failed")
-
-@app.post("/api/alerts/ack-all")
-def ack_all():
-    try:
-        from database import get_conn
-        conn = get_conn()
-        conn.execute("UPDATE alerts SET acknowledged=1 WHERE acknowledged=0")
-        conn.commit()
-        return {"status": "ok"}
-    except Exception:
-        raise HTTPException(500, "Failed")
-
-
-# ── M-Pesa ────────────────────────────────────────────────────
-class MpesaSMS(BaseModel):
-    sms: str
-
-@app.post("/api/mpesa/ingest")
-def mpesa_ingest(payload: MpesaSMS):
-    try:
-        from mpesa_engine import ingest_sms
-        return ingest_sms(payload.sms)
-    except Exception:
-        raise HTTPException(500, "Failed")
 
 @app.get("/api/mpesa/summary")
 def mpesa_summary():
@@ -396,78 +330,6 @@ def mpesa_summary():
     except Exception:
         print(traceback.format_exc())
         return {"status": "error"}
-
-@app.get("/api/mpesa/transactions")
-def mpesa_transactions(limit: int = 20):
-    try:
-        from mpesa_engine import get_recent_transactions
-        return get_recent_transactions(limit=limit)
-    except Exception:
-        return []
-
-
-# ── Memory ────────────────────────────────────────────────────
-@app.get("/api/memory/profile")
-def memory_profile():
-    try:
-        from memory.profile import get_all_profile
-        return get_all_profile()
-    except Exception:
-        return {}
-
-class ProfileUpdate(BaseModel):
-    key: str
-    value: str
-
-@app.post("/api/memory/profile")
-def update_profile(payload: ProfileUpdate):
-    try:
-        from memory.profile import set_profile
-        set_profile(payload.key, payload.value)
-        return {"status": "updated"}
-    except Exception:
-        raise HTTPException(500, "Failed")
-
-@app.get("/api/memory/preferences")
-def memory_preferences(category: Optional[str] = None):
-    try:
-        from memory.preferences import get_preferences
-        rows = get_preferences(category=category)
-        return [{"category": r[0], "key": r[1], "value": r[2], "confidence": r[3]} for r in rows]
-    except Exception:
-        return []
-
-@app.get("/api/memory/events")
-def memory_events(limit: int = 20, event_type: Optional[str] = None):
-    try:
-        from memory.events import get_recent_events
-        rows = get_recent_events(limit=limit, event_type=event_type)
-        return [{"event_type": r[0], "summary": r[1], "detail": r[2],
-                 "importance": r[3], "timestamp": r[4]} for r in rows]
-    except Exception:
-        return []
-
-@app.get("/api/memory/important")
-def memory_important(min_importance: int = 7, limit: int = 10):
-    try:
-        from memory.events import get_important_events
-        rows = get_important_events(min_importance=min_importance, limit=limit)
-        return [{"event_type": r[0], "summary": r[1], "detail": r[2],
-                 "importance": r[3], "timestamp": r[4]} for r in rows]
-    except Exception:
-        return []
-
-
-# ── Briefing ──────────────────────────────────────────────────
-@app.get("/api/briefing")
-def get_briefing():
-    try:
-        from briefing import generate_briefing
-        text = generate_briefing()
-        return {"briefing": text, "timestamp": datetime.utcnow().isoformat()}
-    except Exception:
-        print(traceback.format_exc())
-        return {"briefing": "ORA standing by.", "timestamp": datetime.utcnow().isoformat()}
 
 
 # ── Goals ─────────────────────────────────────────────────────
@@ -489,15 +351,6 @@ def create_goal(payload: GoalCreate):
         from intelligence.goals_engine import add_goal
         gid = add_goal(payload.goal, payload.due_at)
         return {"status": "created", "id": gid}
-    except Exception:
-        raise HTTPException(500, "Failed")
-
-@app.post("/api/goals/{goal_id}/complete")
-def complete_goal_ep(goal_id: int):
-    try:
-        from intelligence.goals_engine import complete_goal
-        complete_goal(goal_id)
-        return {"status": "done"}
     except Exception:
         raise HTTPException(500, "Failed")
 
@@ -699,3 +552,73 @@ async def push_test(payload: PushTestPayload):
     except Exception:
         print(traceback.format_exc())
         raise HTTPException(500, "Push test failed")
+
+
+# ═══════════════════════════════════════════════════════════════
+# PHASE 4 — Data connector endpoints
+# ═══════════════════════════════════════════════════════════════
+
+@app.get("/api/gmail/summary")
+def gmail_summary():
+    try:
+        from connectors.gmail import get_gmail_summary
+        return get_gmail_summary()
+    except Exception:
+        return {}
+
+@app.get("/api/gmail/emails")
+def gmail_emails(limit: int = 10):
+    try:
+        from connectors.gmail import get_recent_emails
+        return get_recent_emails(max_results=min(limit, 10))
+    except Exception:
+        return []
+
+@app.get("/api/weather")
+def weather():
+    try:
+        from connectors.weather import get_weather
+        return get_weather() or {}
+    except Exception:
+        return {}
+
+@app.get("/api/github/summary")
+def github_summary():
+    try:
+        from connectors.github import get_github_summary
+        return get_github_summary()
+    except Exception:
+        return {}
+
+@app.get("/api/rss/headlines")
+def rss_headlines(limit: int = 10):
+    try:
+        from connectors.rss import get_latest_headlines
+        return get_latest_headlines(limit=limit)
+    except Exception:
+        return []
+
+@app.post("/api/youtube/ingest")
+async def youtube_ingest(request: Request):
+    try:
+        body = await request.json()
+        url  = body.get("url", "").strip()
+        if not url:
+            raise HTTPException(400, "url is required")
+        from connectors.youtube import ingest_youtube
+        return ingest_youtube(url)
+    except HTTPException:
+        raise
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "YouTube ingest failed")
+
+@app.post("/api/drive/sync")
+def drive_sync_now():
+    """Manually trigger a Drive sync."""
+    try:
+        from connectors.drive import sync_drive
+        sync_drive()
+        return {"status": "sync triggered"}
+    except Exception:
+        raise HTTPException(500, "Drive sync failed")

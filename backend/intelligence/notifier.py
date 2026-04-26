@@ -88,6 +88,15 @@ def _send_morning_brief() -> None:
         else:
             lines.append("No pending tasks.")
 
+        # Weather
+        try:
+            from connectors.weather import get_weather_summary
+            w = get_weather_summary()
+            if w:
+                lines.append(f"\nWeather: {w}")
+        except Exception:
+            pass
+
         cpu = psutil.cpu_percent(interval=1)
         ram = psutil.virtual_memory().percent
         lines.append(f"\nSystem: CPU {cpu:.0f}% | RAM {ram:.0f}%")
