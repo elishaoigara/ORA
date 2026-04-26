@@ -1,15 +1,18 @@
-﻿import time
+﻿"""
+ORA Notifier — Phase 3: Dual-channel (Telegram + FCM push)
+Render free-tier safe — no new threads, FCM is a plain HTTP call.
+"""
+
+import time
 from datetime import datetime
-from telegram_bot import notify
+from telegram_bot import notify as telegram_notify
 
-# Track what was already sent to avoid spam
-_sent_today = set()
-_last_check = 0
-CHECK_INTERVAL = 300  # check every 5 minutes
+_sent_today: set = set()
+_last_check: float = 0
+CHECK_INTERVAL = 300
 
 
-def should_send(key):
-    """Only send each notification type once per day."""
+def should_send(key: str) -> bool:
     today = datetime.now().date().isoformat()
     full_key = f"{today}:{key}"
     if full_key in _sent_today:
@@ -18,11 +21,22 @@ def should_send(key):
     return True
 
 
-def run_autonomous_notifications():
-    """
-    ORA decides on its own what to send you.
-    Runs every 5 minutes inside the scheduler.
-    """
+def dual_notify(title: str, body: str, is_alert: bool = False) -> None:
+    """Send via Telegram AND FCM. Each channel is isolated — one failing won't affect the other."""
+    try:
+        full_msg = f"*{title}*\n{body}" if title else body
+        telegram_notify(full_msg, is_alert=is_alert)
+    except Exception as e:
+        print(f"[NOTIFIER] Telegram error: {e}")
+
+    try:
+        from fcm import send_push
+        send_push(title=title, body=body, is_alert=is_alert)
+    except Exception as e:
+        print(f"[NOTIFIER] FCM error: {e}")
+
+
+def run_autonomous_notifications() -> None:
     global _last_check
 
     now = time.time()
@@ -30,48 +44,56 @@ def run_autonomous_notifications():
         return
     _last_check = now
 
-    from intelligence.prediction_engine import predict_needs
-    from database import get_tasks
-    from decision_engine import decide
-    import psutil
-
-    predictions = predict_needs()
+    try:
+        from intelligence.prediction_engine import predict_needs
+        predictions = predict_needs()
+    except Exception as e:
+        print(f"[NOTIFIER] predict_needs failed: {e}")
+        return
 
     for pred in predictions:
-        ptype = pred["type"]
-        msg = pred["message"]
-        confidence = pred["confidence"]
-        action = pred["action"]
+        ptype      = pred.get("type", "unknown")
+        msg        = pred.get("message", "")
+        confidence = pred.get("confidence", 0)
+        action     = pred.get("action", "notify")
 
-        if confidence < 0.7:
+        if confidence < 0.7 or not msg:
             continue
 
-        if action == "alert":
-            if should_send(ptype):
-                notify(f"ORA ALERT: {msg}", is_alert=True)
-                print(f"[Notifier] ALERT sent: {ptype}")
+        if action == "alert" and should_send(ptype):
+            dual_notify(title="ORA Alert", body=msg, is_alert=True)
+            print(f"[NOTIFIER] ALERT sent (dual): {ptype}")
 
-        elif action == "notify":
-            if should_send(ptype):
-                notify(msg)
-                print(f"[Notifier] Notify sent: {ptype}")
+        elif action == "notify" and should_send(ptype):
+            dual_notify(title="ORA", body=msg, is_alert=False)
+            print(f"[NOTIFIER] Notify sent (dual): {ptype}")
 
-        elif action == "brief":
-            if should_send(ptype):
-                tasks = get_tasks("pending")
-                brief = f"Good morning, Elisha.\n\n"
-                if tasks:
-                    brief += f"You have {len(tasks)} pending tasks:\n"
-                    for t in tasks[:3]:
-                        due = f" (due {t[4][11:16]})" if t[4] else ""
-                        brief += f"- {t[1]}{due}\n"
-                else:
-                    brief += "No pending tasks.\n"
+        elif action == "brief" and should_send(ptype):
+            _send_morning_brief()
 
-                # System status
-                cpu = psutil.cpu_percent(interval=1)
-                ram = psutil.virtual_memory().percent
-                brief += f"\nSystem: CPU {cpu}% | RAM {ram}%"
 
-                notify(brief)
-                print("[Notifier] Morning brief sent")
+def _send_morning_brief() -> None:
+    try:
+        from database import get_tasks
+        import psutil
+
+        tasks = get_tasks("pending")
+        lines = ["Good morning, Elisha.\n"]
+
+        if tasks:
+            lines.append(f"You have {len(tasks)} pending task(s):")
+            for t in tasks[:3]:
+                due = f" (due {t[4][11:16]})" if t[4] else ""
+                lines.append(f"• {t[1]}{due}")
+        else:
+            lines.append("No pending tasks.")
+
+        cpu = psutil.cpu_percent(interval=1)
+        ram = psutil.virtual_memory().percent
+        lines.append(f"\nSystem: CPU {cpu:.0f}% | RAM {ram:.0f}%")
+
+        dual_notify(title="ORA Morning Brief", body="\n".join(lines))
+        print("[NOTIFIER] Morning brief sent (dual)")
+
+    except Exception as e:
+        print(f"[NOTIFIER] Morning brief error: {e}")

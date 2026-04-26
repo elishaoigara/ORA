@@ -33,6 +33,7 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('memory.profile', fromlist=['init_profile']).init_profile(), "Profile"),
         (lambda: __import__('knowledge.embeddings', fromlist=['init_vector_db']).init_vector_db(), "Knowledge DB"),
         (lambda: __import__('intelligence.goals_engine', fromlist=['init_goals_table']).init_goals_table(), "Goals"),
+        (lambda: __import__('fcm').init_fcm_table(), "FCM Tokens"),
     ]:
         try:
             fn()
@@ -41,8 +42,6 @@ async def lifespan(app: FastAPI):
             print(f"[ORA] {label} init error")
             print(traceback.format_exc())
 
-    # ── Scheduler — single shared APScheduler instance ──────────
-    # All jobs (core + intelligence + agent loop) registered on ONE scheduler.
     try:
         from ora_scheduler import start_scheduler
         from agent import run_agent_cycle
@@ -54,27 +53,21 @@ async def lifespan(app: FastAPI):
         from intelligence.notifier import run_autonomous_notifications
 
         start_scheduler([
-            # ── Agent loop — the brain (every 5 min) ──────────
-            {"trigger": "interval", "minutes": 5,   "fn": run_agent_cycle,              "name": "agent_loop"},
-
-            # ── Core scheduled jobs (cron) ─────────────────────
-            {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": run_predictions,    "name": "morning_preds"},
-            {"trigger": "cron",     "hour": 18, "minute": 0,  "fn": run_predictions,    "name": "evening_preds"},
+            {"trigger": "interval", "minutes": 5,   "fn": run_agent_cycle,             "name": "agent_loop"},
+            {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": run_predictions,   "name": "morning_preds"},
+            {"trigger": "cron",     "hour": 18, "minute": 0,  "fn": run_predictions,   "name": "evening_preds"},
             {"trigger": "cron",     "hour": 2,  "minute": 30, "fn": run_pattern_analysis, "name": "daily_patterns"},
-            {"trigger": "cron",     "hour": 8,  "minute": 30, "fn": run_goal_checkin,   "name": "weekly_goals"},
+            {"trigger": "cron",     "hour": 8,  "minute": 30, "fn": run_goal_checkin,  "name": "weekly_goals"},
             {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": generate_daily_brief, "name": "daily_brief"},
-
-            # ── Intelligence jobs (interval) ───────────────────
-            {"trigger": "interval", "hours": 1,    "fn": run_pattern_analysis,          "name": "pattern_analysis"},
-            {"trigger": "interval", "minutes": 10, "fn": run_proactive_checks,          "name": "proactive_checks"},
-            {"trigger": "interval", "minutes": 5,  "fn": run_autonomous_notifications,  "name": "auto_notify"},
+            {"trigger": "interval", "hours": 1,    "fn": run_pattern_analysis,         "name": "pattern_analysis"},
+            {"trigger": "interval", "minutes": 10, "fn": run_proactive_checks,         "name": "proactive_checks"},
+            {"trigger": "interval", "minutes": 5,  "fn": run_autonomous_notifications, "name": "auto_notify"},
         ])
         print("[ORA] Scheduler started")
     except Exception:
         print("[SCHEDULER ERROR]")
         print(traceback.format_exc())
 
-    # ── Telegram — single poll loop with capped exponential backoff ──
     try:
         from config import TELEGRAM_BOT_TOKEN
         if TELEGRAM_BOT_TOKEN:
@@ -95,11 +88,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         print(traceback.format_exc())
 
-    # ── Keep-alive: intentionally REMOVED ───────────────────────
-    # Self-pinging does NOT prevent Render free-tier spin-down.
-    # Use an external uptime monitor (UptimeRobot / cron-job.org)
-    # to ping /api/health every 14 minutes from outside.
-
     yield
     print("[ORA] Shutdown")
 
@@ -109,6 +97,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 from api_calendar_routes import router as calendar_router
 app.include_router(calendar_router)
+
 
 # ── Health ────────────────────────────────────────────────────
 @app.api_route("/api/health", methods=["GET", "HEAD"])
@@ -134,24 +123,20 @@ def cache_stats():
         return {}
 
 
-# ── Agent (Phase 1) ───────────────────────────────────────────
+# ── Agent ─────────────────────────────────────────────────────
 @app.get("/api/agent/status")
 def agent_status():
-    """
-    Returns the current context snapshot so the dashboard
-    can show what ORA sees right now without waiting for the next cycle.
-    """
     try:
         from agent import gather_context, decide
         ctx     = gather_context()
         actions = decide(ctx)
         return {
-            "timestamp":    ctx.get("timestamp"),
-            "tasks":        len(ctx.get("tasks", [])),
-            "overdue":      len(ctx.get("overdue", [])),
-            "goals":        len(ctx.get("goals", [])),
-            "spend_alert":  ctx.get("spend_alert"),
-            "predictions":  len(ctx.get("predictions", [])),
+            "timestamp":       ctx.get("timestamp"),
+            "tasks":           len(ctx.get("tasks", [])),
+            "overdue":         len(ctx.get("overdue", [])),
+            "goals":           len(ctx.get("goals", [])),
+            "spend_alert":     ctx.get("spend_alert"),
+            "predictions":     len(ctx.get("predictions", [])),
             "pending_actions": [
                 {"type": a["type"], "key": a.get("key"), "message": a["message"]}
                 for a in actions
@@ -163,7 +148,6 @@ def agent_status():
 
 @app.post("/api/agent/run")
 def agent_run_now():
-    """Manually trigger one agent cycle (useful for testing)."""
     try:
         from agent import run_agent_cycle
         run_agent_cycle()
@@ -191,7 +175,6 @@ async def chat(payload: ChatRequest):
         from brain.router import classify, model_for
         import cache
 
-        # 1. Intent parser — zero API cost
         try:
             from intent_parser import parse_intent, execute_intent
             intent = parse_intent(text)
@@ -204,7 +187,6 @@ async def chat(payload: ChatRequest):
         except Exception as e:
             print(f"[INTENT] {e}")
 
-        # 2. Classify + KB
         q_type = classify(text)
         knowledge_ctx = ""
         try:
@@ -213,7 +195,6 @@ async def chat(payload: ChatRequest):
         except Exception:
             pass
 
-        # 3. Cache check
         if q_type != "document":
             cached = cache.get(text, knowledge_ctx)
             if cached:
@@ -221,7 +202,6 @@ async def chat(payload: ChatRequest):
                 save_conversation("assistant", cached)
                 return {"reply": cached, "cached": True, "query_type": q_type}
 
-        # 4. Build prompt — now includes agent context
         system_prompt = build_system_prompt(query=text)
         if knowledge_ctx:
             system_prompt += f"\n\n## KNOWLEDGE BASE\n{knowledge_ctx[:700]}"
@@ -241,7 +221,6 @@ async def chat(payload: ChatRequest):
             messages.append({"role": "user" if role == "user" else "assistant", "content": content[:200]})
         messages.append({"role": "user", "content": text})
 
-        # 5. Model selection
         model, max_tok = model_for(q_type)
         try:
             response = client.chat.completions.create(model=model, messages=messages,
@@ -349,8 +328,8 @@ def _score_reason(task):
     if due_at:
         try:
             diff = (datetime.fromisoformat(due_at) - datetime.now()).total_seconds()
-            if diff < 0: parts.append("overdue")
-            elif diff < 3600: parts.append("due within 1h")
+            if diff < 0:       parts.append("overdue")
+            elif diff < 3600:  parts.append("due within 1h")
             elif diff < 86400: parts.append("due today")
         except Exception:
             pass
@@ -649,3 +628,74 @@ def _safe_filename(name: str) -> str:
     name = os.path.basename(name)
     name = re.sub(r'[^\w.\-]', '_', name)
     return name[:120]
+
+
+# ═══════════════════════════════════════════════════════════════
+# PHASE 3 — Push notification endpoints
+# ═══════════════════════════════════════════════════════════════
+
+class PushTokenPayload(BaseModel):
+    token: str
+    platform: Optional[str] = "expo"
+
+
+class PushTestPayload(BaseModel):
+    token: Optional[str] = None
+    title: Optional[str] = "ORA Test"
+    body:  Optional[str] = "Push notifications are working ✓"
+
+
+@app.post("/api/push/register")
+async def push_register(payload: PushTokenPayload):
+    """Register an Expo push token. Idempotent — safe to call every app launch."""
+    try:
+        from fcm import save_token
+        token = payload.token.strip()
+        if not token:
+            raise HTTPException(400, "Token cannot be empty")
+        save_token(token, payload.platform or "expo")
+        return {"ok": True, "message": "Token registered"}
+    except HTTPException:
+        raise
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Token registration failed")
+
+
+@app.delete("/api/push/register")
+async def push_unregister(payload: PushTokenPayload):
+    """Remove a push token (user disables notifications)."""
+    try:
+        from fcm import remove_token
+        remove_token(payload.token.strip())
+        return {"ok": True}
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Token removal failed")
+
+
+@app.get("/api/push/tokens")
+async def push_tokens_count():
+    """Return count of registered tokens only — no raw tokens exposed."""
+    try:
+        from fcm import get_tokens
+        return {"count": len(get_tokens())}
+    except Exception:
+        return {"count": 0}
+
+
+@app.post("/api/push/test")
+async def push_test(payload: PushTestPayload):
+    """Send a test push. If token provided, send only to that device; else broadcast."""
+    try:
+        from fcm import send_push, send_push_to_token
+        title = payload.title or "ORA Test"
+        body  = payload.body  or "Push notifications are working ✓"
+        if payload.token:
+            sent = send_push_to_token(payload.token.strip(), title, body)
+        else:
+            sent = send_push(title=title, body=body)
+        return {"ok": sent, "message": "Dispatched" if sent else "No tokens registered"}
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Push test failed")
