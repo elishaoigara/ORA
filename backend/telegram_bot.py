@@ -1,21 +1,21 @@
-"""
-ORA Telegram Bot — Communication Hub
+﻿"""
+ORA Telegram Bot â€” Communication Hub
 Two-way: ORA reaches you AND you control ORA via Telegram.
 Render free tier safe: long-poll with 15s timeout, no webhooks needed.
 
 Commands you can send:
-  /start         — welcome + command list
-  /brief         — morning briefing now
-  /tasks         — list pending tasks
-  /done <id>     — complete a task
-  /goals         — list active goals
-  /goal <text>   — add a new goal
-  /spend         — today's M-Pesa summary
-  /status        — system health
-  /predict       — what ORA thinks you need right now
-  /remind <text> — set a quick reminder (stored as high-priority task)
+  /start         â€” welcome + command list
+  /brief         â€” morning briefing now
+  /tasks         â€” list pending tasks
+  /done <id>     â€” complete a task
+  /goals         â€” list active goals
+  /goal <text>   â€” add a new goal
+  /spend         â€” today's M-Pesa summary
+  /status        â€” system health
+  /predict       â€” what ORA thinks you need right now
+  /remind <text> â€” set a quick reminder (stored as high-priority task)
 
-Any other text — ORA answers it (full chat with KB + router)
+Any other text â€” ORA answers it (full chat with KB + router)
 """
 
 print("[TELEGRAM] Loading bot...")
@@ -39,7 +39,7 @@ ALLOWED_CHAT_ID = int(TELEGRAM_CHAT_ID) if TELEGRAM_CHAT_ID else None
 print(f"[TELEGRAM] Enabled: {TELEGRAM_ENABLED}")
 print(f"[TELEGRAM] Chat ID: {ALLOWED_CHAT_ID}")
 
-# ── Simple response cache (avoid duplicate Groq calls) ────────
+# â”€â”€ Simple response cache (avoid duplicate Groq calls) â”€â”€â”€â”€â”€â”€â”€â”€
 _CACHE: dict = {}
 _CACHE_TTL = 180
 
@@ -58,7 +58,7 @@ def _set_cache(key, value):
     _CACHE[key] = {"v": value, "t": time.time()}
 
 
-# ── Telegram API helpers ──────────────────────────────────────
+# â”€â”€ Telegram API helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def tg_send(chat_id, text):
     if not TELEGRAM_ENABLED: return None
     # Telegram message limit is 4096 chars
@@ -99,26 +99,26 @@ def tg_get_updates(offset=None):
 def notify(text: str, is_alert: bool = False):
     """Send a proactive message to the user. Called by other modules."""
     if not ALLOWED_CHAT_ID: return
-    prefix = "🔴 *ALERT*\n" if is_alert else "💡 "
+    prefix = "ðŸ”´ *ALERT*\n" if is_alert else "ðŸ’¡ "
     tg_send(ALLOWED_CHAT_ID, f"{prefix}{text}")
 
 
-# ── Command handlers ──────────────────────────────────────────
+# â”€â”€ Command handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _cmd_start(chat_id):
     msg = (
-        "*ORA — Autonomous Assistant*\n\n"
+        "*ORA â€” Autonomous Assistant*\n\n"
         "I monitor your tasks, goals, spending and can answer questions.\n\n"
         "*Commands:*\n"
-        "`/brief` — morning briefing\n"
-        "`/tasks` — pending tasks\n"
-        "`/done <id>` — complete task by ID\n"
-        "`/goals` — active goals\n"
-        "`/goal <text>` — add a goal\n"
-        "`/spend` — M-Pesa summary\n"
-        "`/status` — system health\n"
-        "`/predict` — what I think you need now\n"
-        "`/remind <text>` — set a reminder\n\n"
-        "Or just type anything — I'll answer."
+        "`/brief` â€” morning briefing\n"
+        "`/tasks` â€” pending tasks\n"
+        "`/done <id>` â€” complete task by ID\n"
+        "`/goals` â€” active goals\n"
+        "`/goal <text>` â€” add a goal\n"
+        "`/spend` â€” M-Pesa summary\n"
+        "`/status` â€” system health\n"
+        "`/predict` â€” what I think you need now\n"
+        "`/remind <text>` â€” set a reminder\n\n"
+        "Or just type anything â€” I'll answer."
     )
     tg_send(chat_id, msg)
 
@@ -128,12 +128,12 @@ def _cmd_tasks(chat_id):
         from database import get_tasks
         tasks = get_tasks("pending")
         if not tasks:
-            tg_send(chat_id, "✅ No pending tasks.")
+            tg_send(chat_id, "âœ… No pending tasks.")
             return
         lines = [f"*Pending tasks ({len(tasks)}):*"]
         for t in tasks[:10]:
-            due = f" — due {t[4][:10]}" if t[4] else ""
-            pri = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(t[2], "•")
+            due = f" â€” due {t[4][:10]}" if t[4] else ""
+            pri = {"high": "ðŸ”´", "medium": "ðŸŸ¡", "low": "ðŸŸ¢"}.get(t[2], "â€¢")
             lines.append(f"{pri} `[{t[0]}]` {t[1]}{due}")
         tg_send(chat_id, "\n".join(lines))
     except Exception as e:
@@ -145,9 +145,9 @@ def _cmd_done(chat_id, args: str):
         task_id = int(args.strip())
         from database import complete_task, get_tasks
         complete_task(task_id)
-        tg_send(chat_id, f"✅ Task {task_id} marked complete.")
+        tg_send(chat_id, f"âœ… Task {task_id} marked complete.")
     except ValueError:
-        tg_send(chat_id, "Usage: `/done <task_id>` — get IDs from `/tasks`")
+        tg_send(chat_id, "Usage: `/done <task_id>` â€” get IDs from `/tasks`")
     except Exception as e:
         tg_send(chat_id, f"Error: {e}")
 
@@ -161,8 +161,8 @@ def _cmd_goals(chat_id):
             return
         lines = [f"*Active goals ({len(goals)}):*"]
         for g in goals:
-            bar = "█" * (g["progress"] // 10) + "░" * (10 - g["progress"] // 10)
-            due = f" — due {g['due_at'][:10]}" if g.get("due_at") else ""
+            bar = "â–ˆ" * (g["progress"] // 10) + "â–‘" * (10 - g["progress"] // 10)
+            due = f" â€” due {g['due_at'][:10]}" if g.get("due_at") else ""
             lines.append(f"`[{g['id']}]` {g['goal'][:60]}{due}\n  `[{bar}]` {g['progress']}%")
         tg_send(chat_id, "\n\n".join(lines))
     except Exception as e:
@@ -176,7 +176,7 @@ def _cmd_add_goal(chat_id, args: str):
     try:
         from intelligence.goals_engine import add_goal
         gid = add_goal(args.strip())
-        tg_send(chat_id, f"🎯 Goal added (ID {gid}): _{args.strip()[:80]}_")
+        tg_send(chat_id, f"ðŸŽ¯ Goal added (ID {gid}): _{args.strip()[:80]}_")
     except Exception as e:
         tg_send(chat_id, f"Error: {e}")
 
@@ -193,7 +193,7 @@ def _cmd_spend(chat_id):
             lines.append(f"Today: *KES {today:,.0f}*")
         if avg is not None:
             diff = float(today) - float(avg) if today is not None else 0.0  # type: ignore[arg-type]
-            arrow = "↑" if diff > 0 else "↓"
+            arrow = "â†‘" if diff > 0 else "â†“"
             lines.append(f"Daily avg: KES {avg:,.0f} ({arrow} {abs(diff):,.0f})")
 
         if recent:
@@ -201,7 +201,7 @@ def _cmd_spend(chat_id):
             for tx in recent[:5]:
                 amount = tx.get("amount", 0)
                 desc = tx.get("description", "")[:40]
-                lines.append(f"• KES {amount:,.0f} — {desc}")
+                lines.append(f"â€¢ KES {amount:,.0f} â€” {desc}")
 
         tg_send(chat_id, "\n".join(lines))
     except Exception as e:
@@ -216,14 +216,14 @@ def _cmd_status(chat_id):
         now = datetime.now().strftime("%d %b %H:%M")
 
         # Health indicators
-        cpu_icon = "🔴" if cpu > 80 else "🟡" if cpu > 50 else "🟢"
-        ram_icon = "🔴" if ram > 85 else "🟡" if ram > 65 else "🟢"
+        cpu_icon = "ðŸ”´" if cpu > 80 else "ðŸŸ¡" if cpu > 50 else "ðŸŸ¢"
+        ram_icon = "ðŸ”´" if ram > 85 else "ðŸŸ¡" if ram > 65 else "ðŸŸ¢"
 
         msg = (
-            f"*ORA System Status* — {now}\n\n"
+            f"*ORA System Status* â€” {now}\n\n"
             f"{cpu_icon} CPU: {cpu:.0f}%\n"
             f"{ram_icon} RAM: {ram:.0f}%\n"
-            f"🟢 Backend: online\n"
+            f"ðŸŸ¢ Backend: online\n"
         )
         tg_send(chat_id, msg)
     except Exception as e:
@@ -239,7 +239,7 @@ def _cmd_predict(chat_id):
             return
         lines = ["*What ORA sees right now:*"]
         for p in preds[:4]:
-            icon = "🔴" if p["confidence"] >= 0.9 else "🟡" if p["confidence"] >= 0.75 else "💭"
+            icon = "ðŸ”´" if p["confidence"] >= 0.9 else "ðŸŸ¡" if p["confidence"] >= 0.75 else "ðŸ’­"
             lines.append(f"{icon} {p['message']}")
         tg_send(chat_id, "\n".join(lines))
     except Exception as e:
@@ -253,7 +253,7 @@ def _cmd_remind(chat_id, args: str):
     try:
         from database import add_task
         add_task(args.strip(), "high", None)
-        tg_send(chat_id, f"⏰ Reminder set: _{args.strip()[:80]}_")
+        tg_send(chat_id, f"â° Reminder set: _{args.strip()[:80]}_")
     except Exception as e:
         tg_send(chat_id, f"Error: {e}")
 
@@ -267,7 +267,7 @@ def _cmd_brief(chat_id):
         tg_send(chat_id, f"Error: {e}")
 
 
-# ── Chat handler (free-form text → Groq) ─────────────────────
+# â”€â”€ Chat handler (free-form text â†’ Groq) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _handle_chat(chat_id, text: str):
     cached = _get_cache(text)
     if cached:
@@ -275,7 +275,7 @@ def _handle_chat(chat_id, text: str):
         return
 
     # Show typing indicator
-    mid = tg_send(chat_id, "⋯")
+    mid = tg_send(chat_id, "â‹¯")
 
     try:
         # Intent parser first (free)
@@ -338,7 +338,7 @@ def _handle_chat(chat_id, text: str):
         print("[TG CHAT ERROR]", traceback.format_exc())
 
 
-# ── Message dispatcher ────────────────────────────────────────
+# â”€â”€ Message dispatcher â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def handle_message(chat_id: int, text: str):
     if not text:
         return
@@ -378,7 +378,7 @@ def handle_message(chat_id: int, text: str):
             tg_send(chat_id, "ORA: Groq API key not configured.")
 
 
-# ── Main poll loop ────────────────────────────────────────────
+# â”€â”€ Main poll loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def run_telegram_bot():
     """
     Long-poll loop. Runs in a daemon thread from api.py lifespan.
@@ -401,3 +401,4 @@ def run_telegram_bot():
         except Exception as e:
             print(f"[TELEGRAM LOOP ERROR] {e}")
             time.sleep(5)
+
