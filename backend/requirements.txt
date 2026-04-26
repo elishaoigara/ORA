@@ -11,3 +11,6 @@ python-docx==1.1.2
 apscheduler==3.10.4
 requests==2.32.3
 gtts==2.5.1
+# google-auth handles token refresh automatically
+google-auth==2.29.0
+google-auth-oauthlib==1.2.0

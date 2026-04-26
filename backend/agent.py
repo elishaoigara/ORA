@@ -1,14 +1,13 @@
 """
-ORA Agent — Unified Autonomous Loop (Phase 1)
+ORA Agent — Unified Autonomous Loop (Phase 2: + Google Calendar)
 
-Runs every 5 minutes via the scheduler.
-Cycle: gather_context() → decide() → execute()
+Cycle every 5 minutes: gather_context() → decide() → execute()
 
 Design rules:
-- Rules first, AI only when truly needed (see decide())
-- Every failure is isolated — one bad source never kills the loop
-- All Telegram notifications go through telegram_bot.notify()
-- No infinite loops here — APScheduler owns the timing
+- Rules first, AI only when truly needed
+- Every source is isolated — one broken source never kills the loop
+- Deduplication via agent_guard.py prevents notification spam
+- Calendar context feeds both decisions AND the AI system prompt
 """
 
 from __future__ import annotations
@@ -17,6 +16,9 @@ import traceback
 from datetime import datetime
 from typing import Any
 
+from agent_guard import can_fire, mark_fired
+
+
 # ─────────────────────────────────────────────────────────────
 # 1. GATHER CONTEXT
 # ─────────────────────────────────────────────────────────────
@@ -24,18 +26,18 @@ from typing import Any
 def gather_context() -> dict[str, Any]:
     """
     Pull everything ORA knows right now into a single dict.
-    Each source is wrapped individually — a broken source returns
+    Each source is individually wrapped — a broken source returns
     a safe empty value rather than crashing the whole loop.
     """
     ctx: dict[str, Any] = {
         "timestamp": datetime.now().isoformat(),
-        "hour": datetime.now().hour,
+        "hour":      datetime.now().hour,
     }
 
-    # Tasks (pending only, top 10 by priority)
+    # Tasks (pending, top 10 by priority score)
     try:
         from intelligence.priority_engine import get_prioritized_tasks
-        ctx["tasks"] = get_prioritized_tasks()        # list of tuples
+        ctx["tasks"] = get_prioritized_tasks()
     except Exception:
         print("[AGENT] gather_context: tasks failed")
         print(traceback.format_exc())
@@ -45,9 +47,8 @@ def gather_context() -> dict[str, Any]:
     try:
         from database import get_tasks
         now = datetime.now()
-        all_pending = get_tasks("pending")
         ctx["overdue"] = [
-            t for t in all_pending
+            t for t in get_tasks("pending")
             if t[4] and _is_overdue(t[4], now)
         ]
     except Exception:
@@ -57,7 +58,7 @@ def gather_context() -> dict[str, Any]:
     # Active goals
     try:
         from intelligence.goals_engine import get_goals
-        ctx["goals"] = get_goals("active")            # list of dicts
+        ctx["goals"] = get_goals("active")
     except Exception:
         print("[AGENT] gather_context: goals failed")
         ctx["goals"] = []
@@ -65,7 +66,7 @@ def gather_context() -> dict[str, Any]:
     # Recent memory events (last 10)
     try:
         from memory.events import get_recent_events
-        ctx["memory"] = get_recent_events(limit=10)   # list of tuples
+        ctx["memory"] = get_recent_events(limit=10)
     except Exception:
         print("[AGENT] gather_context: memory failed")
         ctx["memory"] = []
@@ -74,7 +75,7 @@ def gather_context() -> dict[str, Any]:
     try:
         from database import get_recent_alerts
         all_alerts = get_recent_alerts(limit=20)
-        ctx["alerts"] = [a for a in all_alerts if not a[5]]  # a[5] = acknowledged
+        ctx["alerts"] = [a for a in all_alerts if not a[5]]
     except Exception:
         print("[AGENT] gather_context: alerts failed")
         ctx["alerts"] = []
@@ -82,24 +83,35 @@ def gather_context() -> dict[str, Any]:
     # M-Pesa spend check
     try:
         from mpesa_engine import check_spend_alert
-        ctx["spend_alert"] = check_spend_alert()      # dict or None
+        ctx["spend_alert"] = check_spend_alert()
     except Exception:
         ctx["spend_alert"] = None
 
     # Predictions from prediction engine
     try:
         from intelligence.prediction_engine import predict_needs
-        ctx["predictions"] = predict_needs()          # list of dicts
+        ctx["predictions"] = predict_needs()
     except Exception:
         print("[AGENT] gather_context: predictions failed")
         ctx["predictions"] = []
 
-    # User profile (name, timezone, wake/sleep times)
+    # User profile
     try:
         from memory.profile import get_all_profile
-        ctx["profile"] = get_all_profile()            # dict
+        ctx["profile"] = get_all_profile()
     except Exception:
         ctx["profile"] = {}
+
+    # ── Phase 2: Google Calendar ─────────────────────────────
+    try:
+        from connectors.calendar import get_events_today, get_imminent_events
+        ctx["calendar_today"]    = get_events_today()       # all events in next 24h
+        ctx["calendar_imminent"] = get_imminent_events(30)  # events in next 30 min
+    except Exception:
+        print("[AGENT] gather_context: calendar failed")
+        print(traceback.format_exc())
+        ctx["calendar_today"]    = []
+        ctx["calendar_imminent"] = []
 
     return ctx
 
@@ -111,19 +123,15 @@ def gather_context() -> dict[str, Any]:
 def decide(ctx: dict[str, Any]) -> list[dict]:
     """
     Rule-based decision engine. Returns a list of actions to execute.
-    Ordered by priority: spend alerts → overdue tasks → high-priority
-    tasks → predictions → goal nudges.
-
-    AI is NOT called here. Rules are fast, free, and predictable.
-    AI is reserved for the /api/chat endpoint where the user
-    explicitly asks a question.
+    All deduplication is handled via agent_guard.can_fire().
+    AI is NOT called here.
     """
     actions: list[dict] = []
     now_hour = ctx.get("hour", datetime.now().hour)
 
     # ── Rule 1: Spend spike alert ────────────────────────────
     spend_alert = ctx.get("spend_alert")
-    if spend_alert:
+    if spend_alert and can_fire("spend_spike"):
         actions.append({
             "type":     "alert",
             "key":      "spend_spike",
@@ -133,7 +141,7 @@ def decide(ctx: dict[str, Any]) -> list[dict]:
 
     # ── Rule 2: Overdue tasks ────────────────────────────────
     overdue = ctx.get("overdue", [])
-    if overdue:
+    if overdue and can_fire("overdue_tasks"):
         titles = ", ".join(t[1][:40] for t in overdue[:3])
         suffix = f" (+{len(overdue) - 3} more)" if len(overdue) > 3 else ""
         actions.append({
@@ -143,47 +151,85 @@ def decide(ctx: dict[str, Any]) -> list[dict]:
             "severity": "high",
         })
 
-    # ── Rule 3: High-priority task nudge (once per morning) ──
-    if 8 <= now_hour <= 9:
-        tasks = ctx.get("tasks", [])
-        if tasks:
-            top = tasks[0]
-            actions.append({
-                "type":    "notify",
-                "key":     "morning_top_task",
-                "message": f"🎯 Top priority today: {top[1][:60]}",
-            })
+    # ── Rule 3: Morning top task (8–9 AM) ───────────────────
+    tasks = ctx.get("tasks", [])
+    if 8 <= now_hour <= 9 and tasks and can_fire("morning_top_task"):
+        top = tasks[0]
+        actions.append({
+            "type":    "notify",
+            "key":     "morning_top_task",
+            "message": f"🎯 Top priority today: {top[1][:60]}",
+        })
 
     # ── Rule 4: High-confidence predictions ─────────────────
     for pred in ctx.get("predictions", []):
-        if pred.get("confidence", 0) >= 0.85:
+        if pred.get("confidence", 0) >= 0.85 and can_fire(pred["type"]):
             actions.append({
-                "type":    "alert" if pred["action"] == "alert" else "notify",
-                "key":     pred["type"],
-                "message": pred["message"],
+                "type":     "alert" if pred["action"] == "alert" else "notify",
+                "key":      pred["type"],
+                "message":  pred["message"],
                 "severity": "high" if pred["action"] == "alert" else "medium",
             })
 
-    # ── Rule 5: Too many pending tasks warning ───────────────
-    tasks = ctx.get("tasks", [])
-    if len(tasks) >= 8:
+    # ── Rule 5: Task backlog warning ────────────────────────
+    if len(tasks) >= 8 and can_fire("task_backlog"):
         actions.append({
             "type":    "notify",
             "key":     "task_backlog",
             "message": f"📋 You have {len(tasks)} pending tasks. Consider reviewing your list.",
         })
 
-    # ── Rule 6: Goal progress nudge (once per afternoon) ────
+    # ── Rule 6: Afternoon goal nudge (2–3 PM) ───────────────
     if 14 <= now_hour <= 15:
         goals = ctx.get("goals", [])
         stalled = [g for g in goals if g.get("progress", 0) < 10 and g.get("due_at")]
         if stalled:
             g = stalled[0]
-            due = g["due_at"][:10] if g.get("due_at") else "no deadline"
+            key = f"goal_stalled_{g['id']}"
+            if can_fire(key):
+                due = g["due_at"][:10] if g.get("due_at") else "no deadline"
+                actions.append({
+                    "type":    "notify",
+                    "key":     key,
+                    "message": f"🎯 Goal at 0% progress: '{g['goal'][:60]}' (due {due})",
+                })
+
+    # ── Rule 7 (Phase 2): Imminent meeting reminders ────────
+    for event in ctx.get("calendar_imminent", []):
+        mins    = event.get("minutes_until")
+        title   = event.get("title", "Meeting")
+        ev_id   = event.get("id", title)
+        key     = f"meeting_{ev_id}"
+
+        if mins is None:
+            continue
+
+        if can_fire(key):
+            loc = f" @ {event['location']}" if event.get("location") else ""
+            if mins <= 5:
+                msg = f"🔔 Starting NOW: {title}{loc}"
+            elif mins <= 15:
+                msg = f"🔔 {title}{loc} in {mins} minutes"
+            else:
+                msg = f"📅 Coming up: {title}{loc} in {mins} minutes"
+
             actions.append({
                 "type":    "notify",
-                "key":     f"goal_stalled_{g['id']}",
-                "message": f"🎯 Goal at 0% progress: '{g['goal'][:60]}' (due {due})",
+                "key":     key,
+                "message": msg,
+            })
+
+    # ── Rule 8 (Phase 2): Daily calendar summary (8 AM) ────
+    if now_hour == 8:
+        events_today = ctx.get("calendar_today", [])
+        if events_today and can_fire("calendar_daily_summary"):
+            count = len(events_today)
+            titles = ", ".join(e["title"][:30] for e in events_today[:3])
+            suffix = f" and {count - 3} more" if count > 3 else ""
+            actions.append({
+                "type":    "notify",
+                "key":     "calendar_daily_summary",
+                "message": f"📅 {count} event{'s' if count > 1 else ''} today: {titles}{suffix}",
             })
 
     return actions
@@ -195,13 +241,8 @@ def decide(ctx: dict[str, Any]) -> list[dict]:
 
 def execute(actions: list[dict]) -> None:
     """
-    Execute the list of actions produced by decide().
-    Each action is isolated — one failure doesn't stop the rest.
-
-    Action types:
-      "alert"  → log to DB + Telegram with alert prefix
-      "notify" → Telegram notify only (no DB log)
-      "log"    → DB only, no Telegram
+    Execute the list of actions from decide().
+    Marks each key as fired in agent_guard after successful execution.
     """
     if not actions:
         return
@@ -216,7 +257,6 @@ def execute(actions: list[dict]) -> None:
                 continue
 
             if atype == "alert":
-                # Log to DB + notify via Telegram
                 try:
                     from database import log_alert
                     from telegram_bot import notify
@@ -226,6 +266,7 @@ def execute(actions: list[dict]) -> None:
                         severity=action.get("severity", "medium"),
                     )
                     notify(message, is_alert=True)
+                    mark_fired(key)
                 except Exception:
                     print(f"[AGENT] execute alert failed: {key}")
                     print(traceback.format_exc())
@@ -234,6 +275,7 @@ def execute(actions: list[dict]) -> None:
                 try:
                     from telegram_bot import notify
                     notify(message, is_alert=False)
+                    mark_fired(key)
                 except Exception:
                     print(f"[AGENT] execute notify failed: {key}")
                     print(traceback.format_exc())
@@ -246,6 +288,7 @@ def execute(actions: list[dict]) -> None:
                         message=message,
                         severity=action.get("severity", "low"),
                     )
+                    mark_fired(key)
                 except Exception:
                     print(f"[AGENT] execute log failed: {key}")
                     print(traceback.format_exc())
@@ -260,10 +303,6 @@ def execute(actions: list[dict]) -> None:
 # ─────────────────────────────────────────────────────────────
 
 def run_agent_cycle() -> None:
-    """
-    Entry point registered with APScheduler.
-    One full observe → think → act cycle.
-    """
     try:
         now = datetime.now().strftime("%H:%M")
         print(f"[AGENT] Cycle starting at {now}")
@@ -271,12 +310,11 @@ def run_agent_cycle() -> None:
         ctx     = gather_context()
         actions = decide(ctx)
 
-        task_count = len(ctx.get("tasks", []))
-        over_count = len(ctx.get("overdue", []))
-        goal_count = len(ctx.get("goals", []))
         print(
-            f"[AGENT] Context: {task_count} tasks, "
-            f"{over_count} overdue, {goal_count} goals, "
+            f"[AGENT] Context: {len(ctx.get('tasks', []))} tasks, "
+            f"{len(ctx.get('overdue', []))} overdue, "
+            f"{len(ctx.get('goals', []))} goals, "
+            f"{len(ctx.get('calendar_today', []))} calendar events, "
             f"{len(actions)} action(s) queued"
         )
 

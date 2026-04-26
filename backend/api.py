@@ -107,7 +107,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ORA Backend", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
-
+from api_calendar_routes import router as calendar_router
+app.include_router(calendar_router)
 
 # ── Health ────────────────────────────────────────────────────
 @app.api_route("/api/health", methods=["GET", "HEAD"])

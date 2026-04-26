@@ -4,6 +4,7 @@ from memory.preferences import get_preferences
 from database import get_recent_alerts
 from datetime import datetime
 
+
 # =============================
 # CONTEXT BUILDER
 # =============================
@@ -28,6 +29,18 @@ def build_context(query=None):
         "## CURRENT TIME (Nairobi, Kenya)\n"
         f"- {now.strftime('%A, %d %B %Y at %H:%M')}"
     )
+
+    # =================
+    # GOOGLE CALENDAR (Phase 2)
+    # =================
+    try:
+        from connectors.calendar import get_events_today, format_events_for_context
+        events = get_events_today()
+        if events:
+            formatted = format_events_for_context(events)
+            sections.append("## TODAY'S CALENDAR\n" + formatted)
+    except Exception:
+        pass  # Not connected yet — safe to skip
 
     # =================
     # IMPORTANT EVENTS
@@ -78,7 +91,6 @@ def build_context(query=None):
         alerts = get_recent_alerts(limit=5)
         if alerts:
             unacked = [a for a in alerts if not a[5]]
-
             if unacked:
                 sections.append(
                     "## ACTIVE ALERTS\n" +
@@ -88,20 +100,17 @@ def build_context(query=None):
         print(f"[CONTEXT] Alerts error: {e}")
 
     # =================
-    # KNOWLEDGE BASE (REAL RAG UPGRADE)
+    # KNOWLEDGE BASE (RAG)
     # =================
     if query:
         try:
             from knowledge.rag import rag_search
-
             knowledge_context = rag_search(query)
-
             if knowledge_context:
                 sections.append(
                     "## KNOWLEDGE BASE (RAG RETRIEVAL)\n"
                     f"{knowledge_context}"
                 )
-
         except Exception as e:
             print(f"[RAG ERROR] {e}")
 
