@@ -25,6 +25,14 @@ services:
         sync: false
       - key: ORA_DATA_DIR
         value: /opt/ora-data
+      # Render injects this automatically, but declaring it here makes it
+      # explicit and ensures it is visible during the lifespan startup phase.
+      # NOTE: The keep-alive self-ping was removed from api.py because Render
+      # does NOT count loopback/internal requests as external activity.
+      # Use an external uptime monitor (UptimeRobot / cron-job.org) to ping
+      # /api/health every 14 minutes to prevent free-tier spin-down.
+      - key: RENDER_EXTERNAL_URL
+        sync: false
 
   # --- FRONTEND ---
   - type: web

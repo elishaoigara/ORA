@@ -41,51 +41,64 @@ async def lifespan(app: FastAPI):
             print(f"[ORA] {label} init error")
             print(traceback.format_exc())
 
+    # ── Scheduler — single shared APScheduler instance ──────────
+    # All jobs (core + intelligence) are registered on ONE scheduler
+    # to prevent duplicate job execution and SQLite race conditions.
     try:
-        from ora_scheduler import start_scheduler
+        from ora_scheduler import start_scheduler, get_scheduler
         from intelligence.pattern_engine import run_pattern_analysis
         from intelligence.prediction_engine import run_predictions
         from intelligence.goals_engine import run_goal_checkin
+        from intelligence.proactive_engine import run_proactive_checks
+        from intelligence.planner_engine import generate_daily_brief
+        from intelligence.notifier import run_autonomous_notifications
+
         start_scheduler([
-            {"hour": 7,  "minute": 0,  "fn": run_predictions,      "name": "morning_preds"},
-            {"hour": 18, "minute": 0,  "fn": run_predictions,      "name": "evening_preds"},
-            {"hour": 2,  "minute": 30, "fn": run_pattern_analysis,  "name": "daily_patterns"},
-            {"hour": 8,  "minute": 30, "fn": run_goal_checkin,     "name": "weekly_goals"},
+            # Core jobs (cron)
+            {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": run_predictions,           "name": "morning_preds"},
+            {"trigger": "cron",     "hour": 18, "minute": 0,  "fn": run_predictions,           "name": "evening_preds"},
+            {"trigger": "cron",     "hour": 2,  "minute": 30, "fn": run_pattern_analysis,      "name": "daily_patterns"},
+            {"trigger": "cron",     "hour": 8,  "minute": 30, "fn": run_goal_checkin,          "name": "weekly_goals"},
+            {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": generate_daily_brief,      "name": "daily_brief"},
+            # Intelligence jobs (interval)
+            {"trigger": "interval", "hours": 1,    "fn": run_pattern_analysis,          "name": "pattern_analysis"},
+            {"trigger": "interval", "minutes": 10, "fn": run_proactive_checks,          "name": "proactive_checks"},
+            {"trigger": "interval", "minutes": 5,  "fn": run_autonomous_notifications,  "name": "auto_notify"},
         ])
         print("[ORA] Scheduler started")
     except Exception:
         print("[SCHEDULER ERROR]")
         print(traceback.format_exc())
 
+    # ── Telegram — single poll loop with capped exponential backoff ──
+    # run_telegram_bot() already has its own inner while-True poll loop.
+    # The outer wrapper only restarts it if it ever exits (e.g. token error),
+    # with backoff that caps at 60 s to prevent CPU thrash on repeated failures.
     try:
         from config import TELEGRAM_BOT_TOKEN
         if TELEGRAM_BOT_TOKEN:
             def _tg():
-                from telegram_bot import run_telegram_bot
+                delay = 5
+                max_delay = 60
                 while True:
                     try:
-                        run_telegram_bot()
-                        time.sleep(2)
+                        from telegram_bot import run_telegram_bot
+                        run_telegram_bot()           # blocks until exception
+                        delay = 5                    # reset on clean exit (shouldn't happen normally)
                     except Exception as e:
-                        print("[TELEGRAM ERROR]", e)
-                        time.sleep(5)
-            threading.Thread(target=_tg, daemon=True).start()
+                        print(f"[TELEGRAM ERROR] {e}")
+                    time.sleep(delay)
+                    delay = min(delay * 2, max_delay)
+
+            threading.Thread(target=_tg, daemon=True, name="telegram-bot").start()
     except Exception:
         print(traceback.format_exc())
 
-    # ── Keep-alive (prevents Render free tier spin-down) ────────
-    render_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
-    if render_url:
-        def _keep_alive():
-            time.sleep(20)  # let startup finish first
-            while True:
-                try:
-                    requests.get(f"{render_url}/api/health", timeout=5)
-                except Exception:
-                    pass
-                time.sleep(30)
-        threading.Thread(target=_keep_alive, daemon=True, name="keep-alive").start()
-        print("[ORA] Keep-alive pinger started")
+    # ── Keep-alive: intentionally REMOVED ───────────────────────
+    # Self-pinging the service does NOT prevent Render free-tier spin-down.
+    # Render only counts *external* traffic. Use an external uptime monitor
+    # (e.g. UptimeRobot or cron-job.org) to ping /api/health every 14 minutes.
+    # See: https://render.com/docs/free#spinning-down-on-idle
 
     yield
     print("[ORA] Shutdown")
