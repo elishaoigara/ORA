@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 import psutil
+import requests
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -41,7 +42,7 @@ async def lifespan(app: FastAPI):
             print(traceback.format_exc())
 
     try:
-        from scheduler import start_scheduler
+        from ora_scheduler import start_scheduler
         from intelligence.pattern_engine import run_pattern_analysis
         from intelligence.prediction_engine import run_predictions
         from intelligence.goals_engine import run_goal_checkin
@@ -72,6 +73,20 @@ async def lifespan(app: FastAPI):
     except Exception:
         print(traceback.format_exc())
 
+    # ── Keep-alive (prevents Render free tier spin-down) ────────
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if render_url:
+        def _keep_alive():
+            time.sleep(20)  # let startup finish first
+            while True:
+                try:
+                    requests.get(f"{render_url}/api/health", timeout=5)
+                except Exception:
+                    pass
+                time.sleep(30)
+        threading.Thread(target=_keep_alive, daemon=True, name="keep-alive").start()
+        print("[ORA] Keep-alive pinger started")
+
     yield
     print("[ORA] Shutdown")
 
@@ -86,7 +101,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
 async def health(request: Request):
     return {"status": "ok"}
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"status": "ORA running"}
 
