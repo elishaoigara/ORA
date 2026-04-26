@@ -7,8 +7,7 @@ import numpy as np
 # QUERY EMBEDDING
 # =========================
 def embed_query(query: str):
-    model = embed_text
-    return model.encode([query])[0]
+    return None  # embeddings disabled, FTS handles search
 
 
 # =========================
@@ -75,4 +74,5 @@ def rag_search(query: str):
     raw = retrieve_documents(query, top_k=8)
     ranked = rerank_results(query, raw)
     return format_context(ranked)
+
 
