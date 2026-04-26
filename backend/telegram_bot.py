@@ -192,7 +192,7 @@ def _cmd_spend(chat_id):
         if today is not None:
             lines.append(f"Today: *KES {today:,.0f}*")
         if avg is not None:
-            diff = today - avg if today is not None else 0
+            diff = float(today) - float(avg) if today is not None else 0.0  # type: ignore[arg-type]
             arrow = "↑" if diff > 0 else "↓"
             lines.append(f"Daily avg: KES {avg:,.0f} ({arrow} {abs(diff):,.0f})")
 
@@ -280,7 +280,7 @@ def _handle_chat(chat_id, text: str):
     try:
         # Intent parser first (free)
         try:
-            from intent_parser import parse_intent, execute_intent
+            from Intent_parser import parse_intent, execute_intent  # type: ignore[import]
             intent = parse_intent(text)
             if intent:
                 result = execute_intent(intent)
@@ -312,17 +312,17 @@ def _handle_chat(chat_id, text: str):
         messages.append({"role": "user", "content": text})
 
         # Small model for Telegram (fast response, low cost)
-        from router import classify, model_for
+        from brain.router import classify, model_for
         q_type = classify(text)
         model, max_tok = model_for(q_type)
         # Cap Telegram responses shorter
         max_tok = min(max_tok, 300)
 
-        response = client.chat.completions.create(
-            model=model, messages=messages,
+        response = client.chat.completions.create(  # type: ignore[arg-type]
+            model=model, messages=messages,  # type: ignore[arg-type]
             max_tokens=max_tok, temperature=0.4,
         )
-        reply = response.choices[0].message.content.strip()
+        reply = (response.choices[0].message.content or "").strip()
 
         _set_cache(text, reply)
         save_conversation("user", text)
@@ -392,9 +392,10 @@ def run_telegram_bot():
             updates = tg_get_updates(offset)
             for update in updates:
                 offset = update["update_id"] + 1
-                msg = update.get("message", {})
-                chat_id = msg.get("chat", {}).get("id")
-                text = msg.get("text", "")
+                msg = update.get("message") or {}
+                chat_data = msg.get("chat") or {}
+                chat_id: int | None = chat_data.get("id")
+                text: str = msg.get("text") or ""
                 if chat_id and text:
                     handle_message(chat_id, text)
         except Exception as e:
