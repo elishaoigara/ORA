@@ -1,122 +1,107 @@
 import { useState, useEffect } from "react"
-import API from "../api"
+import { getProfile, getPreferences, getMemoryEvents, getGoals, getGoogleAuthStatus } from "../api"
 
-const IMP_COLOR = (n = 0) =>
-  n >= 8 ? "var(--red)" :
-  n >= 5 ? "var(--amber)" :
-  "var(--text3)"
+const IMP_COLOR = n => n >= 8 ? "var(--red)" : n >= 5 ? "var(--amber)" : "var(--text3)"
+const IMP_LABEL = n => n >= 8 ? "HIGH" : n >= 5 ? "MED" : "LOW"
 
-const IMP_LABEL = (n = 0) =>
-  n >= 8 ? "HIGH" :
-  n >= 5 ? "MED" :
-  "LOW"
-
-// Safe fetch — never throws, always returns a value or fallback
-async function safeFetch(url, fallback) {
-  try {
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json()
-    return data ?? fallback
-  } catch (e) {
-    console.error(`[MEMORY] fetch failed: ${url}`, e)
-    return fallback
-  }
+async function safeFetch(fn, fallback) {
+  try { return await fn() ?? fallback }
+  catch { return fallback }
 }
 
 export default function MemoryPage() {
-  const [profile, setProfile] = useState({})
-  const [events, setEvents] = useState([])
-  const [prefs, setPrefs] = useState([])
-  const [filter, setFilter] = useState("all")
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [profile,    setProfile]    = useState({})
+  const [events,     setEvents]     = useState([])
+  const [prefs,      setPrefs]      = useState([])
+  const [goals,      setGoals]      = useState([])
+  const [googleAuth, setGoogleAuth] = useState(null)
+  const [filter,     setFilter]     = useState("all")
+  const [loading,    setLoading]    = useState(true)
 
   useEffect(() => {
     const load = async () => {
       setLoading(true)
-      setError(null)
-
-      // FIX: fetch each endpoint independently — one failure won't wipe all three.
-      const [p, e, pr] = await Promise.all([
-        safeFetch(`${API}/api/memory/profile`, {}),
-        safeFetch(`${API}/api/memory/events`, []),
-        safeFetch(`${API}/api/memory/preferences`, []),
+      const [p, e, pr, g, ga] = await Promise.all([
+        safeFetch(getProfile,         {}),
+        safeFetch(() => getMemoryEvents(30), []),
+        safeFetch(getPreferences,     []),
+        safeFetch(() => getGoals("active"), []),
+        safeFetch(getGoogleAuthStatus, null),
       ])
-
-      // If ALL three came back empty/failed, surface an error
-      const allEmpty =
-        Object.keys(p).length === 0 &&
-        e.length === 0 &&
-        pr.length === 0
-
       setProfile(p)
       setEvents(Array.isArray(e) ? e : [])
       setPrefs(Array.isArray(pr) ? pr : [])
-
-      if (allEmpty) {
-        setError("Memory is empty — ORA hasn't stored anything yet, or the backend just restarted.")
-      }
-
+      setGoals(Array.isArray(g) ? g : [])
+      setGoogleAuth(ga)
       setLoading(false)
     }
-
     load()
   }, [])
 
-  const eventTypes = ["all", ...new Set(events.map(e => e.type || "unknown"))]
-
-  const filtered =
-    filter === "all"
-      ? events
-      : events.filter(e => e.type === filter)
+  const eventTypes = ["all", ...new Set(events.map(e => e.event_type || "unknown"))]
+  const filtered   = filter === "all" ? events : events.filter(e => e.event_type === filter)
 
   return (
     <div className="page">
-
       <div className="page-header">
         <div className="page-title">// Memory Core</div>
-        <div className="page-sub">
-          Stored profile, preferences, and system events
-        </div>
+        <div className="page-sub">Profile · preferences · events · integrations</div>
       </div>
 
-      {loading && (
-        <div className="card">
-          <div style={{ color: "var(--text3)", fontFamily: "Share Tech Mono, monospace", fontSize: "0.8rem" }}>
-            Loading memory...
-          </div>
-        </div>
-      )}
-
-      {/* FIX: show error as info, not blocker — still render whatever data loaded */}
-      {!loading && error && (
-        <div className="card" style={{ borderColor: "rgba(245,158,11,0.3)", marginBottom: "1rem" }}>
-          <div style={{ color: "var(--amber)", fontSize: "0.8rem" }}>
-            ⚠ {error}
-          </div>
-        </div>
-      )}
-
-      {!loading && (
+      {loading ? (
+        <div className="card"><div className="empty" style={{ fontFamily: "Share Tech Mono, monospace", fontSize: ".75rem" }}>Loading memory...</div></div>
+      ) : (
         <>
-          {/* HOW MEMORY WORKS */}
+          {/* Integrations status */}
           <div className="card" style={{ marginBottom: "1rem" }}>
-            <div className="card-title">How Memory Works</div>
-            <div style={{ fontSize: "0.8rem", color: "var(--text3)", lineHeight: 1.6 }}>
-              ORA stores structured memory in three layers:
-              <br />• Profile → core identity data (name, role, timezone)
-              <br />• Preferences → learned patterns and habits
-              <br />• Events → timeline of interactions and system actions
+            <div className="card-title">// Integration Status</div>
+            <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 6, height: 6, borderRadius: "50%", background: googleAuth?.authorized ? "var(--green)" : "var(--red)", boxShadow: `0 0 6px ${googleAuth?.authorized ? "var(--green)" : "var(--red)"}` }} />
+                <span style={{ fontSize: ".75rem", color: "var(--text2)" }}>Google Calendar</span>
+                <span style={{ fontSize: ".65rem", color: "var(--text3)" }}>
+                  {googleAuth?.authorized ? "Connected" : "Not connected"}
+                </span>
+                {!googleAuth?.authorized && (
+                  <a href="https://ora-oovf.onrender.com/api/auth/google" target="_blank" rel="noreferrer"
+                    style={{ fontSize: ".65rem", color: "var(--amber)" }}>
+                    Connect →
+                  </a>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* PROFILE + PREFS */}
-          <div className="grid-2" style={{ marginBottom: "1rem" }}>
+          {/* Goals */}
+          {goals.length > 0 && (
+            <div className="card" style={{ marginBottom: "1rem" }}>
+              <div className="card-title">// Active Goals ({goals.length})</div>
+              {goals.map((g, i) => {
+                const pct     = g.progress || 0
+                const overdue = g.due_at && new Date(g.due_at) < new Date()
+                const color   = overdue ? "var(--red)" : pct >= 70 ? "var(--green)" : "var(--amber)"
+                return (
+                  <div key={i} className="goal-row">
+                    <div className="goal-title">{g.goal}</div>
+                    <div className="goal-bar-track">
+                      <div className="goal-bar-fill" style={{ width: `${pct}%`, background: color }} />
+                    </div>
+                    <div className="goal-meta">
+                      <span>{pct}%</span>
+                      <span style={{ color: overdue ? "var(--red)" : "var(--text3)" }}>
+                        {overdue ? "⚠ OVERDUE" : g.due_at ? g.due_at.slice(0, 10) : "no deadline"}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
 
+          {/* Profile + Prefs */}
+          <div className="grid-2" style={{ marginBottom: "1rem" }}>
             <div className="card">
               <div className="card-title">Identity Profile</div>
-
               {Object.keys(profile).length === 0 ? (
                 <div className="empty">No profile data yet</div>
               ) : (
@@ -130,21 +115,16 @@ export default function MemoryPage() {
             </div>
 
             <div className="card">
-              <div className="card-title">Preferences</div>
-
+              <div className="card-title">Learned Preferences</div>
               {prefs.length === 0 ? (
-                <div className="empty">No preferences yet</div>
+                <div className="empty">No preferences learned yet</div>
               ) : (
                 prefs.map((p, i) => (
                   <div key={i} className="mem-row">
-                    <span className="mem-key">
-                      {(p.category || "general")}/{p.key || "unknown"}
-                    </span>
+                    <span className="mem-key">{p.category}/{p.key}</span>
                     <div style={{ textAlign: "right" }}>
-                      <div className="mem-val">{p.value || "-"}</div>
-                      <div style={{ fontSize: "0.65rem", color: "var(--text3)" }}>
-                        {Math.round((p.confidence || 0) * 100)}%
-                      </div>
+                      <div className="mem-val">{p.value}</div>
+                      <div style={{ fontSize: ".6rem", color: "var(--text3)" }}>{Math.round((p.confidence || 0) * 100)}% conf</div>
                     </div>
                   </div>
                 ))
@@ -152,57 +132,36 @@ export default function MemoryPage() {
             </div>
           </div>
 
-          {/* EVENTS */}
+          {/* Events */}
           <div className="card">
-            <div style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: "1rem"
-            }}>
-              <div className="card-title">
-                Event Log ({events.length})
-              </div>
-
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: ".75rem" }}>
+              <div className="card-title" style={{ marginBottom: 0 }}>Event Log ({events.length})</div>
               <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                {eventTypes.slice(0, 5).map(t => (
-                  <button
-                    key={t}
+                {eventTypes.slice(0, 6).map(t => (
+                  <button key={t}
                     onClick={() => setFilter(t)}
                     style={{
-                      fontSize: "0.65rem",
-                      padding: "2px 6px",
-                      background: "none",
+                      fontSize: ".6rem", padding: "2px 7px", background: "none", cursor: "pointer", borderRadius: 3,
                       border: `1px solid ${filter === t ? "var(--amber)" : "var(--border)"}`,
                       color: filter === t ? "var(--amber)" : "var(--text3)",
-                      cursor: "pointer",
-                      borderRadius: 2,
-                    }}
-                  >
+                    }}>
                     {t}
                   </button>
                 ))}
               </div>
             </div>
-
-            <div style={{ maxHeight: 400, overflowY: "auto" }}>
+            <div style={{ maxHeight: 380, overflowY: "auto" }}>
               {filtered.length === 0 ? (
                 <div className="empty">No events</div>
               ) : (
                 filtered.map((e, i) => (
-                  <div key={i} className="event-row">
-                    <div style={{ color: IMP_COLOR(e.importance), minWidth: 80 }}>
-                      <div style={{ fontSize: "0.7rem" }}>{e.type || "event"}</div>
-                      <div style={{ fontSize: "0.6rem" }}>{IMP_LABEL(e.importance)}</div>
+                  <div key={i} className="event-row fade-in">
+                    <div style={{ color: IMP_COLOR(e.importance), minWidth: 72 }}>
+                      <div style={{ fontSize: ".68rem", fontFamily: "Share Tech Mono, monospace" }}>{e.event_type || "event"}</div>
+                      <div style={{ fontSize: ".55rem" }}>{IMP_LABEL(e.importance)}</div>
                     </div>
-
-                    <div className="event-summary">
-                      {e.summary || "No summary"}
-                    </div>
-
-                    <div className="event-time">
-                      {e.timestamp ? e.timestamp.slice(11, 19) : "--:--"}
-                    </div>
+                    <div className="event-summary">{e.summary || "—"}</div>
+                    <div className="event-time">{e.timestamp?.slice(11, 19) || "—"}</div>
                   </div>
                 ))
               )}
@@ -210,7 +169,6 @@ export default function MemoryPage() {
           </div>
         </>
       )}
-
     </div>
   )
 }
