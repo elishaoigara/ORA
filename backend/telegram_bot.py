@@ -14,6 +14,7 @@ import time
 import requests
 import traceback
 from datetime import datetime
+from typing import Optional
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GROQ_API_KEY
 from database import save_conversation, get_conversation_history
@@ -173,13 +174,14 @@ def _cmd_spend(chat_id):
         avg = get_average_daily_spend()
         recent = get_recent_transactions(limit=5) or []
         lines = ["*M-Pesa Summary*"]
-        if today is not None:
-            lines.append(f"Today: *KES {today:,.0f}*")
-        if avg is not None:
-            today_val = float(today) if today is not None else 0.0
-            diff = today_val - float(avg)
+        today_total: float = float(today["total"] if isinstance(today, dict) else 0)
+        avg_val: float = float(avg)
+        if today_total:
+            lines.append(f"Today: *KES {today_total:,.0f}*")
+        if avg_val:
+            diff = today_total - avg_val
             arrow = "↑" if diff > 0 else "↓"
-            lines.append(f"Daily avg: KES {avg:,.0f} ({arrow} {abs(diff):,.0f})")  # type: ignore[arg-type]
+            lines.append(f"Daily avg: KES {avg_val:,.0f} ({arrow} {abs(diff):,.0f})")
         if recent:
             lines.append("\n*Recent transactions:*")
             for tx in recent[:5]:
@@ -356,7 +358,7 @@ def _handle_voice(chat_id: int, voice: dict):
 
 
 # ── Message dispatcher ────────────────────────────────────────
-def handle_message(chat_id: int, text: str = "", voice: dict = None):  # type: ignore[assignment]
+def handle_message(chat_id: int, text: str = "", voice: Optional[dict] = None):
     if ALLOWED_CHAT_ID and chat_id != ALLOWED_CHAT_ID:
         print(f"[TG] Blocked: {chat_id}")
         return

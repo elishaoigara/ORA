@@ -1,4 +1,6 @@
 {
-  "extraPaths": ["backend", "."],
-  "executionEnvironments": [{"root": "backend"}]
+  "pythonVersion": "3.13",
+  "extraPaths": ["."],
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false
 }

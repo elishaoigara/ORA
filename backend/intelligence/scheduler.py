@@ -3,6 +3,8 @@ Intelligence layer scheduler — uses APScheduler to match the rest of ORA.
 The old 'schedule' library blocked in a while-loop and conflicted with
 APScheduler's background mode used in main.py.
 """
+from __future__ import annotations
+from typing import Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from intelligence.pattern_engine import run_pattern_analysis
@@ -11,7 +13,7 @@ from intelligence.planner_engine import generate_daily_brief
 from intelligence.notifier import run_autonomous_notifications
 
 
-def start_intelligence_scheduler(scheduler: BackgroundScheduler = None):
+def start_intelligence_scheduler(scheduler: Optional[BackgroundScheduler] = None) -> BackgroundScheduler:
     """
     Register intelligence jobs on the provided APScheduler instance.
     If none is given, creates and starts a new one (for standalone use).

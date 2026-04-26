@@ -16,7 +16,7 @@ import tempfile
 import requests
 import traceback
 
-from config import TELEGRAM_BOT_TOKEN, GROQ_API_KEY
+from config import TELEGRAM_BOT_TOKEN, GROQ_API_KEY, DATA_DIR
 
 BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}" if TELEGRAM_BOT_TOKEN else None
 
@@ -60,7 +60,7 @@ def download_voice(file_id: str) -> str | None:
         tmp = tempfile.NamedTemporaryFile(
             suffix=".ogg",
             delete=False,
-            dir=os.path.join(os.path.dirname(__file__), "data")
+            dir=DATA_DIR
         )
 
         tmp.write(audio_r.content)
@@ -120,11 +120,7 @@ def speak_reply(chat_id: int, text: str) -> bool:
 
         short_text = text[:400] if len(text) > 400 else text
 
-        tmp_path = os.path.join(
-            os.path.dirname(__file__),
-            "data",
-            f"reply_{int(time.time())}.mp3"
-        )
+        tmp_path = os.path.join(DATA_DIR, f"reply_{int(time.time())}.mp3")
 
         tts = gTTS(text=short_text, lang="en", slow=False)
         tts.save(tmp_path)

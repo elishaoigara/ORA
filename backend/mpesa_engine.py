@@ -6,7 +6,13 @@ Provides spend awareness, daily aggregation, and spike alerts.
 
 import re
 from datetime import datetime, timedelta
+from typing import TypedDict
 from database import get_conn, log_alert
+
+class TodaySpend(TypedDict):
+    total: float
+    transactions: int
+    date: str
 
 
 # ─────────────────────────────────────────────
@@ -122,7 +128,7 @@ def ingest_sms(raw_sms: str) -> dict:
 # ANALYTICS
 # ─────────────────────────────────────────────
 
-def get_today_spend() -> dict:
+def get_today_spend() -> TodaySpend:
     try:
         conn = get_conn()
         today = datetime.now().strftime("%Y-%m-%d")
@@ -130,9 +136,9 @@ def get_today_spend() -> dict:
             SELECT SUM(amount), COUNT(*) FROM mpesa_transactions
             WHERE DATE(timestamp) = ? AND type IN ('sent','paid','withdrawn','airtime')
         """, (today,)).fetchone()
-        return {"total": row[0] or 0, "transactions": row[1] or 0, "date": today}
+        return {"total": float(row[0] or 0), "transactions": int(row[1] or 0), "date": today}
     except Exception:
-        return {"total": 0, "transactions": 0, "date": ""}
+        return {"total": 0.0, "transactions": 0, "date": ""}
 
 
 def get_average_daily_spend(days: int = 14) -> float:
@@ -147,9 +153,9 @@ def get_average_daily_spend(days: int = 14) -> float:
                 GROUP BY day
             )
         """, (since,)).fetchone()
-        return row[0] or 0
+        return float(row[0]) if row[0] is not None else 0.0
     except Exception:
-        return 0
+        return 0.0
 
 
 def get_daily_summary(days: int = 7) -> list:
@@ -196,10 +202,11 @@ def get_recurring_patterns() -> list:
 def check_spend_alert() -> dict | None:
     today = get_today_spend()
     avg = get_average_daily_spend()
-    if avg > 0 and today["total"] > (avg * 3):
+    today_total = float(today["total"])
+    if avg > 0 and today_total > (avg * 3):
         return {
             "type": "spend_spike",
-            "message": f"💸 Spend alert: Ksh{today['total']:,.0f} today vs Ksh{avg:,.0f} daily avg ({today['transactions']} txns)",
+            "message": f"💸 Spend alert: Ksh{today_total:,.0f} today vs Ksh{avg:,.0f} daily avg ({today['transactions']} txns)",
             "severity": "high"
         }
     return None

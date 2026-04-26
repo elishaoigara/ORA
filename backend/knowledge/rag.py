@@ -1,4 +1,5 @@
-﻿from knowledge.embeddings import embed_text, vector_search
+﻿from typing import Optional
+from knowledge.embeddings import embed_text, vector_search
 from knowledge import get_all_documents
 import numpy as np
 
@@ -6,7 +7,7 @@ import numpy as np
 # =========================
 # QUERY EMBEDDING
 # =========================
-def embed_query(query: str):
+def embed_query(query: str) -> Optional[str]:
     return None  # embeddings disabled, FTS handles search
 
 
@@ -15,6 +16,9 @@ def embed_query(query: str):
 # =========================
 def retrieve_documents(query: str, top_k: int = 5):
     query_vec = embed_query(query)
+
+    if query_vec is None:
+        return []
 
     results = vector_search(query_vec, top_k=top_k)
 
@@ -74,5 +78,3 @@ def rag_search(query: str):
     raw = retrieve_documents(query, top_k=8)
     ranked = rerank_results(query, raw)
     return format_context(ranked)
-
-
