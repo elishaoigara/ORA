@@ -882,7 +882,7 @@ def get_briefing():
         try:
             from mpesa_engine import get_today_spend
             today_spend = get_today_spend()
-            spend = float(today_spend) if today_spend else 0.0
+            spend = float(today_spend) if today_spend else 0.0 # type: ignore
         except Exception:
             pass
 
