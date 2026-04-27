@@ -1,0 +1,222 @@
+"""
+ORA Learning Engine — Makes ORA smarter over time.
+"""
+
+import os
+import re
+import json
+import time
+from datetime import datetime
+from database import get_conn, close_conn
+from groq import Groq
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+_last_extract: float = 0
+_EXTRACT_DEBOUNCE = 60
+
+
+# ─────────────────────────────────────────────
+# SCHEMA INIT
+# ─────────────────────────────────────────────
+def init_learning_tables() -> None:
+    conn = get_conn()
+    c = conn.cursor()
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS learned_facts (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            category  TEXT NOT NULL,
+            subject   TEXT NOT NULL,
+            predicate TEXT NOT NULL,
+            object    TEXT NOT NULL,
+            confidence REAL DEFAULT 0.7,
+            source    TEXT DEFAULT 'conversation',
+            verified  INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    c.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_learned_facts
+        ON learned_facts(category, subject, predicate)
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS corrections (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            original_query TEXT,
+            ora_response   TEXT,
+            correction     TEXT,
+            timestamp      TEXT
+        )
+    """)
+
+    conn.commit()
+    close_conn()
+    print("[Learning] Tables initialized")
+
+
+# ─────────────────────────────────────────────
+# FACT STORAGE
+# ─────────────────────────────────────────────
+def store_fact(category: str, subject: str, predicate: str, obj: str,
+               confidence: float = 0.7, source: str = "conversation") -> None:
+    conn = get_conn()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute("""
+        INSERT INTO learned_facts
+            (category, subject, predicate, object, confidence, source, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(category, subject, predicate) DO UPDATE SET
+            object=excluded.object,
+            confidence=MAX(confidence, excluded.confidence),
+            updated_at=excluded.updated_at
+    """, (category, subject, predicate, obj, confidence, source, now, now))
+    conn.commit()
+    close_conn()
+
+
+def get_learned_facts(category: str | None = None, limit: int = 30) -> list[dict]:
+    conn = get_conn()
+    c = conn.cursor()
+    if category:
+        c.execute("""
+            SELECT id, category, subject, predicate, object, confidence, updated_at
+            FROM learned_facts WHERE category=?
+            ORDER BY confidence DESC, updated_at DESC LIMIT ?
+        """, (category, limit))
+    else:
+        c.execute("""
+            SELECT id, category, subject, predicate, object, confidence, updated_at
+            FROM learned_facts
+            ORDER BY confidence DESC, updated_at DESC LIMIT ?
+        """, (limit,))
+    rows = c.fetchall()
+    close_conn()
+    return [
+        {"id": r[0], "category": r[1], "subject": r[2], "predicate": r[3],
+         "object": r[4], "confidence": r[5], "updated_at": r[6]}
+        for r in rows
+    ]
+
+
+def get_facts_as_context(limit: int = 20) -> str:
+    facts = get_learned_facts(limit=limit)
+    if not facts:
+        return ""
+    return "\n".join(f"- {f['subject']} {f['predicate']}: {f['object']}" for f in facts)
+
+
+# ─────────────────────────────────────────────
+# CORRECTION DETECTION
+# ─────────────────────────────────────────────
+_CORRECTION_PATTERNS = re.compile(
+    r"\b(no(,| that'?s)?|wrong|incorrect|not right|actually|that'?s not|"
+    r"you'?re wrong|that'?s wrong|fix that|stop saying|don'?t say)\b",
+    re.IGNORECASE
+)
+
+
+def detect_correction(user_text: str) -> bool:
+    return bool(_CORRECTION_PATTERNS.search(user_text))
+
+
+def log_correction(query: str, ora_response: str, correction_text: str) -> None:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO corrections (original_query, ora_response, correction, timestamp)
+        VALUES (?, ?, ?, ?)
+    """, (query, ora_response, correction_text, datetime.now().isoformat()))
+    conn.commit()
+    close_conn()
+    print("[Learning] Correction logged")
+
+
+# ─────────────────────────────────────────────
+# AI EXTRACTION (debounced)
+# ─────────────────────────────────────────────
+def extract_facts_from_exchange(user_text: str, ora_response: str) -> None:
+    global _last_extract
+
+    if not GROQ_API_KEY:
+        return
+    if len(user_text.split()) < 10:
+        return
+    if time.time() - _last_extract < _EXTRACT_DEBOUNCE:
+        return
+
+    _last_extract = time.time()
+
+    client = Groq(api_key=GROQ_API_KEY)
+
+    prompt = (
+        f"Extract factual information about the user (Elisha) from this conversation.\n"
+        f"Output ONLY a JSON array. Each item: category, subject, predicate, object, confidence.\n"
+        f"Categories: preference, work, personal, goal, habit, relationship, technical.\n"
+        f"Max 5 facts. If nothing useful, return [].\n\n"
+        f"User: {user_text[:500]}\n"
+        f"ORA: {ora_response[:300]}\n\n"
+        f"JSON array only:"
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.2,
+        )
+        raw_content = resp.choices[0].message.content
+        raw = raw_content.strip() if raw_content else ""
+        if not raw:
+            return
+
+        match = re.search(r'\[.*?\]', raw, re.DOTALL)
+        if not match:
+            return
+        facts = json.loads(match.group())
+        for fact in facts[:5]:
+            if all(k in fact for k in ("category", "subject", "predicate", "object")):
+                store_fact(
+                    category=fact["category"],
+                    subject=fact["subject"],
+                    predicate=fact["predicate"],
+                    obj=fact["object"],
+                    confidence=float(fact.get("confidence", 0.7)),
+                    source="conversation"
+                )
+        if facts:
+            print(f"[Learning] Extracted {len(facts)} facts")
+    except Exception as e:
+        print(f"[Learning] Extraction failed: {e}")
+
+
+# ─────────────────────────────────────────────
+# RULE-BASED EXTRACTION (zero AI cost)
+# ─────────────────────────────────────────────
+_EXPLICIT_PATTERNS = [
+    (re.compile(r"i prefer (.+)", re.I),
+     lambda m: ("preference", "Elisha", "prefers", m.group(1)[:80])),
+    (re.compile(r"i use (.+?) for (.+)", re.I),
+     lambda m: ("technical", "Elisha", f"uses {m.group(1)} for", m.group(2)[:80])),
+    (re.compile(r"i work (?:at|on|with) (.+)", re.I),
+     lambda m: ("work", "Elisha", "works on", m.group(1)[:80])),
+    (re.compile(r"my (\w+) is (.+)", re.I),
+     lambda m: ("personal", "Elisha", f"{m.group(1)} is", m.group(2)[:80])),
+    (re.compile(r"i(?:'m| am) (?:working on|building|making) (.+)", re.I),
+     lambda m: ("work", "Elisha", "is building", m.group(1)[:80])),
+]
+
+
+def extract_explicit_facts(user_text: str) -> None:
+    for pattern, extractor in _EXPLICIT_PATTERNS:
+        m = pattern.search(user_text)
+        if m:
+            try:
+                cat, subj, pred, obj = extractor(m)
+                store_fact(cat, subj, pred, obj, confidence=0.9, source="explicit")
+            except Exception:
+                pass

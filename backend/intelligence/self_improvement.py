@@ -1,67 +1,71 @@
+"""
+ORA Self-Improvement — Render Free-Tier Optimized
+Uses 8B model for critiques (not 70B).
+Only critiques responses >30 words.
+"""
+
 import os
 from groq import Groq
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+_MODEL = "llama-3.1-8b-instant"
 
-def critique_response(user_input, ora_response):
+
+def critique_response(user_input: str, ora_response: str) -> list[str]:
     if not GROQ_API_KEY:
-        print("[SELF-IMPROVEMENT] GROQ_API_KEY not set. Skipping critique.")
+        return []
+    if len(ora_response.split()) < 30:
         return []
 
     client = Groq(api_key=GROQ_API_KEY)
-
-    critique_prompt = f"""
-    You are an AI assistant tasked with critiquing another AI's response.
-    Given the user's input and the AI's response, identify any issues with the response.
-    Focus on accuracy, completeness, relevance, and adherence to instructions.
-    List issues concisely, one per line.
-
-    User Input: {user_input}
-    AI Response: {ora_response}
-
-    Critique:
-    """
+    prompt = (
+        f"Briefly critique this AI response. List issues only (1 per line, max 3). "
+        f"Focus on: hallucinations, unhelpful hedging, wrong tone, missing info.\n\n"
+        f"User: {user_input[:200]}\n"
+        f"AI: {ora_response[:300]}\n\n"
+        f"Issues (or write 'none'):"
+    )
 
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": critique_prompt}],
-            max_tokens=200,
-            temperature=0.5,
+        resp = client.chat.completions.create(
+            model=_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=100,
+            temperature=0.3,
         )
-        critique_text = response.choices[0].message.content.strip()
-        return [line.strip() for line in critique_text.split('\n') if line.strip()]
+        raw = resp.choices[0].message.content or ""
+        text = raw.strip()
+        if text.lower().startswith("none"):
+            return []
+        return [line.strip() for line in text.split("\n") if line.strip()][:3]
     except Exception as e:
-        print(f"[SELF-IMPROVEMENT ERROR] Critique failed: {e}")
+        print(f"[SELF-IMPROVEMENT] Critique failed: {e}")
         return []
 
-def refine_response(user_input, original_response, issues):
+
+def refine_response(user_input: str, original_response: str, issues: list[str]) -> str:
     if not issues or not GROQ_API_KEY:
         return original_response
 
     client = Groq(api_key=GROQ_API_KEY)
-    issues_str = "\n".join([f"- {issue}" for issue in issues])
-
-    refine_prompt = f"""
-    You are an AI assistant tasked with refining another AI's response.
-    Given the user's input, the original AI's response, and a list of critiques, generate an improved response.
-
-    User Input: {user_input}
-    Original AI Response: {original_response}
-    Critiques:
-    {issues_str}
-
-    Improved Response:
-    """
+    issues_str = "\n".join(f"- {i}" for i in issues)
+    prompt = (
+        f"Improve this AI response based on the issues listed.\n\n"
+        f"User: {user_input[:200]}\n"
+        f"Original: {original_response[:400]}\n"
+        f"Issues:\n{issues_str}\n\n"
+        f"Improved response:"
+    )
 
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": refine_prompt}],
-            max_tokens=500,
-            temperature=0.7,
+        resp = client.chat.completions.create(
+            model=_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=400,
+            temperature=0.4,
         )
-        return response.choices[0].message.content.strip()
+        raw = resp.choices[0].message.content or ""
+        return raw.strip()
     except Exception as e:
-        print(f"[SELF-IMPROVEMENT ERROR] Refinement failed: {e}")
+        print(f"[SELF-IMPROVEMENT] Refinement failed: {e}")
         return original_response
