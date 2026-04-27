@@ -38,6 +38,7 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('knowledge.embeddings', fromlist=['init_vector_db']).init_vector_db(), "Knowledge DB"),
         (lambda: __import__('intelligence.goals_engine', fromlist=['init_goals_table']).init_goals_table(), "Goals"),
         (lambda: __import__('fcm').init_fcm_table(), "FCM Tokens"),
+        (lambda: __import__('intelligence.learning_engine', fromlist=['init_learning_tables']).init_learning_tables(), "Learning"),
     ]:
         try:
             fn()
@@ -67,7 +68,7 @@ async def lifespan(app: FastAPI):
             {"trigger": "cron",     "hour": 2,  "minute": 30, "fn": run_pattern_analysis, "name": "daily_patterns"},
             {"trigger": "cron",     "hour": 8,  "minute": 30, "fn": run_goal_checkin,  "name": "weekly_goals"},
             {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": generate_daily_brief, "name": "daily_brief"},
-            {"trigger": "interval", "hours": 1,    "fn": run_pattern_analysis,         "name": "pattern_analysis"},
+            {"trigger": "interval", "hours": 3,    "fn": run_pattern_analysis,         "name": "pattern_analysis"},
             {"trigger": "interval", "minutes": 10, "fn": run_proactive_checks,         "name": "proactive_checks"},
             {"trigger": "interval", "minutes": 5,  "fn": run_autonomous_notifications, "name": "auto_notify"},
             # ── Phase 4: Data connectors ───────────────────────
@@ -190,11 +191,12 @@ async def chat(payload: ChatRequest):
         if not text:
             return {"reply": "Empty message."}
 
-        from database import save_conversation, get_conversation_history
+        from database import save_conversation, get_conversation_history, get_tasks
         from context import build_system_prompt
         from brain.router import classify, model_for
         import cache
 
+        # ── 1. Intent parsing (fast path — no AI cost) ────────
         try:
             from intent_parser import parse_intent, execute_intent
             intent = parse_intent(text)
@@ -203,10 +205,26 @@ async def chat(payload: ChatRequest):
                 if result:
                     save_conversation("user", text)
                     save_conversation("assistant", result)
+                    try:
+                        from intelligence.learning_engine import extract_explicit_facts
+                        extract_explicit_facts(text)
+                    except Exception:
+                        pass
                     return {"reply": result, "intent": intent["type"], "query_type": "action"}
         except Exception as e:
             print(f"[INTENT] {e}")
 
+        # ── 2. Correction detection ───────────────────────────
+        try:
+            from intelligence.learning_engine import detect_correction, log_correction
+            history_check = get_conversation_history(limit=2)
+            if history_check and detect_correction(text):
+                last_ora = history_check[-1][1] if history_check else ""
+                log_correction(text, last_ora, text)
+        except Exception:
+            pass
+
+        # ── 3. Classify & knowledge lookup ────────────────────
         q_type = classify(text)
         knowledge_ctx = ""
         try:
@@ -215,6 +233,7 @@ async def chat(payload: ChatRequest):
         except Exception:
             pass
 
+        # ── 4. Cache check (skip for document queries) ────────
         if q_type != "document":
             cached = cache.get(text, knowledge_ctx)
             if cached:
@@ -222,10 +241,22 @@ async def chat(payload: ChatRequest):
                 save_conversation("assistant", cached)
                 return {"reply": cached, "cached": True, "query_type": q_type}
 
+        # ── 5. Build system prompt ────────────────────────────
         system_prompt = build_system_prompt(query=text)
         if knowledge_ctx:
             system_prompt += f"\n\n## KNOWLEDGE BASE\n{knowledge_ctx[:700]}"
 
+        # ── 6. Inject learned facts ───────────────────────────
+        try:
+            from intelligence.learning_engine import get_facts_as_context
+            learned = get_facts_as_context(limit=15)
+            if learned:
+                system_prompt += f"\n\n## WHAT I'VE LEARNED ABOUT YOU\n{learned}"
+        except Exception:
+            pass
+
+        # ── 7. Inject active goals ────────────────────────────
+        goals = []
         try:
             from intelligence.goals_engine import get_goals
             goals = get_goals("active")
@@ -235,27 +266,99 @@ async def chat(payload: ChatRequest):
         except Exception:
             pass
 
-        history = get_conversation_history(limit=4)
+        # ── 8. Hallucination guard ────────────────────────────
+        from intelligence.hallucination_guard import (
+            is_factual_query, build_grounding_instruction,
+            context_has_tasks, context_has_goals, context_has_spend
+        )
+        tasks = []
+        spend_data = None
+        if is_factual_query(text):
+            try:
+                tasks = get_tasks("pending")
+            except Exception:
+                pass
+            try:
+                from mpesa_engine import get_today_spend, get_recent_transactions
+                spend_data = {
+                    "today": get_today_spend(),
+                    "recent_transactions": get_recent_transactions(limit=3)
+                }
+            except Exception:
+                pass
+
+            grounding = build_grounding_instruction(
+                has_tasks=context_has_tasks(tasks),
+                has_goals=context_has_goals(goals),
+                has_calendar=False,  # Calendar OAuth pending
+                has_spend=context_has_spend(spend_data),
+            )
+            system_prompt += f"\n\n{grounding}"
+
+            # Inject real data so model doesn't guess
+            if tasks:
+                task_lines = "\n".join(f"- [{t[2]}] {t[1]}" for t in tasks[:10])
+                system_prompt += f"\n\n## ACTUAL PENDING TASKS ({len(tasks)} total)\n{task_lines}"
+            if spend_data and spend_data.get("today"):
+                system_prompt += f"\n\n## ACTUAL SPEND TODAY\nKES {spend_data['today']:.0f}"
+
+        # ── 9. Build message history ──────────────────────────
+        history = get_conversation_history(limit=6)
         messages: list[Any] = [{"role": "system", "content": system_prompt}]
-        for role, content, _ in history:
-            messages.append({"role": "user" if role == "user" else "assistant", "content": content[:200]})
+        for role, content, _ in history[-6:]:
+            messages.append({
+                "role": "user" if role == "user" else "assistant",
+                "content": content[:300]
+            })
         messages.append({"role": "user", "content": text})
 
+        # ── 10. Call Groq ─────────────────────────────────────
         model, max_tok = model_for(q_type)
         try:
-            response = client.chat.completions.create(model=model, messages=messages,
-                                                      max_tokens=max_tok, temperature=0.4)
+            response = client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tok, temperature=0.35
+            )
         except Exception:
-            response = client.chat.completions.create(model="llama-3.1-8b-instant",
-                                                      messages=messages, max_tokens=200, temperature=0.4)
+            response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=messages, max_tokens=220, temperature=0.35
+            )
 
         reply = response.choices[0].message.content or "No response"
 
+        # ── 11. Hallucination post-check ──────────────────────
+        try:
+            from intelligence.hallucination_guard import check_response_for_hallucinations
+            reply, warnings = check_response_for_hallucinations(
+                reply, text,
+                actual_task_count=len(tasks),
+                actual_goal_count=len(goals)
+            )
+            if warnings:
+                print(f"[HALLUCINATION GUARD] {warnings}")
+        except Exception:
+            pass
+
+        # ── 12. Cache & persist ───────────────────────────────
         if q_type != "document":
             cache.set(text, reply, knowledge_ctx)
 
         save_conversation("user", text)
         save_conversation("assistant", reply)
+
+        # ── 13. Background learning ───────────────────────────
+        try:
+            from intelligence.learning_engine import extract_facts_from_exchange, extract_explicit_facts
+            import threading
+            extract_explicit_facts(text)
+            threading.Thread(
+                target=extract_facts_from_exchange,
+                args=(text, reply),
+                daemon=True
+            ).start()
+        except Exception:
+            pass
+
         return {"reply": reply, "query_type": q_type, "model": model}
 
     except Exception:
@@ -704,3 +807,138 @@ def drive_sync_now():
         return {"status": "sync triggered"}
     except Exception:
         raise HTTPException(500, "Drive sync failed")
+
+
+# ═══════════════════════════════════════════════════════════════
+# MISSING ENDPOINTS (fixing 404s from logs)
+# ═══════════════════════════════════════════════════════════════
+
+@app.get("/api/the-number")
+def the_number():
+    """Dashboard headline metric — real data, never invented."""
+    try:
+        from database import get_tasks
+        from intelligence.goals_engine import get_goals
+        pending = get_tasks("pending")
+        goals   = get_goals("active")
+
+        now = datetime.now()
+        overdue = 0
+        for t in pending:
+            if t[4]:
+                try:
+                    if datetime.fromisoformat(t[4]) < now:
+                        overdue += 1
+                except Exception:
+                    pass
+
+        high_priority = sum(1 for t in pending if t[2] == "high")
+        avg_goal_progress = 0
+        if goals:
+            avg_goal_progress = int(sum(g.get("progress", 0) for g in goals) / len(goals))
+
+        context_parts = []
+        if overdue:
+            context_parts.append(f"{overdue} overdue")
+        if high_priority:
+            context_parts.append(f"{high_priority} high priority")
+
+        return {
+            "number":        len(pending),
+            "label":         "pending tasks",
+            "context":       ", ".join(context_parts) if context_parts else "on track",
+            "goal_progress": avg_goal_progress,
+            "goal_count":    len(goals),
+        }
+    except Exception:
+        print(traceback.format_exc())
+        return {"number": 0, "label": "tasks", "context": ""}
+
+
+@app.get("/api/briefing")
+def get_briefing():
+    """Daily briefing — real data summary for dashboard."""
+    try:
+        import cache
+        cached = cache.get("daily_briefing", "")
+        if cached:
+            return {"briefing": cached, "source": "cached"}
+
+        from database import get_tasks
+        from intelligence.goals_engine import get_goals
+
+        pending = get_tasks("pending")
+        goals   = get_goals("active")
+        spend   = 0
+        try:
+            from mpesa_engine import get_today_spend
+            spend = get_today_spend()
+        except Exception:
+            pass
+
+        parts = []
+        if pending:
+            high = [t for t in pending if t[2] == "high"]
+            parts.append(
+                f"{len(pending)} tasks pending" +
+                (f" ({len(high)} high priority)" if high else "")
+            )
+        else:
+            parts.append("No pending tasks")
+
+        if goals:
+            avg = int(sum(g.get("progress", 0) for g in goals) / len(goals))
+            parts.append(f"{len(goals)} active goals at {avg}% avg progress")
+
+        if spend > 0:
+            parts.append(f"KES {spend:.0f} spent today")
+
+        briefing = " · ".join(parts) if parts else "All clear."
+        cache.set("daily_briefing", briefing, "")
+        return {"briefing": briefing, "source": "live"}
+    except Exception:
+        print(traceback.format_exc())
+        return {"briefing": "Briefing unavailable.", "source": "error"}
+
+
+@app.post("/api/alerts/ack-all")
+def ack_all_alerts():
+    """Acknowledge all unread alerts."""
+    try:
+        from database import get_conn, close_conn
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("UPDATE alerts SET acknowledged=1 WHERE acknowledged=0")
+        count = c.rowcount
+        conn.commit()
+        close_conn()
+        return {"ok": True, "count": count}
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Ack-all failed")
+
+
+@app.get("/api/memory/learned")
+def get_learned_facts_ep(category: str = None, limit: int = 30):
+    """Facts ORA has learned from conversations over time."""
+    try:
+        from intelligence.learning_engine import get_learned_facts
+        return get_learned_facts(category=category, limit=limit)
+    except Exception:
+        print(traceback.format_exc())
+        return []
+
+
+@app.delete("/api/memory/learned/{fact_id}")
+def delete_learned_fact(fact_id: int):
+    """Remove a specific learned fact."""
+    try:
+        from database import get_conn, close_conn
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("DELETE FROM learned_facts WHERE id=?", (fact_id,))
+        conn.commit()
+        close_conn()
+        return {"ok": True}
+    except Exception:
+        raise HTTPException(500, "Delete failed")
