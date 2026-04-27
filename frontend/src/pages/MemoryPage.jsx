@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
 import { getProfile, getPreferences, getMemoryEvents, getGoals, getGoogleAuthStatus } from "../api"
+import BASE from "../api"
 
 const IMP_COLOR = n => n >= 8 ? "var(--red)" : n >= 5 ? "var(--amber)" : "var(--text3)"
 const IMP_LABEL = n => n >= 8 ? "HIGH" : n >= 5 ? "MED" : "LOW"
@@ -22,13 +23,13 @@ export default function MemoryPage() {
     const load = async () => {
       setLoading(true)
       const [p, e, pr, g, ga] = await Promise.all([
-        safeFetch(getProfile,         {}),
-        safeFetch(() => getMemoryEvents(30), []),
-        safeFetch(getPreferences,     []),
-        safeFetch(() => getGoals("active"), []),
-        safeFetch(getGoogleAuthStatus, null),
+        safeFetch(getProfile,                     {}),
+        safeFetch(() => getMemoryEvents(30),      []),
+        safeFetch(getPreferences,                 []),
+        safeFetch(() => getGoals("active"),       []),
+        safeFetch(getGoogleAuthStatus,            null),
       ])
-      setProfile(p)
+      setProfile(typeof p === "object" && !Array.isArray(p) ? p : {})
       setEvents(Array.isArray(e) ? e : [])
       setPrefs(Array.isArray(pr) ? pr : [])
       setGoals(Array.isArray(g) ? g : [])
@@ -49,7 +50,11 @@ export default function MemoryPage() {
       </div>
 
       {loading ? (
-        <div className="card"><div className="empty" style={{ fontFamily: "Share Tech Mono, monospace", fontSize: ".75rem" }}>Loading memory...</div></div>
+        <div className="card">
+          <div className="empty" style={{ fontFamily: "Share Tech Mono, monospace", fontSize: ".75rem" }}>
+            Loading memory...
+          </div>
+        </div>
       ) : (
         <>
           {/* Integrations status */}
@@ -57,14 +62,22 @@ export default function MemoryPage() {
             <div className="card-title">// Integration Status</div>
             <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <div style={{ width: 6, height: 6, borderRadius: "50%", background: googleAuth?.authorized ? "var(--green)" : "var(--red)", boxShadow: `0 0 6px ${googleAuth?.authorized ? "var(--green)" : "var(--red)"}` }} />
+                <div style={{
+                  width: 6, height: 6, borderRadius: "50%",
+                  background: googleAuth?.authorized ? "var(--green)" : "var(--red)",
+                  boxShadow: `0 0 6px ${googleAuth?.authorized ? "var(--green)" : "var(--red)"}`,
+                }} />
                 <span style={{ fontSize: ".75rem", color: "var(--text2)" }}>Google Calendar</span>
                 <span style={{ fontSize: ".65rem", color: "var(--text3)" }}>
                   {googleAuth?.authorized ? "Connected" : "Not connected"}
                 </span>
                 {!googleAuth?.authorized && (
-                  <a href="https://ora-oovf.onrender.com/api/auth/google" target="_blank" rel="noreferrer"
-                    style={{ fontSize: ".65rem", color: "var(--amber)" }}>
+                  <a
+                    href={`${BASE}/api/auth/google`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ fontSize: ".65rem", color: "var(--amber)" }}
+                  >
                     Connect →
                   </a>
                 )}
@@ -124,7 +137,9 @@ export default function MemoryPage() {
                     <span className="mem-key">{p.category}/{p.key}</span>
                     <div style={{ textAlign: "right" }}>
                       <div className="mem-val">{p.value}</div>
-                      <div style={{ fontSize: ".6rem", color: "var(--text3)" }}>{Math.round((p.confidence || 0) * 100)}% conf</div>
+                      <div style={{ fontSize: ".6rem", color: "var(--text3)" }}>
+                        {Math.round((p.confidence || 0) * 100)}% conf
+                      </div>
                     </div>
                   </div>
                 ))
@@ -152,12 +167,14 @@ export default function MemoryPage() {
             </div>
             <div style={{ maxHeight: 380, overflowY: "auto" }}>
               {filtered.length === 0 ? (
-                <div className="empty">No events</div>
+                <div className="empty">No events yet — ORA logs events as you interact</div>
               ) : (
                 filtered.map((e, i) => (
                   <div key={i} className="event-row fade-in">
                     <div style={{ color: IMP_COLOR(e.importance), minWidth: 72 }}>
-                      <div style={{ fontSize: ".68rem", fontFamily: "Share Tech Mono, monospace" }}>{e.event_type || "event"}</div>
+                      <div style={{ fontSize: ".68rem", fontFamily: "Share Tech Mono, monospace" }}>
+                        {e.event_type || "event"}
+                      </div>
                       <div style={{ fontSize: ".55rem" }}>{IMP_LABEL(e.importance)}</div>
                     </div>
                     <div className="event-summary">{e.summary || "—"}</div>

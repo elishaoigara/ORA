@@ -123,6 +123,7 @@ from fastapi import Request
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health(request: Request):
     return {"status": "ok"}
+
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"status": "ORA running"}
@@ -317,6 +318,38 @@ def delete_task(task_id: int):
         raise HTTPException(500, "Failed")
 
 
+# ── Alerts ────────────────────────────────────────────────────
+@app.get("/api/alerts")
+def get_alerts(limit: int = 50):
+    try:
+        from database import get_recent_alerts
+        rows = get_recent_alerts(limit=limit)
+        return [
+            {
+                "id":           r[0],
+                "rule_name":    r[1],
+                "message":      r[2],
+                "severity":     r[3],
+                "timestamp":    r[4],
+                "acknowledged": bool(r[5]),
+            }
+            for r in rows
+        ]
+    except Exception:
+        print(traceback.format_exc())
+        return []
+
+@app.post("/api/alerts/{alert_id}/ack")
+def ack_alert(alert_id: int):
+    try:
+        from database import acknowledge_alert
+        acknowledge_alert(alert_id)
+        return {"ok": True}
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Ack failed")
+
+
 # ── M-Pesa ────────────────────────────────────────────────────
 @app.get("/api/mpesa/transactions")
 def mpesa_transactions(limit: int = 20):
@@ -381,6 +414,49 @@ def get_predictions():
         from intelligence.prediction_engine import predict_needs
         return predict_needs()
     except Exception:
+        return []
+
+
+# ── Memory ────────────────────────────────────────────────────
+@app.get("/api/memory/profile")
+def memory_profile():
+    try:
+        from memory.profile import get_all_profile
+        return get_all_profile()
+    except Exception:
+        print(traceback.format_exc())
+        return {}
+
+@app.get("/api/memory/preferences")
+def memory_preferences():
+    try:
+        from memory.preferences import get_preferences
+        rows = get_preferences()
+        return [
+            {"category": r[0], "key": r[1], "value": r[2], "confidence": r[3]}
+            for r in rows
+        ]
+    except Exception:
+        print(traceback.format_exc())
+        return []
+
+@app.get("/api/memory/events")
+def memory_events(limit: int = 30):
+    try:
+        from memory.events import get_recent_events
+        rows = get_recent_events(limit=limit)
+        return [
+            {
+                "event_type": r[0],
+                "summary":    r[1],
+                "detail":     r[2],
+                "importance": r[3],
+                "timestamp":  r[4],
+            }
+            for r in rows
+        ]
+    except Exception:
+        print(traceback.format_exc())
         return []
 
 
@@ -510,7 +586,6 @@ class PushTestPayload(BaseModel):
 
 @app.post("/api/push/register")
 async def push_register(payload: PushTokenPayload):
-    """Register an Expo push token. Idempotent — safe to call every app launch."""
     try:
         from fcm import save_token
         token = payload.token.strip()
@@ -527,7 +602,6 @@ async def push_register(payload: PushTokenPayload):
 
 @app.delete("/api/push/register")
 async def push_unregister(payload: PushTokenPayload):
-    """Remove a push token (user disables notifications)."""
     try:
         from fcm import remove_token
         remove_token(payload.token.strip())
@@ -539,7 +613,6 @@ async def push_unregister(payload: PushTokenPayload):
 
 @app.get("/api/push/tokens")
 async def push_tokens_count():
-    """Return count of registered tokens only — no raw tokens exposed."""
     try:
         from fcm import get_tokens
         return {"count": len(get_tokens())}
@@ -549,7 +622,6 @@ async def push_tokens_count():
 
 @app.post("/api/push/test")
 async def push_test(payload: PushTestPayload):
-    """Send a test push. If token provided, send only to that device; else broadcast."""
     try:
         from fcm import send_push, send_push_to_token
         title = payload.title or "ORA Test"

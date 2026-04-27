@@ -31,7 +31,7 @@ export const health = () => request("/health");
 export const getStatus = () => request("/status");
 export const getAgentStatus = () => request("/agent/status");
 
-export const getTasks = () => request("/tasks");
+export const getTasks = (status = "pending") => request(`/tasks?status=${status}`);
 export const getGoals = () => request("/goals");
 export const getCalendarToday = () => request("/calendar/today");
 
@@ -48,17 +48,21 @@ export const sendMessage = (message) =>
   });
 
 /* =========================
-   PLACEHOLDER FEATURES (NO BACKEND YET)
+   ALERTS (REAL BACKEND)
    ========================= */
 
-export const getAlerts = () => request("/agent/status"); // fallback mapping
-export const ackAlert = async () => ({ ok: true });
-export const ackAllAlerts = async () => ({ ok: true });
+export const getAlerts = (limit = 50) => request(`/alerts?limit=${limit}`);
 
-export const getTheNumber = async () => ({ value: 0 });
+export const ackAlert = (id) =>
+  request(`/alerts/${id}/ack`, { method: "POST" });
 
-/* ========================= */
-export default BASE_URL;
+export const ackAllAlerts = async () => {
+  const alerts = await getAlerts(100);
+  const unread = Array.isArray(alerts) ? alerts.filter((a) => !a.acknowledged) : [];
+  await Promise.all(unread.map((a) => ackAlert(a.id)));
+  return { ok: true };
+};
+
 /* =========================
    TASKS (REAL BACKEND)
    ========================= */
@@ -80,19 +84,52 @@ export const deleteTask = (taskId) =>
   });
 
 /* =========================
-   MEMORY (PLACEHOLDERS for now)
+   THE NUMBER (top priority task)
    ========================= */
 
-export const getProfile = async () => ({
-  name: "User",
-  email: "",
-});
+export const getTheNumber = async () => {
+  try {
+    const tasks = await getTasks("pending");
+    if (!Array.isArray(tasks) || tasks.length === 0) return { status: "empty" };
 
-export const getPreferences = async () => ({
-  theme: "light",
-});
+    const now = new Date();
+    const scored = tasks.map((t) => {
+      const isOverdue = t.due_at && new Date(t.due_at) < now;
+      const priScore = t.priority === "high" ? 30 : t.priority === "medium" ? 10 : 0;
+      const overdueScore = isOverdue ? 40 : 0;
+      const ageScore = Math.min(
+        Math.floor((now - new Date(t.created_at)) / (1000 * 60 * 60 * 24)) * 2,
+        20
+      );
+      return { ...t, score: priScore + overdueScore + ageScore, overdue: isOverdue };
+    });
 
-export const getMemoryEvents = async () => ([]);
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored[0];
+    return {
+      ...top,
+      reason:
+        top.overdue
+          ? "Overdue — needs immediate attention"
+          : top.priority === "high"
+          ? "High priority task"
+          : "Top pending task",
+    };
+  } catch {
+    return { status: "empty" };
+  }
+};
+
+/* =========================
+   MEMORY (REAL BACKEND)
+   ========================= */
+
+export const getProfile = () => request("/memory/profile");
+
+export const getPreferences = () => request("/memory/preferences");
+
+export const getMemoryEvents = (limit = 30) =>
+  request(`/memory/events?limit=${limit}`);
 
 /* =========================
    GOOGLE AUTH (matches backend)
@@ -100,3 +137,9 @@ export const getMemoryEvents = async () => ([]);
 
 export const getGoogleAuthStatus = () =>
   request("/auth/google/status");
+
+/* =========================
+   BASE URL EXPORT
+   ========================= */
+
+export default BASE_URL;

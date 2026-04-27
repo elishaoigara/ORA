@@ -11,6 +11,10 @@ Supported intents:
   - spend_summary  "how much have I spent today"
   - set_goal       "my goal is to finish the project by Friday"
   - check_tasks    "what are my tasks"
+
+NOTE: This file is intentionally lowercase (intent_parser.py).
+      The old Intent_parser.py must be deleted to avoid import confusion
+      on Linux/macOS case-sensitive file systems.
 """
 
 import re
@@ -261,12 +265,13 @@ def _do_spend_summary() -> str:
         from mpesa_engine import get_today_spend, get_average_daily_spend
         today = get_today_spend()
         avg = get_average_daily_spend()
+        total = today.get("total", 0)
+        txns = today.get("transactions", 0)
         lines = ["M-Pesa summary:"]
-        if today is not None:
-            lines.append(f"Today: KES {today:,.0f}")
-        if avg is not None:
+        lines.append(f"Today: KES {total:,.0f} ({txns} transactions)")
+        if avg:
             lines.append(f"Daily average: KES {avg:,.0f}")
-        return "\n".join(lines) if len(lines) > 1 else ""
+        return "\n".join(lines)
     except Exception as e:
         print(f"[INTENT] spend_summary failed: {e}")
         return ""
@@ -285,7 +290,7 @@ def _do_set_goal(payload: dict) -> str:
         return ""
 
 
-def _do_check_tasks(payload: dict = None) -> str:
+def _do_check_tasks() -> str:
     try:
         from database import get_tasks
         tasks = get_tasks("pending")
