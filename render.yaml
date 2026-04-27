@@ -1,6 +1,6 @@
 services:
   # ─────────────────────────────────────────────
-  # BACKEND
+  # BACKEND (Render Free Tier — 512MB RAM)
   # ─────────────────────────────────────────────
   - type: web
     name: ora-backend
@@ -15,6 +15,7 @@ services:
       sizeGB: 1
 
     envVars:
+      # ── Core ───────────────────────────────────
       - key: GROQ_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
@@ -23,19 +24,42 @@ services:
         sync: false
       - key: ORA_LOOP_INTERVAL
         value: "30"
-      - key: FRONTEND_URL
-        sync: false
       - key: ORA_DATA_DIR
         value: /opt/ora-data
       - key: RENDER_EXTERNAL_URL
         sync: false
+      - key: FRONTEND_URL
+        sync: false
+
+      # ── Google OAuth (set these in Render dashboard) ───
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      # IMPORTANT: set this to https://your-backend.onrender.com/api/auth/google/callback
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+
+      # ── GitHub (optional) ──────────────────────
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_USERNAME
+        sync: false
+
+      # ── Weather (defaults to Nairobi — change if needed) ──
+      - key: WEATHER_LAT
+        value: "-1.2921"
+      - key: WEATHER_LON
+        value: "36.8219"
+
+      # ── Groq model overrides ───────────────────
       - key: GROQ_MODEL_PRIMARY
         value: "llama-3.3-70b-versatile"
       - key: GROQ_MODEL_FALLBACK
         value: "llama-3.1-8b-instant"
 
   # ─────────────────────────────────────────────
-  # FRONTEND
+  # FRONTEND (Render Static)
   # ─────────────────────────────────────────────
   - type: web
     name: ora-frontend
@@ -44,6 +68,7 @@ services:
     buildCommand: npm install && npm run build
     staticPublishPath: dist
 
+    # SPA routing — prevents 404 on hard refresh
     routes:
       - type: rewrite
         source: /*
@@ -64,5 +89,6 @@ services:
         value: no-cache, no-store, must-revalidate
 
     envVars:
+      # Set to your ora-backend Render URL e.g. https://ora-backend.onrender.com
       - key: VITE_API_URL
         sync: false
