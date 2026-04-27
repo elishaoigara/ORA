@@ -14,15 +14,6 @@ from typing import Any, Optional
 import psutil
 import requests
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, BackgroundTasks
-
-@property
-def value(self):
-    raise NotImplementedError
-
-@value.setter
-def value(self, value):
-    raise NotImplementedError
-
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
@@ -127,8 +118,6 @@ except Exception as e:
 
 
 # ── Health ────────────────────────────────────────────────────
-
-from fastapi import Request
 
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health(request: Request):
@@ -515,6 +504,15 @@ def trigger_checkin():
         from intelligence.goals_engine import run_goal_checkin
         run_goal_checkin()
         return {"status": "sent"}
+    except Exception:
+        raise HTTPException(500, "Failed")
+
+@app.post("/api/goals/{goal_id}/complete")
+def complete_goal_ep(goal_id: int):
+    try:
+        from intelligence.goals_engine import complete_goal
+        complete_goal(goal_id)
+        return {"status": "completed"}
     except Exception:
         raise HTTPException(500, "Failed")
 

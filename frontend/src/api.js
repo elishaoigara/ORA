@@ -56,12 +56,8 @@ export const getAlerts = (limit = 50) => request(`/alerts?limit=${limit}`);
 export const ackAlert = (id) =>
   request(`/alerts/${id}/ack`, { method: "POST" });
 
-export const ackAllAlerts = async () => {
-  const alerts = await getAlerts(100);
-  const unread = Array.isArray(alerts) ? alerts.filter((a) => !a.acknowledged) : [];
-  await Promise.all(unread.map((a) => ackAlert(a.id)));
-  return { ok: true };
-};
+export const ackAllAlerts = () =>
+  request("/alerts/ack-all", { method: "POST" });
 
 /* =========================
    TASKS (REAL BACKEND)
@@ -137,6 +133,83 @@ export const getMemoryEvents = (limit = 30) =>
 
 export const getGoogleAuthStatus = () =>
   request("/auth/google/status");
+
+/* =========================
+   KNOWLEDGE
+   ========================= */
+
+export const getDocuments = () => request("/knowledge/documents");
+
+export const searchKnowledge = (query, n_results = 4) =>
+  request("/knowledge/search", {
+    method: "POST",
+    body: JSON.stringify({ query, n_results }),
+  });
+
+export const deleteDocument = (filename) =>
+  request(`/knowledge/documents/${encodeURIComponent(filename)}`, {
+    method: "DELETE",
+  });
+
+export const getDocumentSummary = (filename) =>
+  request(`/knowledge/summary/${encodeURIComponent(filename)}`);
+
+export const uploadDocument = async (file, tags = "") => {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (tags) formData.append("tags", tags);
+  const res = await fetch(`${BASE_URL}/api/knowledge/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+};
+
+/* =========================
+   BRIEFING & PREDICTIONS
+   ========================= */
+
+export const getBriefing = () => request("/briefing");
+export const getPredictions = () => request("/predictions");
+export const triggerAgentRun = () => request("/agent/run", { method: "POST" });
+
+/* =========================
+   PUSH NOTIFICATIONS
+   ========================= */
+
+export const registerPushToken = (token, platform = "expo") =>
+  request("/push/register", {
+    method: "POST",
+    body: JSON.stringify({ token, platform }),
+  });
+
+export const unregisterPushToken = (token) =>
+  request("/push/register", {
+    method: "DELETE",
+    body: JSON.stringify({ token }),
+  });
+
+export const getPushTokenCount = () => request("/push/tokens");
+
+export const testPush = (token = null, title = "ORA Test", body = "Push works ✓") =>
+  request("/push/test", {
+    method: "POST",
+    body: JSON.stringify({ token, title, body }),
+  });
+
+/* =========================
+   GOALS (extended)
+   ========================= */
+
+export const createGoal = (goal, due_at = null) =>
+  request("/goals", {
+    method: "POST",
+    body: JSON.stringify({ goal, due_at }),
+  });
+
+export const triggerGoalCheckin = () =>
+  request("/goals/checkin", { method: "POST" });
 
 /* =========================
    BASE URL EXPORT

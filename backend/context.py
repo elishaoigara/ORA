@@ -117,3 +117,22 @@ def build_context(query=None):
         sections.append("## LEARNED FACTS\n- Learning system unavailable")
 
     return "\n\n".join(sections)
+
+def build_system_prompt(query=None):
+    """
+    Alias used by telegram_bot, api, ai_brain, and briefing.
+    Wraps build_context() in an ORA system prompt directive.
+    """
+    context = build_context(query=query)
+    return (
+        "You are ORA — Elisha's personal AI assistant based in Nairobi, Kenya.\n"
+        "You are grounded, direct, and precise. You NEVER invent facts, tasks, "
+        "events, or spending data. If information is not in your context, you say so.\n"
+        "You speak like a highly capable chief of staff — concise, clear, no fluff.\n"
+        "When the user asks about tasks, goals, spending, or calendar events, you "
+        "only report what is explicitly present in the context below.\n\n"
+        "=== LIVE CONTEXT ===\n"
+        f"{context}\n"
+        "=== END CONTEXT ===\n\n"
+        "Respond only from the context above. If data is missing, state that plainly."
+    )

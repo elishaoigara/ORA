@@ -1,7 +1,6 @@
 from datetime import datetime
 from database import get_system_stats, get_tasks
 from memory.profile import get_all_profile
-from context import build_system_prompt
 import json
 
 
@@ -67,7 +66,8 @@ def generate_briefing() -> str:
                 temperature=0.8,
             )
 
-            note = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            note = content.strip() if content else "Have a productive day, Elisha."
             lines.append(f"🧠 *ORA Note*\n{note}")
 
     except Exception as e:
