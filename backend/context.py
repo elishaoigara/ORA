@@ -1,3 +1,9 @@
+"""
+ORA Context Builder — Upgraded
+Builds the system prompt that makes ORA feel like a real personal assistant,
+not a chatbot. Tone is direct, warm, grounded — no corporate filler.
+"""
+
 from memory.profile import get_all_profile
 from memory.events import get_recent_events, get_important_events
 from memory.preferences import get_preferences
@@ -5,15 +11,13 @@ from database import get_recent_alerts
 from datetime import datetime
 
 
-# =============================
+# ─────────────────────────────────────────────
 # CONTEXT BUILDER
-# =============================
+# ─────────────────────────────────────────────
 def build_context(query=None):
     sections = []
 
-    # =================
     # PROFILE
-    # =================
     profile = get_all_profile()
     if profile:
         sections.append(
@@ -21,18 +25,22 @@ def build_context(query=None):
             "\n".join([f"- {k}: {v}" for k, v in profile.items()])
         )
 
-    # =================
     # TIME
-    # =================
     now = datetime.now()
+    hour = now.hour
+    time_of_day = (
+        "early morning" if hour < 6 else
+        "morning"       if hour < 12 else
+        "afternoon"     if hour < 17 else
+        "evening"       if hour < 21 else
+        "late night"
+    )
     sections.append(
         "## CURRENT TIME (Nairobi, Kenya)\n"
-        f"- {now.strftime('%A, %d %B %Y at %H:%M')}"
+        f"- {now.strftime('%A, %d %B %Y at %H:%M')} ({time_of_day})"
     )
 
-    # =================
-    # GOOGLE CALENDAR (Phase 2)
-    # =================
+    # GOOGLE CALENDAR
     try:
         from connectors.calendar import get_events_today, format_events_for_context
         events = get_events_today()
@@ -40,11 +48,9 @@ def build_context(query=None):
             formatted = format_events_for_context(events)
             sections.append("## TODAY'S CALENDAR\n" + formatted)
     except Exception:
-        pass  # Not connected yet — safe to skip
+        pass
 
-    # =================
     # IMPORTANT EVENTS
-    # =================
     try:
         important = get_important_events(min_importance=7, limit=5)
         if important:
@@ -58,9 +64,7 @@ def build_context(query=None):
     except Exception as e:
         print(f"[CONTEXT] Important events error: {e}")
 
-    # =================
     # RECENT ACTIVITY
-    # =================
     try:
         recent = get_recent_events(limit=6)
         if recent:
@@ -71,9 +75,7 @@ def build_context(query=None):
     except Exception as e:
         print(f"[CONTEXT] Recent events error: {e}")
 
-    # =================
     # PREFERENCES
-    # =================
     try:
         prefs = get_preferences()
         if prefs:
@@ -84,9 +86,7 @@ def build_context(query=None):
     except Exception as e:
         print(f"[CONTEXT] Preferences error: {e}")
 
-    # =================
     # ACTIVE ALERTS
-    # =================
     try:
         alerts = get_recent_alerts(limit=5)
         if alerts:
@@ -99,9 +99,7 @@ def build_context(query=None):
     except Exception as e:
         print(f"[CONTEXT] Alerts error: {e}")
 
-    # =================
     # KNOWLEDGE BASE (RAG)
-    # =================
     if query:
         try:
             from knowledge.rag import rag_search
@@ -117,27 +115,60 @@ def build_context(query=None):
     return "\n\n".join(sections)
 
 
-# =============================
-# SYSTEM PROMPT
-# =============================
+# ─────────────────────────────────────────────
+# SYSTEM PROMPT — Natural, direct, personal
+# ─────────────────────────────────────────────
 def build_system_prompt(query=None):
     context = build_context(query=query)
 
-    return (
-        "You are ORA — Oigara's Responsive Assistant.\n"
-        "You are a private AI assistant for Elisha Lambert Oigara, "
-        "a Software Engineer based in Nairobi, Kenya.\n\n"
+    now = datetime.now()
+    hour = now.hour
 
-        "## BEHAVIOUR RULES\n"
-        "- Be precise, concise, and factual.\n"
-        "- Use ONLY the provided context to answer.\n"
-        "- If information is missing, say: 'I don't have that in memory.'\n"
-        "- Do NOT hallucinate files, documents, or events.\n"
-        "- When using knowledge base, rely strictly on retrieved chunks.\n"
-        "- Keep responses under 200 words unless asked for detail.\n\n"
+    # Time-aware opening tone
+    if hour < 6:
+        tone_note = "It's the middle of the night — keep it brief and practical unless he wants to dig in."
+    elif hour < 10:
+        tone_note = "Morning session — be energizing but grounded. Help him plan the day if that comes up."
+    elif hour < 14:
+        tone_note = "Midday — he's likely in work mode. Be efficient and direct."
+    elif hour < 18:
+        tone_note = "Afternoon — he may be wrapping up tasks or planning ahead. Stay practical."
+    elif hour < 22:
+        tone_note = "Evening — he might be reflecting on the day or planning tomorrow. Match his energy."
+    else:
+        tone_note = "Late night — be calm, concise. Don't over-explain."
+
+    return (
+        "You are ORA — Elisha Lambert Oigara's personal AI assistant. "
+        "You're not a chatbot. You're not a helper bot. "
+        "You're his second brain — the one that knows his tasks, goals, calendar, spending, and what he's been working on.\n\n"
+
+        "## WHO YOU'RE TALKING TO\n"
+        "Elisha is a Software Engineer based in Nairobi, Kenya. "
+        "He built you. He knows how you work. "
+        "Talk to him like a sharp, reliable colleague who has full context on his life — "
+        "not like a generic assistant reading off a template.\n\n"
+
+        "## HOW TO TALK\n"
+        "- Be direct. No filler. No 'Certainly!' or 'Great question!' — ever.\n"
+        "- Use short sentences. Say what matters. Cut the rest.\n"
+        "- If you know the answer from context, give it. Don't hedge unnecessarily.\n"
+        "- If you don't have the info, say: 'I don't have that in memory' — then suggest what to do.\n"
+        "- Match his tone. If he's brief, be brief. If he wants detail, give detail.\n"
+        "- You can push back or flag concerns. You're not just agreeable.\n"
+        "- Never hallucinate. Never invent tasks, events, or documents that aren't in context.\n\n"
+
+        f"## TIME AWARENESS\n"
+        f"{tone_note}\n\n"
+
+        "## ACTIONS YOU CAN EXECUTE\n"
+        "When Elisha asks you to do something actionable, you do it — "
+        "tasks, reminders, goals, M-Pesa summaries, document searches. "
+        "After an action, confirm it cleanly: what was done, any relevant detail.\n\n"
 
         "## CURRENT CONTEXT\n"
         f"{context}\n\n"
 
-        "Respond as ORA. Stay grounded in memory and retrieved knowledge."
+        "Respond as ORA. Stay grounded in memory and retrieved knowledge. "
+        "Be the assistant he actually wants to talk to."
     )
