@@ -14,6 +14,15 @@ from typing import Any, Optional
 import psutil
 import requests
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, BackgroundTasks
+
+@property
+def value(self):
+    raise NotImplementedError
+
+@value.setter
+def value(self, value):
+    raise NotImplementedError
+
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
@@ -869,10 +878,11 @@ def get_briefing():
 
         pending = get_tasks("pending")
         goals   = get_goals("active")
-        spend   = 0
+        spend   = 0.0
         try:
             from mpesa_engine import get_today_spend
-            spend = get_today_spend()
+            today_spend = get_today_spend()
+            spend = float(today_spend) if today_spend else 0.0
         except Exception:
             pass
 
@@ -916,17 +926,6 @@ def ack_all_alerts():
     except Exception:
         print(traceback.format_exc())
         raise HTTPException(500, "Ack-all failed")
-
-
-@app.get("/api/memory/learned")
-def get_learned_facts_ep(category: str = None, limit: int = 30):
-    """Facts ORA has learned from conversations over time."""
-    try:
-        from intelligence.learning_engine import get_learned_facts
-        return get_learned_facts(category=category, limit=limit)
-    except Exception:
-        print(traceback.format_exc())
-        return []
 
 
 @app.delete("/api/memory/learned/{fact_id}")
