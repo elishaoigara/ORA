@@ -12,8 +12,11 @@ import traceback
 import time
 from typing import Optional
 
-GITHUB_TOKEN    = os.getenv("GITHUB_TOKEN", "")
-GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "")
+try:
+    from config import GITHUB_TOKEN, GITHUB_USERNAME
+except ImportError:
+    GITHUB_TOKEN    = os.getenv("GITHUB_TOKEN", "")
+    GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "")
 BASE_URL        = "https://api.github.com"
 
 _cache: dict = {}

@@ -127,6 +127,15 @@ async def health(request: Request):
 def root():
     return {"status": "ORA running"}
 
+@app.get("/api/google/status")
+def google_status():
+    """Quick check — is Google OAuth connected?"""
+    try:
+        from connectors.google_auth import is_authorized
+        return {"connected": is_authorized()}
+    except Exception:
+        return {"connected": False}
+
 @app.get("/api/status")
 def status():
     return {"cpu": psutil.cpu_percent(interval=0.1),
@@ -285,10 +294,18 @@ async def chat(payload: ChatRequest):
             except Exception:
                 pass
 
+            # Fetch calendar events for grounding check
+            calendar_events = []
+            try:
+                from connectors.calendar import get_events_today
+                calendar_events = get_events_today()
+            except Exception:
+                pass
+
             grounding = build_grounding_instruction(
                 has_tasks=context_has_tasks(tasks),
                 has_goals=context_has_goals(goals),
-                has_calendar=False,  # Calendar OAuth pending
+                has_calendar=bool(calendar_events),
                 has_spend=context_has_spend(spend_data),
             )
             system_prompt += f"\n\n{grounding}"
@@ -749,22 +766,6 @@ async def push_test(payload: PushTestPayload):
 # ═══════════════════════════════════════════════════════════════
 # PHASE 4 — Data connector endpoints
 # ═══════════════════════════════════════════════════════════════
-
-@app.get("/api/gmail/summary")
-def gmail_summary():
-    try:
-        from connectors.gmail import get_gmail_summary
-        return get_gmail_summary()
-    except Exception:
-        return {}
-
-@app.get("/api/gmail/emails")
-def gmail_emails(limit: int = 10):
-    try:
-        from connectors.gmail import get_recent_emails
-        return get_recent_emails(max_results=min(limit, 10))
-    except Exception:
-        return []
 
 @app.get("/api/weather")
 def weather():
