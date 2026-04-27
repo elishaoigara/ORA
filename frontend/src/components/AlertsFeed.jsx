@@ -1,63 +1,90 @@
-export default function AlertsFeed({ alerts, onAck }) {
-  const colors = { high: "#f87171", medium: "#fbbf24", low: "#34d399" }
-
+export default function AlertsFeed({ alerts = [], onAck }) {
   if (!alerts.length) {
     return (
-      <div style={s.card}>
-        <h2 style={s.title}>Alerts</h2>
-        <p style={s.empty}>✅ No alerts. All clear.</p>
+      <div className="card fade-in">
+        <div className="card-title">ALERT FEED</div>
+
+        <div className="empty">
+          <div className="empty-icon">✓</div>
+          <div>NO ACTIVE SIGNALS</div>
+        </div>
       </div>
     )
   }
 
   return (
-    <div style={s.card}>
-      <h2 style={s.title}>Alerts</h2>
-      <div style={s.list}>
-        {alerts.map(alert => (
-          <div key={alert.id} style={{
-            ...s.alert,
-            borderLeftColor: colors[alert.severity] || "#444",
-            opacity: alert.acknowledged ? 0.4 : 1
-          }}>
-            <div style={s.row}>
-              <span style={{ color: colors[alert.severity], fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase" }}>
-                {alert.severity}
-              </span>
-              <span style={s.time}>
-                {new Date(alert.timestamp).toLocaleTimeString()}
-              </span>
+    <div className="card fade-in">
+      <div className="card-title">ALERT FEED</div>
+
+      {alerts.map(alert => {
+        const level = mapSeverity(alert.severity)
+
+        return (
+          <div
+            key={alert.id}
+            className={`alert-row ${level}`}
+            style={{
+              opacity: alert.acknowledged ? 0.35 : 1
+            }}
+          >
+            {/* HEADER */}
+            <div style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center"
+            }}>
+              <div className="alert-severity">
+                {level.toUpperCase()}
+              </div>
+
+              <div className="event-time">
+                {formatTime(alert.timestamp)}
+              </div>
             </div>
-            <p style={s.message}>{alert.message}</p>
+
+            {/* MESSAGE */}
+            <div className="alert-msg">
+              {alert.message}
+            </div>
+
+            {/* ACTION */}
             {!alert.acknowledged && (
-              <button style={s.ackBtn} onClick={() => onAck(alert.id)}>
-                acknowledge
-              </button>
+              <div style={{ marginTop: "6px" }}>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => onAck(alert.id)}
+                >
+                  ACKNOWLEDGE
+                </button>
+              </div>
             )}
           </div>
-        ))}
-      </div>
+        )
+      })}
     </div>
   )
 }
 
-const s = {
-  card: {
-    background: "#0d0d1a",
-    border: "1px solid #1a1a2e",
-    borderRadius: 16,
-    padding: "1.5rem",
-  },
-  title: { color: "#7c6af7", fontSize: "1rem", fontWeight: 600, marginBottom: "1.25rem", textTransform: "uppercase", letterSpacing: 1 },
-  list: { display: "flex", flexDirection: "column", gap: "0.75rem" },
-  alert: { borderLeft: "3px solid", paddingLeft: "1rem", paddingTop: "0.5rem", paddingBottom: "0.5rem" },
-  row: { display: "flex", justifyContent: "space-between", marginBottom: 4 },
-  time: { color: "#333", fontSize: "0.72rem" },
-  message: { color: "#ccc", fontSize: "0.9rem" },
-  ackBtn: {
-    marginTop: 6, background: "none", border: "1px solid #2a2a3e",
-    color: "#555", borderRadius: 4, padding: "2px 8px",
-    fontSize: "0.72rem", cursor: "pointer"
-  },
-  empty: { color: "#444" }
+/* ───────── HELPERS ───────── */
+
+function mapSeverity(sev) {
+  if (!sev) return "low"
+
+  const s = sev.toLowerCase()
+
+  if (s.includes("crit")) return "critical"
+  if (s.includes("high")) return "high"
+  if (s.includes("med")) return "medium"
+  return "low"
+}
+
+function formatTime(ts) {
+  try {
+    return new Date(ts).toLocaleTimeString("en-KE", {
+      hour: "2-digit",
+      minute: "2-digit"
+    })
+  } catch {
+    return ""
+  }
 }
