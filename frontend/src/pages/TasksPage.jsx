@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { getTasks, createTask, completeTask, deleteTask } from "../api"
 
-const PRI_COLOR = { high: "var(--red)", medium: "var(--amber)", low: "var(--green)" }
 const PRIORITIES = ["high", "medium", "low"]
 
 export default function TasksPage() {
@@ -55,67 +54,113 @@ export default function TasksPage() {
 
   const overdueTasks = tasks.filter(t => t.due_at && new Date(t.due_at) < new Date())
 
+  const getPriorityColor = (p) => {
+    if (p === "high") return { bg: "rgba(255, 0, 110, 0.2)", color: "#ff006e" }
+    if (p === "medium") return { bg: "rgba(255, 165, 0, 0.2)", color: "#ffa500" }
+    return { bg: "rgba(57, 255, 20, 0.2)", color: "#39ff14" }
+  }
+
   return (
-    <div className="page">
-      <div className="page-header">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
-            <div className="page-title">// Task Queue</div>
-            <div className="page-sub">{tasks.length} {filter} · {overdueTasks.length} overdue</div>
-          </div>
-          <button className="btn btn-primary" onClick={() => setShowAdd(!showAdd)}>
-            {showAdd ? "✕ CANCEL" : "+ ADD TASK"}
-          </button>
+    <div className="dashboard-container">
+      {/* Header */}
+      <div className="dashboard-header">
+        <div>
+          <h1 className="dashboard-title">Task Queue</h1>
+          <p className="dashboard-subtitle">{tasks.length} {filter} · {overdueTasks.length} overdue</p>
+        </div>
+        <button className="cyber-button" onClick={() => setShowAdd(!showAdd)}>
+          {showAdd ? "✕ Cancel" : "+ Add Task"}
+        </button>
+      </div>
+
+      {/* Stats */}
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-label">Pending</div>
+          <div className="stat-value">{tasks.filter(t => t.status === "pending" || !t.status).length}</div>
+        </div>
+        <div className="stat-card magenta">
+          <div className="stat-label magenta">Overdue</div>
+          <div className={`stat-value ${overdueTasks.length > 0 ? 'magenta' : 'lime'}`}>{overdueTasks.length}</div>
+        </div>
+        <div className="stat-card lime">
+          <div className="stat-label">Completed</div>
+          <div className="stat-value lime">{tasks.filter(t => t.status === "done").length}</div>
         </div>
       </div>
 
-      {/* Add Task */}
+      {/* Add Task Form */}
       {showAdd && (
-        <div className="card fade-in" style={{ marginBottom: "1rem", borderColor: "rgba(245,158,11,.3)" }}>
-          <div className="card-title">New Task</div>
-          <input
-            className="input"
-            placeholder="Task title..."
-            value={title}
-            onChange={e => setTitle(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && handleAdd()}
-            autoFocus
-            style={{ marginBottom: 8 }}
-          />
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", gap: 4 }}>
-              {PRIORITIES.map(p => (
-                <button
-                  key={p}
-                  className={`btn ${priority === p ? "btn-primary" : ""}`}
-                  style={{ color: PRI_COLOR[p], borderColor: priority === p ? PRI_COLOR[p] : undefined }}
-                  onClick={() => setPriority(p)}
-                >
-                  {p.toUpperCase()}
-                </button>
-              ))}
-            </div>
+        <div className="dashboard-card" style={{ borderColor: "rgba(255, 165, 0, 0.3)", marginBottom: "20px" }}>
+          <div className="card-header">
+            <span className="card-icon">✏️</span>
+            <span className="card-title">New Task</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
             <input
-              type="datetime-local"
-              className="input"
-              style={{ flex: 1, minWidth: 180 }}
-              value={dueAt}
-              onChange={e => setDueAt(e.target.value)}
+              className="chat-textarea"
+              placeholder="Task title..."
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleAdd()}
+              autoFocus
+              style={{ resize: "none", height: "auto" }}
             />
-            <button className="btn btn-primary" onClick={handleAdd} disabled={saving || !title.trim()}>
-              {saving ? "···" : "CREATE"}
-            </button>
+            <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: "8px" }}>
+                {PRIORITIES.map(p => {
+                  const colors = getPriorityColor(p)
+                  return (
+                    <button
+                      key={p}
+                      className="cyber-button"
+                      style={{
+                        background: priority === p ? colors.bg : "transparent",
+                        borderColor: colors.color,
+                        color: colors.color,
+                        padding: "8px 12px",
+                        fontSize: "11px"
+                      }}
+                      onClick={() => setPriority(p)}
+                    >
+                      {p.toUpperCase()}
+                    </button>
+                  )
+                })}
+              </div>
+              <input
+                type="datetime-local"
+                className="chat-textarea"
+                style={{ flex: 1, minWidth: "180px", height: "auto" }}
+                value={dueAt}
+                onChange={e => setDueAt(e.target.value)}
+              />
+              <button 
+                className="cyber-button" 
+                onClick={handleAdd} 
+                disabled={saving || !title.trim()}
+                style={{ padding: "8px 16px" }}
+              >
+                {saving ? "Creating..." : "Create"}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Filter */}
-      <div style={{ display: "flex", gap: 6, marginBottom: "1rem" }}>
+      {/* Filter Buttons */}
+      <div style={{ display: "flex", gap: "12px", marginBottom: "20px" }}>
         {["pending", "done"].map(f => (
           <button
             key={f}
-            className={`btn ${filter === f ? "btn-primary" : "btn-ghost"}`}
+            className="cyber-button"
             onClick={() => setFilter(f)}
+            style={{
+              background: filter === f ? "rgba(0, 240, 255, 0.2)" : "transparent",
+              borderColor: filter === f ? "var(--neon-cyan)" : "rgba(0, 240, 255, 0.3)",
+              color: filter === f ? "var(--neon-cyan)" : "var(--text-secondary)",
+              padding: "8px 16px"
+            }}
           >
             {f.toUpperCase()}
           </button>
@@ -123,55 +168,91 @@ export default function TasksPage() {
       </div>
 
       {/* Task List */}
-      <div className="card">
-        <div className="card-title">
-          {filter === "pending" ? "Pending" : "Completed"} ({tasks.length})
+      <div className="dashboard-card">
+        <div className="card-header">
+          <span className="card-icon">📋</span>
+          <span className="card-title">{filter === "pending" ? "Pending" : "Completed"} Tasks</span>
+          <span className="card-badge">{tasks.length}</span>
         </div>
 
         {loading ? (
-          <div className="empty">Loading tasks...</div>
+          <div style={{ textAlign: "center", padding: "32px", color: "var(--text-tertiary)" }}>
+            Loading tasks...
+          </div>
         ) : tasks.length === 0 ? (
-          <div className="empty">
+          <div className="empty-state">
             <div className="empty-icon">◆</div>
             {filter === "pending" ? "Queue empty — add a task above" : "No completed tasks"}
           </div>
         ) : (
-          tasks.map(t => {
-            const isOverdue = t.due_at && new Date(t.due_at) < new Date()
-            const acting    = actingOn === t.id
-            return (
-              <div key={t.id} className="task-row fade-in" style={{ opacity: acting ? .5 : 1 }}>
-                <div style={{ flex: 1 }}>
-                  <div className="task-title" style={{ color: isOverdue ? "var(--red)" : undefined }}>
-                    {isOverdue && "⚠ "}{t.title}
+          <div className="task-list">
+            {tasks.map(t => {
+              const isOverdue = t.due_at && new Date(t.due_at) < new Date()
+              const acting    = actingOn === t.id
+              const priColor = getPriorityColor(t.priority)
+              return (
+                <div key={t.id} className="task-item" style={{ opacity: acting ? 0.5 : 1 }}>
+                  <div style={{ flex: 1 }}>
+                    <div className="task-title" style={{ color: isOverdue ? "#ff006e" : "var(--text-primary)" }}>
+                      {isOverdue && "⚠ "}{t.title}
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--text-tertiary)", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>
+                      #{t.id} · {t.created_at?.slice(0, 10)}
+                      {t.due_at && (
+                        <span style={{ color: isOverdue ? "#ff006e" : "var(--text-tertiary)" }}>
+                          {" · DUE "}{new Date(t.due_at).toLocaleString("en-KE", { dateStyle: "short", timeStyle: "short" })}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="task-meta">
-                    #{t.id} · {t.created_at?.slice(0, 10)}
-                    {t.due_at && (
-                      <span style={{ color: isOverdue ? "var(--red)" : "var(--text3)" }}>
-                        {" · DUE "}{new Date(t.due_at).toLocaleString("en-KE", { dateStyle: "short", timeStyle: "short" })}
-                      </span>
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    <span 
+                      style={{ 
+                        fontFamily: "'JetBrains Mono', monospace", 
+                        fontSize: "10px", 
+                        fontWeight: 700, 
+                        color: priColor.color,
+                        background: priColor.bg,
+                        padding: "4px 8px",
+                        borderRadius: "4px",
+                        border: `1px solid ${priColor.color}`
+                      }}
+                    >
+                      {t.priority?.toUpperCase()}
+                    </span>
+                    {filter === "pending" && (
+                      <button 
+                        className="cyber-button"
+                        style={{ 
+                          padding: "4px 8px", 
+                          fontSize: "11px",
+                          color: "#39ff14",
+                          borderColor: "rgba(57, 255, 20, 0.4)"
+                        }}
+                        onClick={() => handleComplete(t.id)} 
+                        disabled={acting}
+                      >
+                        ✓
+                      </button>
                     )}
+                    <button 
+                      className="cyber-button"
+                      style={{ 
+                        padding: "4px 8px", 
+                        fontSize: "11px",
+                        color: "#ff006e",
+                        borderColor: "rgba(255, 0, 110, 0.4)"
+                      }}
+                      onClick={() => handleDelete(t.id)} 
+                      disabled={acting}
+                    >
+                      ✕
+                    </button>
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <span style={{ fontFamily: "Share Tech Mono, monospace", fontSize: ".68rem", fontWeight: 700, color: PRI_COLOR[t.priority] }}>
-                    {t.priority?.toUpperCase()}
-                  </span>
-                  {filter === "pending" && (
-                    <button className="btn" style={{ fontSize: ".6rem", color: "var(--green)", borderColor: "rgba(0,255,157,.3)" }}
-                      onClick={() => handleComplete(t.id)} disabled={acting}>
-                      ✓
-                    </button>
-                  )}
-                  <button className="btn btn-danger" style={{ fontSize: ".6rem" }}
-                    onClick={() => handleDelete(t.id)} disabled={acting}>
-                    ✕
-                  </button>
-                </div>
-              </div>
-            )
-          })
+              )
+            })}
+          </div>
         )}
       </div>
     </div>

@@ -194,11 +194,11 @@ export default function ChatPage() {
   }, []);
 
   const currentChips = QUICK_SETS[quickSet] || QUICK_SETS.default;
-  const statusColor = backendState === "online" ? "#22c55e" : backendState === "cold" ? "#eab308" : "#64748b";
+  const statusColor = backendState === "online" ? "#39ff14" : backendState === "cold" ? "#ffa500" : "#718096";
 
   return (
     <div className="dashboard-container">
-      {/* Header - Same as Dashboard */}
+      {/* Header */}
       <div className="dashboard-header">
         <div>
           <h1 className="dashboard-title">Neural Link</h1>
@@ -210,43 +210,34 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Stats Cards - Same as Dashboard */}
+      {/* Stats Cards */}
       <div className="stats-grid">
         <div className="stat-card">
-          <div className="stat-icon">💬</div>
-          <div className="stat-content">
-            <div className="stat-number">{messages.length}</div>
-            <div className="stat-label">Messages</div>
-          </div>
+          <div className="stat-label">Messages</div>
+          <div className="stat-value">{messages.length}</div>
         </div>
-        <div className="stat-card">
-          <div className="stat-icon">⚡</div>
-          <div className="stat-content">
-            <div className="stat-number">{messages.filter(m => m.role === "assistant" && !m.isError).length}</div>
-            <div className="stat-label">Responses</div>
-          </div>
+        <div className="stat-card magenta">
+          <div className="stat-label">Responses</div>
+          <div className="stat-value magenta">{messages.filter(m => m.role === "assistant" && !m.isError).length}</div>
         </div>
-        <div className="stat-card">
-          <div className="stat-icon">🎯</div>
-          <div className="stat-content">
-            <div className="stat-number">{messages.filter(m => m.intent).length}</div>
-            <div className="stat-label">Actions</div>
-          </div>
+        <div className="stat-card lime">
+          <div className="stat-label">Actions</div>
+          <div className="stat-value lime">{messages.filter(m => m.intent).length}</div>
         </div>
       </div>
 
-      {/* Quick Actions - Styled like Dashboard cards */}
+      {/* Quick Commands */}
       <div className="dashboard-card">
         <div className="card-header">
           <span className="card-icon">⚡</span>
           <span className="card-title">Quick Commands</span>
           <span className="card-badge">{currentChips.length}</span>
         </div>
-        <div className="tasks-list" style={{ gap: "10px", flexDirection: "row", flexWrap: "wrap" }}>
+        <div className="quick-commands">
           {currentChips.map((chip) => (
             <button
               key={chip.label}
-              className="ack-btn"
+              className="cyber-button"
               onClick={() => send(chip.msg)}
               disabled={loading}
               style={{ padding: "8px 16px", fontSize: "12px" }}
@@ -257,7 +248,7 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Messages - Styled like Dashboard alerts */}
+      {/* Messages */}
       <div className="dashboard-card">
         <div className="card-header">
           <span className="card-icon">💬</span>
@@ -265,7 +256,7 @@ export default function ChatPage() {
           <span className="card-badge">{messages.length}</span>
         </div>
         
-        <div className="alerts-list" style={{ maxHeight: "500px", overflowY: "auto" }}>
+        <div className="chat-messages">
           {messages.length === 0 && (
             <div className="empty-state">
               <div className="empty-icon">✨</div>
@@ -282,17 +273,25 @@ export default function ChatPage() {
             return (
               <div 
                 key={idx} 
-                className="alert-item" 
-                style={{ 
-                  borderLeftColor: isUser ? "var(--green-primary)" : "var(--info)",
-                  background: isUser ? "rgba(34, 197, 94, 0.05)" : "var(--bg-primary)",
-                  flexDirection: "column",
-                  alignItems: "flex-start"
-                }}
+                className={`message ${isUser ? 'user' : 'assistant'}`}
               >
-                <div className="alert-message" style={{ fontWeight: "bold", marginBottom: "8px" }}>
-                  {isUser ? "👤 You" : "✨ ORA Assistant"}
-                  <span className="alert-time" style={{ marginLeft: "12px" }}>
+                <div className="message-bubble" style={{ 
+                  background: isUser ? "rgba(255, 0, 110, 0.15)" : "rgba(0, 240, 255, 0.15)",
+                  borderColor: isUser ? "rgba(255, 0, 110, 0.3)" : "rgba(0, 240, 255, 0.3)",
+                  color: isError ? "#ff006e" : "var(--text-primary)"
+                }}>
+                  <div style={{ fontWeight: "bold", marginBottom: "8px" }}>
+                    {isUser ? "👤 You" : "✨ ORA Assistant"}
+                  </div>
+                  {msg.action && (
+                    <div style={{ fontSize: "11px", color: "#39ff14", marginBottom: "8px", padding: "8px", background: "rgba(57, 255, 20, 0.1)", borderRadius: "4px" }}>
+                      ✅ Action: {msg.action.type?.replace(/_/g, " ").toUpperCase()}
+                    </div>
+                  )}
+                  <div style={{ whiteSpace: "pre-wrap", fontSize: "13px" }}>
+                    {msg.content}
+                  </div>
+                  <div className="message-time">
                     {(() => {
                       try {
                         return new Date(msg.timestamp).toLocaleTimeString("en-KE", { hour12: false, hour: "2-digit", minute: "2-digit" });
@@ -300,26 +299,15 @@ export default function ChatPage() {
                         return "";
                       }
                     })()}
-                  </span>
-                </div>
-                
-                {msg.action && (
-                  <div className="finance-alert" style={{ marginBottom: "8px", width: "100%" }}>
-                    ✅ Action Executed: {msg.action.type?.replace(/_/g, " ").toUpperCase()}
                   </div>
-                )}
-                
-                <div className="alert-message" style={{ color: isError ? "var(--error)" : "var(--text-primary)", whiteSpace: "pre-wrap" }}>
-                  {msg.content}
                 </div>
-                
-                {!isUser && !isError && (
+                {!isUser && (
                   <button 
-                    className="ack-btn" 
+                    className="cyber-button" 
                     onClick={() => copyMessage(msg.content, idx)}
-                    style={{ marginTop: "8px", alignSelf: "flex-end" }}
+                    style={{ padding: "4px 8px", fontSize: "11px", marginTop: "8px" }}
                   >
-                    {copiedIdx === idx ? "✓ Copied!" : "📋 Copy"}
+                    {copiedIdx === idx ? "✓ Copied" : "📋 Copy"}
                   </button>
                 )}
               </div>
@@ -327,14 +315,17 @@ export default function ChatPage() {
           })}
           
           {loading && (
-            <div className="alert-item" style={{ borderLeftColor: "var(--warning)" }}>
-              <div className="alert-message">
-                <span className="typing-dots" style={{ display: "inline-flex", gap: "4px", marginRight: "8px" }}>
-                  <span style={{ width: "6px", height: "6px", background: "var(--green-primary)", borderRadius: "50%", animation: "pulse 1.4s infinite" }}></span>
-                  <span style={{ width: "6px", height: "6px", background: "var(--green-primary)", borderRadius: "50%", animation: "pulse 1.4s infinite 0.2s" }}></span>
-                  <span style={{ width: "6px", height: "6px", background: "var(--green-primary)", borderRadius: "50%", animation: "pulse 1.4s infinite 0.4s" }}></span>
-                </span>
-                {thinkingText}
+            <div className="message assistant">
+              <div className="message-bubble" style={{ 
+                background: "rgba(0, 240, 255, 0.15)",
+                borderColor: "rgba(0, 240, 255, 0.3)"
+              }}>
+                <div style={{ fontWeight: "bold", marginBottom: "8px" }}>
+                  ✨ ORA Assistant
+                </div>
+                <div style={{ fontSize: "13px", color: "#00f0ff", fontStyle: "italic" }}>
+                  {thinkingText}
+                </div>
               </div>
             </div>
           )}
@@ -343,67 +334,132 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Input Area - Styled like Dashboard cards */}
-      <div className="dashboard-card" style={{ marginBottom: 0 }}>
-        <div className="card-header">
-          <span className="card-icon">📝</span>
-          <span className="card-title">Message Input</span>
-          <button 
-            className="ack-btn" 
-            onClick={toggleVoice}
-            style={{ background: listening ? "rgba(239, 68, 68, 0.1)" : "transparent", borderColor: listening ? "var(--error)" : "var(--border-light)" }}
-          >
-            {listening ? "⏹️ Stop" : "🎙️ Voice"}
-          </button>
-        </div>
-        
+      {/* Input Area */}
+      <div className="chat-input">
         <textarea
           ref={textareaRef}
-          className="chat-textarea-modern"
+          className="chat-textarea"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          placeholder={listening ? "🎙 Listening..." : "Type your message... (Enter to send)"}
+          onKeyPress={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), send())}
+          placeholder="Type your message or ask for help..."
           disabled={loading}
-          style={{
-            width: "100%",
-            padding: "12px",
-            background: "var(--bg-primary)",
-            border: `1px solid ${listening ? "var(--error)" : "var(--border)"}`,
-            borderRadius: "var(--radius-md)",
-            color: "var(--text-primary)",
-            fontFamily: "inherit",
-            fontSize: "13px",
-            resize: "vertical",
-            marginBottom: "12px"
-          }}
+          rows="3"
         />
-        
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
-          <div className="alert-meta" style={{ fontSize: "10px" }}>
-            <span>⏎ Enter to send</span>
-            <span>⇧ Enter for new line</span>
-          </div>
+        <div style={{ display: "flex", gap: "8px", flexDirection: "column" }}>
           <button 
-            className="ack-all-btn" 
+            className="cyber-button"
             onClick={() => send()}
             disabled={loading || !input.trim()}
-            style={{ background: "var(--green-primary)", color: "var(--bg-primary)" }}
+            style={{ padding: "10px 16px" }}
           >
-            {loading ? "⏳ Sending..." : "📤 Send Message"}
+            Send
           </button>
-        </div>
-        
-        <div className="sync-info" style={{ marginTop: "12px" }}>
-          <span className="sync-label">Free Tier</span>
-          <span className="sync-time">Cold start may take 30 seconds</span>
+          <button 
+            className="cyber-button"
+            onClick={toggleVoice}
+            disabled={loading}
+            style={{ padding: "10px 16px" }}
+          >
+            {listening ? "🎤 Stop" : "🎤 Voice"}
+          </button>
+          <button 
+            className="cyber-button"
+            onClick={clearChat}
+            style={{ padding: "10px 16px" }}
+          >
+            Clear
+          </button>
         </div>
       </div>
     </div>
   );
 }
+
+const chatStyles = `
+.quick-commands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chat-messages {
+  max-height: 500px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+.message {
+  display: flex;
+  gap: 12px;
+  animation: messageSlide 0.3s ease;
+}
+
+.message.user {
+  justify-content: flex-end;
+}
+
+.message-bubble {
+  max-width: 70%;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.message.user .message-bubble {
+  background: rgba(255, 0, 110, 0.15);
+  border-color: rgba(255, 0, 110, 0.3);
+}
+
+.message.assistant .message-bubble {
+  background: rgba(0, 240, 255, 0.15);
+  border-color: rgba(0, 240, 255, 0.3);
+}
+
+.message-time {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+.chat-input {
+  border-top: 1px solid rgba(0, 240, 255, 0.2);
+  padding: 20px;
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.chat-textarea {
+  flex: 1;
+  background: rgba(26, 31, 58, 0.8);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  border-radius: 12px;
+  padding: 12px;
+  color: var(--text-primary);
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 13px;
+  resize: none;
+  transition: all 0.2s ease;
+}
+
+.chat-textarea:focus {
+  outline: none;
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.2);
+}
+
+.chat-textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+@keyframes messageSlide {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+`;

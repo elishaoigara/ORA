@@ -2,17 +2,20 @@ import { useState, useEffect, useRef, useCallback } from "react"
 import BASE from "../api"
 
 const TYPE_INFO = {
-  pdf:   { icon: "📄", label: "PDF",   color: "var(--red)" },
-  image: { icon: "🖼", label: "IMAGE", color: "var(--green)" },
-  text:  { icon: "📝", label: "TEXT",  color: "var(--amber)" },
-  docx:  { icon: "📝", label: "DOCX",  color: "var(--amber)" },
+  pdf:   { icon: "📄", label: "PDF" },
+  image: { icon: "🖼", label: "IMAGE" },
+  text:  { icon: "📝", label: "TEXT" },
+  docx:  { icon: "📝", label: "DOCX" },
 }
 
 function HowItWorks() {
   return (
-    <div className="card" style={{ marginBottom: "1rem", borderColor: "rgba(245,158,11,0.3)" }}>
-      <div className="card-title">How ORA Uses Your Files</div>
-      <div style={{ marginTop: 8, fontSize: "0.8rem", color: "var(--text3)", lineHeight: 1.6 }}>
+    <div className="dashboard-card" style={{ borderColor: "rgba(255, 165, 0, 0.3)", marginBottom: "20px" }}>
+      <div className="card-header">
+        <span className="card-icon">📚</span>
+        <span className="card-title">How It Works</span>
+      </div>
+      <div style={{ marginTop: "8px", fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.6 }}>
         ORA uses a <b>hybrid semantic + keyword engine</b>.
         <br />• ⚡ Upload returns instantly — indexing runs in the background
         <br />• 💬 File is searchable once indexing completes (usually under 10s)
@@ -65,7 +68,6 @@ export default function KnowledgePage() {
         type: "success",
       })
       setTags("")
-      // Reload docs after a short delay to let background indexing start
       setTimeout(loadDocs, 3000)
     } catch (e) {
       setMessage({ text: e.message || "Upload failed. Try again.", type: "error" })
@@ -95,115 +97,149 @@ export default function KnowledgePage() {
   const totalChunks = docs.reduce((sum, d) => sum + (d.chunks || 0), 0)
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <div>
-            <div className="page-title">// Knowledge Base</div>
-            <div className="page-sub">{docs.length} files · {totalChunks} chunks indexed</div>
-          </div>
-          <button className="btn btn-ghost" onClick={() => setShowGuide(!showGuide)}>
-            {showGuide ? "HIDE" : "HOW IT WORKS"}
-          </button>
+    <div className="dashboard-container">
+      {/* Header */}
+      <div className="dashboard-header">
+        <div>
+          <h1 className="dashboard-title">Knowledge Base</h1>
+          <p className="dashboard-subtitle">Semantic document indexing · {totalChunks} chunks</p>
+        </div>
+        <button 
+          className="cyber-button"
+          onClick={() => setShowGuide(!showGuide)}
+          style={{ padding: "8px 16px" }}
+        >
+          {showGuide ? "✕ Hide" : "? Guide"}
+        </button>
+      </div>
+
+      {/* Stats */}
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-label">Documents</div>
+          <div className="stat-value">{docs.length}</div>
+        </div>
+        <div className="stat-card lime">
+          <div className="stat-label">Chunks</div>
+          <div className="stat-value lime">{totalChunks}</div>
+        </div>
+        <div className="stat-card magenta">
+          <div className="stat-label">Status</div>
+          <div className="stat-value magenta">{uploading ? "Indexing..." : "Ready"}</div>
         </div>
       </div>
 
+      {/* Guide */}
       {showGuide && <HowItWorks />}
 
-      <div className="card" style={{ marginBottom: "1rem" }}>
-        <div className="card-title">Upload Files</div>
-
-        <div
-          className={`drop-zone ${dragging ? "dragging" : ""}`}
-          onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
-          onClick={() => !uploading && fileRef.current.click()}
-        >
-          <input
-            ref={fileRef}
-            type="file"
-            style={{ display: "none" }}
-            accept=".pdf,.docx,.txt,.md"
-            onChange={(e) => upload(e.target.files[0])}
-          />
-          {uploading ? "Uploading…" : "Drag & Drop or Click · PDF, DOCX, TXT, MD"}
-        </div>
-
-        <input
-          className="input"
-          value={tags}
-          onChange={(e) => setTags(e.target.value)}
-          placeholder="tags (optional, comma-separated)"
-          style={{ marginTop: 8 }}
-          disabled={uploading}
-        />
-
-        {message && (
-          <div style={{
-            marginTop: 10,
-            padding: "0.5rem 0.75rem",
-            borderRadius: 6,
-            fontSize: "0.8rem",
-            color: message.type === "success" ? "var(--green)" : "var(--red)",
-            background: message.type === "success"
-              ? "rgba(0,255,157,.06)"
-              : "rgba(255,80,80,.06)",
-          }}>
-            {message.text}
+      {/* Message */}
+      {message && (
+        <div className="dashboard-card" style={{
+          borderColor: message.type === "success" ? "rgba(57, 255, 20, 0.3)" : "rgba(255, 0, 110, 0.3)",
+          background: message.type === "success" ? "rgba(57, 255, 20, 0.05)" : "rgba(255, 0, 110, 0.05)",
+          marginBottom: "20px"
+        }}>
+          <div style={{ color: message.type === "success" ? "#39ff14" : "#ff006e" }}>
+            {message.type === "success" ? "✓" : "⚠"} {message.text}
           </div>
-        )}
+        </div>
+      )}
+
+      {/* Upload Zone */}
+      <div 
+        className="dashboard-card"
+        onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+        style={{
+          borderColor: dragging ? "var(--neon-cyan)" : "rgba(0, 240, 255, 0.2)",
+          background: dragging ? "rgba(0, 240, 255, 0.1)" : "rgba(26, 31, 58, 0.8)",
+          transition: "all 0.2s ease",
+          cursor: "pointer",
+          textAlign: "center",
+          padding: "40px",
+          marginBottom: "20px"
+        }}
+        onClick={() => fileRef.current?.click()}
+      >
+        <div style={{ fontSize: "32px", marginBottom: "12px" }}>📤</div>
+        <div style={{ fontSize: "16px", fontWeight: "600", color: "var(--text-primary)", marginBottom: "4px" }}>
+          {uploading ? "Uploading..." : "Drag files here or click to upload"}
+        </div>
+        <div style={{ fontSize: "12px", color: "var(--text-tertiary)" }}>
+          PDF, DOCX, TXT, or images
+        </div>
+        <input 
+          ref={fileRef}
+          type="file"
+          onChange={(e) => upload(e.target.files?.[0])}
+          disabled={uploading}
+          style={{ display: "none" }}
+        />
       </div>
 
-      <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: ".75rem" }}>
-          <div className="card-title" style={{ marginBottom: 0 }}>Files ({docs.length})</div>
-          <button className="btn btn-ghost" style={{ fontSize: ".6rem" }} onClick={loadDocs}>
-            REFRESH
-          </button>
+      {/* Tags Input */}
+      <div className="dashboard-card" style={{ marginBottom: "20px" }}>
+        <div className="card-header">
+          <span className="card-icon">🏷️</span>
+          <span className="card-title">Tags (Optional)</span>
+        </div>
+        <input
+          className="chat-textarea"
+          placeholder="Enter tags separated by commas..."
+          value={tags}
+          onChange={(e) => setTags(e.target.value)}
+          style={{ resize: "none", height: "auto" }}
+        />
+      </div>
+
+      {/* Documents List */}
+      <div className="dashboard-card">
+        <div className="card-header">
+          <span className="card-icon">📚</span>
+          <span className="card-title">Documents</span>
+          <span className="card-badge">{docs.length}</span>
         </div>
 
         {docs.length === 0 ? (
-          <div className="empty">
-            <div className="empty-icon">▣</div>
-            No files yet — upload a document above
+          <div className="empty-state">
+            <div className="empty-icon">📄</div>
+            <div className="empty-text">No documents yet</div>
+            <div className="connect-link">Upload your first document above</div>
           </div>
         ) : (
-          docs.map((doc, i) => {
-            const info = TYPE_INFO[doc.doc_type] || TYPE_INFO.text
-            return (
-              <div key={i} style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "0.6rem 0.5rem",
-                borderBottom: "1px solid var(--border)",
-                gap: 8,
-              }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: ".82rem", color: "var(--text1)", display: "flex", alignItems: "center", gap: 6 }}>
-                    <span>{info.icon}</span>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {doc.filename}
-                    </span>
+          <div className="task-list">
+            {docs.map((doc, i) => {
+              const typeInfo = TYPE_INFO[doc.doc_type?.toLowerCase()] || { icon: "📄", label: doc.doc_type || "FILE" }
+              const isDeleting = deleting === doc.filename
+              return (
+                <div key={i} className="task-item" style={{ opacity: isDeleting ? 0.5 : 1 }}>
+                  <div style={{ flex: 1 }}>
+                    <div className="task-title">
+                      {typeInfo.icon} {doc.filename}
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--text-tertiary)", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>
+                      {doc.chunks || 0} chunks · {doc.created_at?.slice(0, 10)}
+                      {doc.tags && <span> · Tags: {doc.tags}</span>}
+                    </div>
                   </div>
-                  <div style={{ fontSize: ".65rem", color: "var(--text3)", marginTop: 2 }}>
-                    {doc.chunks || 0} chunks
-                    {doc.tags ? ` · ${doc.tags}` : ""}
-                    {doc.created_at ? ` · ${doc.created_at.slice(0, 10)}` : ""}
-                  </div>
+                  <button 
+                    className="cyber-button"
+                    onClick={() => remove(doc.filename)}
+                    disabled={isDeleting}
+                    style={{ 
+                      padding: "4px 8px", 
+                      fontSize: "11px",
+                      color: "#ff006e",
+                      borderColor: "rgba(255, 0, 110, 0.4)"
+                    }}
+                  >
+                    {isDeleting ? "..." : "Delete"}
+                  </button>
                 </div>
-                <button
-                  className="btn btn-danger"
-                  style={{ fontSize: ".6rem", flexShrink: 0 }}
-                  onClick={() => remove(doc.filename)}
-                  disabled={deleting === doc.filename}
-                >
-                  {deleting === doc.filename ? "…" : "DELETE"}
-                </button>
-              </div>
-            )
-          })
+              )
+            })}
+          </div>
         )}
       </div>
     </div>

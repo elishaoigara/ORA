@@ -1,15 +1,15 @@
 import { useState, useEffect, useCallback } from "react"
 import { getAlerts, ackAlert, ackAllAlerts } from "../api"
 
-const SEV_COLOR = {
-  critical: "var(--red)",
-  high:     "var(--red)",
-  medium:   "var(--amber)",
-  low:      "var(--green)",
-  info:     "var(--blue)",
-}
-
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 }
+
+const getSeverityColor = (severity) => {
+  const sev = severity?.toLowerCase() || "info"
+  if (sev === "critical" || sev === "high") return { bg: "rgba(255, 0, 110, 0.2)", color: "#ff006e" }
+  if (sev === "medium") return { bg: "rgba(255, 165, 0, 0.2)", color: "#ffa500" }
+  if (sev === "low") return { bg: "rgba(57, 255, 20, 0.2)", color: "#39ff14" }
+  return { bg: "rgba(0, 240, 255, 0.2)", color: "#00f0ff" }
+}
 
 export default function AlertsPage() {
   const [alerts,   setAlerts]   = useState([])
@@ -46,75 +46,127 @@ export default function AlertsPage() {
   const unread = alerts.filter(a => !a.acknowledged).length
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
-            <div className="page-title">// Alert Feed</div>
-            <div className="page-sub">{unread} unread · {alerts.length} total</div>
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {["unread", "all"].map(f => (
-              <button key={f} className={`btn ${filter === f ? "btn-primary" : "btn-ghost"}`} onClick={() => setFilter(f)}>
-                {f.toUpperCase()}
-              </button>
-            ))}
-            {unread > 0 && (
-              <button className="btn btn-ghost" onClick={handleAckAll} style={{ color: "var(--green)" }}>
-                ACK ALL
-              </button>
-            )}
-          </div>
+    <div className="dashboard-container">
+      {/* Header */}
+      <div className="dashboard-header">
+        <div>
+          <h1 className="dashboard-title">Alert Feed</h1>
+          <p className="dashboard-subtitle">{unread} unread · {alerts.length} total</p>
+        </div>
+        <div style={{ display: "flex", gap: "12px" }}>
+          {["unread", "all"].map(f => (
+            <button 
+              key={f} 
+              className="cyber-button"
+              onClick={() => setFilter(f)}
+              style={{
+                background: filter === f ? "rgba(255, 0, 110, 0.2)" : "transparent",
+                borderColor: filter === f ? "#ff006e" : "rgba(255, 0, 110, 0.3)",
+                color: filter === f ? "#ff006e" : "var(--text-secondary)",
+                padding: "8px 16px"
+              }}
+            >
+              {f.toUpperCase()}
+            </button>
+          ))}
+          {unread > 0 && (
+            <button 
+              className="cyber-button"
+              onClick={handleAckAll}
+              style={{
+                color: "#39ff14",
+                borderColor: "rgba(57, 255, 20, 0.4)",
+                padding: "8px 16px"
+              }}
+            >
+              ACK ALL
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Stats */}
+      <div className="stats-grid">
+        <div className="stat-card magenta">
+          <div className="stat-label">Unread</div>
+          <div className={`stat-value ${unread > 0 ? 'magenta' : 'lime'}`}>{unread}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Total</div>
+          <div className="stat-value">{alerts.length}</div>
+        </div>
+        <div className="stat-card lime">
+          <div className="stat-label">Acknowledged</div>
+          <div className="stat-value lime">{alerts.filter(a => a.acknowledged).length}</div>
+        </div>
+      </div>
+
+      {/* Alerts List */}
       {loading ? (
-        <div className="card"><div className="empty">Loading alerts...</div></div>
+        <div className="dashboard-card">
+          <div style={{ textAlign: "center", padding: "32px", color: "var(--text-tertiary)" }}>
+            Loading alerts...
+          </div>
+        </div>
       ) : displayed.length === 0 ? (
-        <div className="card">
-          <div className="empty">
-            <div className="empty-icon" style={{ color: "var(--green)", fontSize: "2rem" }}>◉</div>
-            <div className="glow-green">ALL CLEAR</div>
-            <div>No {filter === "unread" ? "unread " : ""}alerts</div>
+        <div className="dashboard-card">
+          <div className="empty-state">
+            <div className="empty-icon" style={{ color: "#39ff14", fontSize: "3rem" }}>◉</div>
+            <div style={{ color: "#39ff14", fontWeight: "600", fontSize: "16px", marginBottom: "8px" }}>ALL CLEAR</div>
+            <div style={{ color: "var(--text-tertiary)" }}>No {filter === "unread" ? "unread " : ""}alerts</div>
           </div>
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: ".5rem" }}>
-          {displayed.map(a => (
-            <div key={a.id} className={`card alert-row ${a.severity}`} style={{ padding: "1rem 1.1rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
-                    <span className="alert-severity" style={{ color: SEV_COLOR[a.severity] || "var(--amber)" }}>
-                      {a.severity?.toUpperCase()}
-                    </span>
-                    <span style={{ fontFamily: "Share Tech Mono, monospace", fontSize: ".6rem", color: "var(--text3)" }}>
-                      {a.rule_name}
-                    </span>
-                    {a.acknowledged && (
-                      <span style={{ fontFamily: "Share Tech Mono, monospace", fontSize: ".58rem", color: "var(--green)", marginLeft: "auto" }}>
-                        ✓ ACK
+        <div className="alert-feed">
+          <div className="card-header">
+            <span className="card-icon">⚠️</span>
+            <span className="card-title">Active Alerts</span>
+            <span className="card-badge">{displayed.length}</span>
+          </div>
+          <div className="alerts-list">
+            {displayed.map(a => {
+              const sevColor = getSeverityColor(a.severity)
+              return (
+                <div key={a.id} className="alert-row" style={{ 
+                  borderLeftColor: sevColor.color,
+                  background: `${sevColor.bg}`,
+                  borderColor: `${sevColor.color}40`
+                }}>
+                  <div className="alert-severity" style={{ background: sevColor.bg, color: sevColor.color }}>
+                    {(a.severity || "INFO").toUpperCase()}
+                  </div>
+                  <div className="alert-content">
+                    <div className="alert-title">{a.message}</div>
+                    <div className="alert-meta">
+                      <span className="alert-rule">{a.rule_name}</span>
+                      <span className="alert-time">
+                        {a.timestamp ? new Date(a.timestamp).toLocaleString("en-KE") : "—"}
                       </span>
-                    )}
+                      {a.acknowledged && (
+                        <span style={{ color: "#39ff14", fontWeight: "600", marginLeft: "auto" }}>
+                          ✓ ACK
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="alert-msg" style={{ fontSize: ".9rem" }}>{a.message}</div>
-                  <div style={{ fontFamily: "Share Tech Mono, monospace", fontSize: ".6rem", color: "var(--text3)", marginTop: 5 }}>
-                    {a.timestamp ? new Date(a.timestamp).toLocaleString("en-KE") : "—"}
-                  </div>
+                  {!a.acknowledged && (
+                    <button
+                      className="cyber-button"
+                      onClick={() => handleAck(a.id)}
+                      disabled={acking === a.id}
+                      style={{ 
+                        padding: "4px 12px", 
+                        fontSize: "11px",
+                        whiteSpace: "nowrap"
+                      }}
+                    >
+                      {acking === a.id ? "..." : "Ack"}
+                    </button>
+                  )}
                 </div>
-                {!a.acknowledged && (
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() => handleAck(a.id)}
-                    disabled={acking === a.id}
-                    style={{ flexShrink: 0, fontSize: ".65rem" }}
-                  >
-                    {acking === a.id ? "···" : "ACK"}
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
