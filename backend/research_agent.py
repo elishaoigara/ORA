@@ -20,7 +20,10 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from groq import Groq
-from tavily import TavilyClient
+try:
+    from tavily import TavilyClient
+except Exception:
+    TavilyClient = None
 import config
 
 # ─────────────────────────────────────────────
@@ -36,7 +39,7 @@ def _groq_client():
 
 def _tavily_client():
     key = os.getenv("TAVILY_API_KEY")
-    if not key:
+    if not key or TavilyClient is None:
         return None
     return TavilyClient(api_key=key)
 
