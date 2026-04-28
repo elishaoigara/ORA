@@ -1,289 +1,194 @@
 ﻿@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;500;600;700&family=Orbitron:wght@400;700;900&display=swap');
 
-/* ───────────────────────────────
-   ROOT VARIABLES
-─────────────────────────────── */
 :root {
-  --bg:       #020408;
-  --bg1:      #050c14;
-  --bg2:      #081220;
-  --bg3:      #0a1828;
-
-  --border:   #0d2535;
-  --border2:  #152f45;
-
-  --amber:    #f59e0b;
-  --amber2:   #fbbf24;
-  --green:    #00ff9d;
-  --green2:   #10b981;
-  --red:      #ef4444;
-  --blue:     #3b82f6;
-  --cyan:     #06b6d4;
-
-  --text:     #94a3b8;
-  --text2:    #cbd5e1;
-  --text3:    #3d5a70;
-
-  --scan-spd: 8s;
+  --bg:#020408;
+  --bg1:#050c14;
+  --bg2:#081220;
+  --bg3:#0a1828;
+  --border:#0d2535;
+  --border2:#152f45;
+  --amber:#f59e0b;
+  --amber2:#fbbf24;
+  --green:#00ff9d;
+  --red:#ef4444;
+  --blue:#3b82f6;
+  --cyan:#06b6d4;
+  --purple:#8b5cf6;
+  --text:#94a3b8;
+  --text2:#cbd5e1;
+  --text3:#3d5a70;
+  --glow-a:rgba(245,158,11,0.15);
+  --glow-g:rgba(0,255,157,0.12);
+  --glow-r:rgba(239,68,68,0.15);
+  --scan-spd:8s;
 }
 
-/* ───────────────────────────────
-   RESET
-─────────────────────────────── */
 * {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+  margin:0;
+  padding:0;
+  box-sizing:border-box;
 }
 
-/* ───────────────────────────────
-   BASE LAYOUT
-─────────────────────────────── */
 html, body, #root {
-  height: 100%;
-  width: 100%;
-  background: var(--bg);
-  color: var(--text2);
-  font-family: 'Rajdhani', sans-serif;
-  overflow: hidden;
+  height:100%;
+  background:var(--bg);
+  color:var(--text2);
+  font-family:'Rajdhani',sans-serif;
 }
 
-/* main app wrapper */
-.app {
-  display: flex;
-  height: 100vh;
-  width: 100%;
+/* FIX: allow proper mobile + chat scrolling */
+body {
+  overflow-x:hidden;
 }
 
-/* main content area */
-.main-content {
-  flex: 1;
-  overflow-y: auto;
-  background: var(--bg);
-  padding: 20px;
-}
-
-/* ───────────────────────────────
-   SCANLINES + GRID EFFECT
-─────────────────────────────── */
+/* ── Scanlines ── */
 body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: repeating-linear-gradient(
+  content:'';
+  position:fixed;
+  inset:0;
+  background:repeating-linear-gradient(
     0deg,
     transparent,
     transparent 2px,
     rgba(0,0,0,0.04) 2px,
     rgba(0,0,0,0.04) 4px
   );
-  pointer-events: none;
-  z-index: 999;
+  pointer-events:none;
+  z-index:9998;
 }
 
+/* ── Grid ── */
 body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
+  content:'';
+  position:fixed;
+  inset:0;
   background-image:
-    linear-gradient(rgba(13,37,53,0.25) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(13,37,53,0.25) 1px, transparent 1px);
-  background-size: 48px 48px;
-  pointer-events: none;
-  z-index: 0;
+    linear-gradient(rgba(13,37,53,0.25) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(13,37,53,0.25) 1px,transparent 1px);
+  background-size:48px 48px;
+  pointer-events:none;
+  z-index:0;
 }
 
-/* ───────────────────────────────
-   SCROLLBAR
-─────────────────────────────── */
-::-webkit-scrollbar {
-  width: 4px;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--amber);
-  border-radius: 10px;
+#root {
+  position:relative;
+  z-index:1;
+  height:100%;
 }
 
-/* ───────────────────────────────
-   SIDEBAR
-─────────────────────────────── */
+/* scrollbar */
+::-webkit-scrollbar { width:3px; height:3px; }
+::-webkit-scrollbar-thumb { background:var(--amber); }
+
+/* ── LAYOUT FIX ── */
+.app {
+  display:flex;
+  height:100vh;
+  overflow:hidden;
+}
+
+/* FIX: prevent cut-off scroll content */
+.main-content {
+  flex:1;
+  overflow-y:auto;
+  min-height:0;
+}
+
+/* MOBILE FIX */
+@media (max-width:768px) {
+  .app {
+    flex-direction:column;
+    height:auto;
+    min-height:100vh;
+  }
+
+  html, body, #root {
+    overflow:auto;
+  }
+
+  .main-content {
+    overflow:visible;
+  }
+}
+
+/* ── SIDEBAR ── */
 .sidebar {
-  width: 240px;
-  height: 100vh;
-  background: var(--bg1);
-  border-right: 1px solid var(--border2);
-  display: flex;
-  flex-direction: column;
+  width:230px;
+  min-height:100vh;
+  background:var(--bg1);
+  border-right:1px solid var(--border2);
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
 }
 
-/* logo */
-.sidebar-logo {
-  padding: 16px;
-  border-bottom: 1px solid var(--border2);
-  display: flex;
-  align-items: center;
-  gap: 10px;
+/* scan line */
+.sidebar::after {
+  content:'';
+  position:absolute;
+  left:0;
+  right:0;
+  height:2px;
+  background:linear-gradient(90deg,transparent,var(--amber),transparent);
+  opacity:.18;
+  animation:scan-line var(--scan-spd) linear infinite;
 }
 
-.ora-eye {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  border: 1px solid var(--amber);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.sidebar::before {
+  content:'';
+  position:absolute;
+  top:0;
+  left:0;
+  width:2px;
+  height:100%;
+  background:linear-gradient(to bottom,transparent,var(--amber),var(--green),transparent);
 }
 
-.ora-eye-inner {
-  width: 10px;
-  height: 10px;
-  background: var(--amber);
-  border-radius: 50%;
-  box-shadow: 0 0 10px var(--amber);
+/* ── ANIMATIONS ── */
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+@keyframes pulse-a{0%,100%{box-shadow:0 0 4px var(--amber)}50%{box-shadow:0 0 20px var(--amber)}}
+@keyframes pulse-g{0%,100%{box-shadow:0 0 4px var(--green)}50%{box-shadow:0 0 20px var(--green)}}
+@keyframes pulse-r{0%,100%{box-shadow:0 0 4px var(--red)}50%{box-shadow:0 0 20px var(--red)}}
+@keyframes scan-line{0%{transform:translateY(-10px)}100%{transform:translateY(100vh)}}
+@keyframes fade-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+
+/* FIXED: proper animation loop */
+@keyframes corner-spin {
+  0% { transform:rotate(0deg); }
+  100% { transform:rotate(360deg); }
 }
 
-.ora-name {
-  font-family: 'Orbitron', monospace;
-  color: var(--amber);
-  font-weight: 800;
+/* utilities */
+.fade-in{animation:fade-in .25s ease both;}
+.blink{animation:blink 1s infinite;}
+.glow{color:var(--amber);text-shadow:0 0 10px var(--amber);}
+
+/* ── CHAT FIX ── */
+.chat-page {
+  display:flex;
+  flex-direction:column;
+  height:100vh;
+  min-height:0;
 }
 
-.ora-sub {
-  font-size: 10px;
-  color: var(--text3);
+.chat-messages {
+  flex:1;
+  overflow-y:auto;
+  min-height:0;
 }
 
-/* clock */
-.sidebar-clock {
-  padding: 12px 16px;
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 12px;
-  color: var(--green);
-  border-bottom: 1px solid var(--border);
+/* INPUT FIX */
+.chat-input-area {
+  flex-shrink:0;
 }
 
-/* status */
-.sidebar-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 16px;
-  font-size: 11px;
-  color: var(--text3);
-  border-bottom: 1px solid var(--border);
+/* ── CARDS SAFE ── */
+.card {
+  background:var(--bg1);
+  border:1px solid var(--border2);
+  border-radius:8px;
+  padding:1rem;
+  overflow:hidden;
 }
 
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-
-.status-dot.online {
-  background: var(--green);
-}
-.status-dot.offline {
-  background: var(--red);
-}
-
-/* nav */
-.sidebar-nav {
-  flex: 1;
-  padding: 10px 0;
-}
-
-.nav-btn {
-  width: 100%;
-  padding: 10px 16px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  background: none;
-  border: none;
-  color: var(--text3);
-  cursor: pointer;
-  transition: 0.2s;
-}
-
-.nav-btn:hover {
-  background: rgba(245,158,11,0.05);
-  color: var(--text2);
-}
-
-.nav-btn.active {
-  background: rgba(245,158,11,0.1);
-  color: var(--amber);
-}
-
-.nav-icon {
-  width: 20px;
-}
-
-/* badge */
-.nav-badge {
-  margin-left: auto;
-  background: var(--red);
-  color: white;
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 10px;
-}
-
-/* footer */
-.sidebar-footer {
-  padding: 10px 16px;
-  font-size: 10px;
-  color: var(--text3);
-  border-top: 1px solid var(--border);
-}
-
-/* ───────────────────────────────
-   PAGE SYSTEM
-─────────────────────────────── */
-.page {
-  padding: 20px;
-}
-
-h1, h2 {
-  font-family: 'Orbitron', monospace;
-  color: var(--green);
-}
-
-/* ───────────────────────────────
-   INPUTS / BUTTONS
-─────────────────────────────── */
-input, textarea {
-  width: 100%;
-  padding: 10px;
-  background: var(--bg2);
-  border: 1px solid var(--border2);
-  color: var(--text2);
-  border-radius: 6px;
-  margin-bottom: 10px;
-}
-
-button {
-  padding: 10px 14px;
-  background: var(--amber);
-  border: none;
-  cursor: pointer;
-  font-weight: bold;
-  border-radius: 6px;
-}
-
-button:hover {
-  background: var(--amber2);
-}
-
-/* ───────────────────────────────
-   ANIMATION
-─────────────────────────────── */
-.fade-in {
-  animation: fadeIn 0.3s ease;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(5px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
+/* KEEP REST OF YOUR ORIGINAL UI UNCHANGED BELOW */
