@@ -50,14 +50,16 @@ def _tavily_client():
 
 def _web_search(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
     client = _tavily_client()
+
     if not client:
+        print("[Web Search] Tavily not available → fallback mode")
         return []
 
     try:
         res = client.search(query=query, max_results=max_results)
         return res.get("results", [])
     except Exception as e:
-        print("[Tavily Error]", e)
+        print("[Web Search Error]", str(e))
         return []
 
 
@@ -172,7 +174,7 @@ def _extract_citations(text: str) -> List[str]:
 # MAIN: DEEP RESEARCH
 # ─────────────────────────────────────────────
 
-def deep_research(query: str) -> Dict[str, Any]:
+def deep_research(query: str, n_sources: int = 5) -> Dict[str, Any]:
     session_id = _new_session_id(query)
 
     # 1. WEB SEARCH
@@ -268,3 +270,20 @@ def analyze_document(query: str, filename: str, text: str) -> Dict[str, Any]:
         "result": refined,
         "status": "complete"
     }
+def get_sessions(limit: int = 15):
+    import sqlite3
+    from config import DB_PATH
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    rows = conn.execute("""
+        SELECT session_id, title, query, result, word_count, updated_at
+        FROM research_sessions
+        ORDER BY updated_at DESC
+        LIMIT ?
+    """, (limit,)).fetchall()
+
+    conn.close()
+
+    return [dict(r) for r in rows]
