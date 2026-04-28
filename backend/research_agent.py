@@ -91,7 +91,7 @@ def _format_web(results):
 
 
 # ─────────────────────────────────────────────
-# GROQ SAFE CALL
+# GROQ CALL
 # ─────────────────────────────────────────────
 
 def _call_groq(messages, model="llama-3.3-70b-versatile",
@@ -107,15 +107,13 @@ def _call_groq(messages, model="llama-3.3-70b-versatile",
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-
             text = res.choices[0].message.content
             if text and text.strip():
                 return text.strip()
-
         except Exception:
             time.sleep(1.5 * (attempt + 1))
 
-    return "⚠️ AI temporarily unavailable. Please try again."
+    return "⚠️ AI temporarily unavailable."
 
 
 # ─────────────────────────────────────────────
@@ -153,13 +151,12 @@ def _save_session(session_id, title, query, result,
 
         conn.commit()
         conn.close()
-
     except Exception:
         pass
 
 
 # ─────────────────────────────────────────────
-# CORE RESEARCH ENGINE
+# CORE RESEARCH
 # ─────────────────────────────────────────────
 
 def deep_research(query: str, n_sources: int = 5):
@@ -175,11 +172,11 @@ Topic: {query}
 Sources:
 {web_context}
 
-Write a structured, detailed analysis.
+Write a structured research analysis.
 """
 
     result = _call_groq([
-        {"role": "system", "content": "You are a precise research analyst."},
+        {"role": "system", "content": "You are a precise research assistant."},
         {"role": "user", "content": prompt}
     ])
 
@@ -199,9 +196,8 @@ Write a structured, detailed analysis.
     return {
         "session_id": session_id,
         "title": query[:60],
-        "content": result,          # 🔥 UNIFIED FIELD (IMPORTANT FIX)
+        "result": result,
         "sources": sources,
-        "word_count": len(result.split()),
         "status": "complete"
     }
 
@@ -233,7 +229,7 @@ def analyze_document(query: str, filename: str, text: str):
     return {
         "session_id": session_id,
         "title": filename,
-        "content": result,   # 🔥 FIXED
+        "result": result,
         "status": "complete"
     }
 
@@ -248,16 +244,15 @@ def write_essay(query: str, **kwargs):
 
     return {
         "session_id": result["session_id"],
-        "type": "essay",
         "title": result["title"],
-        "content": result["content"],   # 🔥 FRONTEND SAFE
+        "result": result["result"],
         "sources": result["sources"],
         "status": "complete"
     }
 
 
 # ─────────────────────────────────────────────
-# PRESENTATION (FIXED)
+# PRESENTATION (FIXED CONTRACT)
 # ─────────────────────────────────────────────
 
 def generate_presentation(query: str, slides: int = 5):
@@ -267,8 +262,8 @@ def generate_presentation(query: str, slides: int = 5):
     slides = max(3, min(slides, 6))
 
     chunks = [
-        result["content"][i:i + 600]
-        for i in range(0, len(result["content"]), 600)
+        result["result"][i:i + 600]
+        for i in range(0, len(result["result"]), 600)
     ]
 
     output = [{"title": "Introduction", "content": query}]
@@ -286,7 +281,6 @@ def generate_presentation(query: str, slides: int = 5):
 
     return {
         "session_id": result["session_id"],
-        "type": "presentation",
         "title": result["title"],
         "slides": output,
         "status": "complete"
@@ -294,7 +288,7 @@ def generate_presentation(query: str, slides: int = 5):
 
 
 # ─────────────────────────────────────────────
-# SESSIONS
+# SESSION API
 # ─────────────────────────────────────────────
 
 def get_sessions(limit: int = 15):
