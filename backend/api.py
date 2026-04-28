@@ -39,6 +39,7 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('intelligence.goals_engine', fromlist=['init_goals_table']).init_goals_table(), "Goals"),
         (lambda: __import__('fcm').init_fcm_table(), "FCM Tokens"),
         (lambda: __import__('intelligence.learning_engine', fromlist=['init_learning_tables']).init_learning_tables(), "Learning"),
+        (lambda: __import__('research_agent', fromlist=['init_research_tables']).init_research_tables(), "Research DB"),
     ]:
         try:
             fn()
@@ -115,6 +116,13 @@ try:
     print("[ORA] Calendar routes loaded")
 except Exception as e:
     print("[ORA] Calendar routes NOT loaded:", e)
+
+try:
+    from api_research_routes import router as research_router
+    app.include_router(research_router)
+    print("[ORA] Research routes loaded")
+except Exception as e:
+    print("[ORA] Research routes NOT loaded:", e)
 
 
 # ── Health ────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ How to integrate:
        from api_research_routes import router as research_router
        app.include_router(research_router)
 3. In api.py lifespan startup, add:
-       from agents.research_agent import init_research_tables
+       from research_agent import init_research_tables
        init_research_tables()
 
 All routes are prefixed with /api/research
@@ -67,7 +67,7 @@ class SummarizeRequest(BaseModel):
 @router.get("/sessions")
 def list_sessions(limit: int = 30):
     try:
-        from agents.research_agent import get_sessions
+        from research_agent import get_sessions
         return get_sessions(limit=limit)
     except Exception:
         print(traceback.format_exc())
@@ -77,7 +77,7 @@ def list_sessions(limit: int = 30):
 @router.get("/sessions/{session_id}")
 def get_session(session_id: str):
     try:
-        from agents.research_agent import get_session
+        from research_agent import get_session
         session = get_session(session_id)
         if not session:
             raise HTTPException(404, "Session not found")
@@ -92,7 +92,7 @@ def get_session(session_id: str):
 @router.delete("/sessions/{session_id}")
 def remove_session(session_id: str):
     try:
-        from agents.research_agent import delete_session
+        from research_agent import delete_session
         delete_session(session_id)
         return {"ok": True}
     except Exception:
@@ -139,16 +139,17 @@ async def upload_for_research(
             index_result = {"status": "error", "reason": str(e)}
 
         # 2. Extract full text for immediate analysis
+        pages = []
+        doc_type = ext.lstrip(".")
         try:
             from knowledge.ingest import load_document
             pages, doc_type = load_document(tmp_path)
             full_text = "\n\n".join(p["text"] for p in pages)
         except Exception:
             full_text = ""
-            doc_type = ext.lstrip(".")
 
         # 3. Run requested analysis
-        from agents.research_agent import (
+        from research_agent import (
             analyze_document, summarize_document, extract_key_points
         )
 
@@ -175,7 +176,7 @@ async def upload_for_research(
             "doc_type": doc_type,
             "index_result": index_result,
             "analysis": result,
-            "page_count": len(pages) if 'pages' in dir() else 0,
+            "page_count": len(pages),
             "word_count": len(full_text.split()) if full_text else 0
         }
 
@@ -190,7 +191,7 @@ async def upload_for_research(
 async def ask_about_document(payload: AskDocRequest):
     """Ask a specific question about an already-indexed document."""
     try:
-        from agents.research_agent import ask_document
+        from research_agent import ask_document
         from knowledge.retrieval import retrieve, format_context
 
         # Retrieve doc content from KB
@@ -212,7 +213,7 @@ async def ask_about_document(payload: AskDocRequest):
 async def summarize(payload: SummarizeRequest):
     """Summarize an indexed document in various styles."""
     try:
-        from agents.research_agent import summarize_document
+        from research_agent import summarize_document
         from knowledge.retrieval import retrieve
 
         chunks = retrieve(payload.filename, n_results=10)
@@ -239,7 +240,7 @@ async def summarize(payload: SummarizeRequest):
 async def research_search(payload: ResearchRequest):
     """Deep multi-source research synthesis from knowledge base."""
     try:
-        from agents.research_agent import deep_research
+        from research_agent import deep_research
         result = deep_research(payload.query, n_sources=payload.n_sources)
         return result
     except Exception:
@@ -251,7 +252,7 @@ async def research_search(payload: ResearchRequest):
 async def write_essay(payload: EssayRequest):
     """Generate a structured essay or long-form piece."""
     try:
-        from agents.research_agent import write_essay
+        from research_agent import write_essay
         result = write_essay(payload.topic, style=payload.style, length=payload.length)
         return result
     except Exception:
@@ -263,7 +264,7 @@ async def write_essay(payload: EssayRequest):
 async def create_presentation(payload: PresentationRequest):
     """Generate a structured presentation outline."""
     try:
-        from agents.research_agent import generate_presentation
+        from research_agent import generate_presentation
         result = generate_presentation(payload.topic, slides=payload.slides)
         return result
     except Exception:
@@ -277,7 +278,7 @@ async def compare(payload: CompareRequest):
     try:
         if len(payload.filenames) < 2:
             raise HTTPException(400, "Need at least 2 documents to compare")
-        from agents.research_agent import compare_documents
+        from research_agent import compare_documents
         result = compare_documents(payload.query, payload.filenames)
         return result
     except HTTPException:
@@ -307,7 +308,7 @@ def research_stats():
     try:
         import sqlite3
         from config import DB_PATH
-        from agents.research_agent import get_sessions
+        from research_agent import get_sessions
 
         conn = sqlite3.connect(DB_PATH)
 
