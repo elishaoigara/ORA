@@ -1,15 +1,14 @@
-﻿/** @jsxImportSource react */
-import { useState, useEffect, useRef } from "react";
+﻿import { useState, useEffect, useRef } from "react";
 import { health, getAgentStatus, getAlerts } from "../api";
 
-const nav = [
-  { id: "dashboard", icon: "📊", label: "Dashboard" },
-  { id: "chat", icon: "💬", label: "Chat" },
-  { id: "tasks", icon: "✓", label: "Tasks" },
-  { id: "alerts", icon: "⚠", label: "Alerts" },
-  { id: "knowledge", icon: "📚", label: "Knowledge" },
-  { id: "memory", icon: "🧠", label: "Memory" },
-  { id: "research", icon: "🔬", label: "Research" },
+const navItems = [
+  { id: "dashboard", icon: "🏠", label: "Home" },
+  { id: "chat", icon: "✨", label: "Assistant" },
+  { id: "tasks", icon: "📌", label: "Tasks" },
+  { id: "alerts", icon: "🔔", label: "Alerts" },
+  { id: "knowledge", icon: "📖", label: "Knowledge" },
+  { id: "memory", icon: "💭", label: "Memory" },
+  { id: "research", icon: "🔍", label: "Research" },
 ];
 
 export default function Sidebar({ current, onNavigate }) {
@@ -24,7 +23,7 @@ export default function Sidebar({ current, onNavigate }) {
 
   const pollingRef = useRef(false);
 
-  /* ───────── CLOCK ───────── */
+  // Clock
   useEffect(() => {
     const tick = () => {
       const now = new Date();
@@ -41,19 +40,17 @@ export default function Sidebar({ current, onNavigate }) {
     };
 
     tick();
-    const t = setInterval(tick, 1000);
-    return () => clearInterval(t);
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
   }, []);
 
-  /* ───────── HEALTH CHECK ───────── */
+  // Health check
   useEffect(() => {
-    const check = async () => {
+    const checkHealth = async () => {
       const start = performance.now();
-
       try {
         const data = await health();
         const end = performance.now();
-
         setOnline(data?.status === "ok");
         setLatency(Math.round(end - start));
       } catch {
@@ -62,158 +59,164 @@ export default function Sidebar({ current, onNavigate }) {
       }
     };
 
-    check();
-    const t = setInterval(check, 15000);
-    return () => clearInterval(t);
+    checkHealth();
+    const interval = setInterval(checkHealth, 15000);
+    return () => clearInterval(interval);
   }, []);
 
-  /* ───────── ALERTS ───────── */
+  // Alerts
   useEffect(() => {
-    const check = async () => {
+    const checkAlerts = async () => {
       if (pollingRef.current) return;
       pollingRef.current = true;
 
       try {
         const data = await getAlerts(20);
-
         if (Array.isArray(data)) {
-          setUnreadAlerts(data.filter((a) => !a.acknowledged).length);
+          const unread = data.filter((item) => !item.acknowledged).length;
+          setUnreadAlerts(unread);
         }
-      } catch {}
+      } catch (error) {
+        console.error("Failed to fetch alerts:", error);
+      }
 
       pollingRef.current = false;
     };
 
-    check();
-    const t = setInterval(check, 30000);
-    return () => clearInterval(t);
+    checkAlerts();
+    const interval = setInterval(checkAlerts, 30000);
+    return () => clearInterval(interval);
   }, []);
 
-  /* ───────── AGENT STATUS ───────── */
+  // Agent status
   useEffect(() => {
-    const fetch_ = async () => {
+    const fetchAgentStatus = async () => {
       try {
         const data = await getAgentStatus();
         setAgentCtx(data);
-
         setCycleFlash(true);
         setTimeout(() => setCycleFlash(false), 600);
-      } catch {}
+      } catch (error) {
+        console.error("Failed to fetch agent status:", error);
+      }
     };
 
-    fetch_();
-    const t = setInterval(fetch_, 20000);
-    return () => clearInterval(t);
+    fetchAgentStatus();
+    const interval = setInterval(fetchAgentStatus, 20000);
+    return () => clearInterval(interval);
   }, []);
 
-  /* ───────── STATUS CONFIGURATION ───────── */
   const getStatusConfig = () => {
-    if (!online) return { text: "Offline", color: "var(--error)", dot: "offline" };
-    if (latency > 1000) return { text: "Degraded", color: "var(--error)", dot: "warning" };
-    if (latency > 300) return { text: "Slow Link", color: "var(--warning)", dot: "warning" };
-    return { text: "Operational", color: "var(--success)", dot: "online" };
+    if (!online) return { text: "Offline", color: "#ef4444", dot: "offline" };
+    if (latency > 1000) return { text: "Degraded", color: "#ef4444", dot: "warning" };
+    if (latency > 300) return { text: "Slow", color: "#f59e0b", dot: "warning" };
+    return { text: "Online", color: "#4ade80", dot: "online" };
   };
 
   const getAgentConfig = () => {
-    if (!agentCtx) return { state: "Idle", icon: "💤", color: "var(--text-tertiary)" };
-    if (agentCtx.overdue > 0) return { state: "Intervening", icon: "⚡", color: "var(--error)" };
-    if (agentCtx.tasks > 0) return { state: "Processing", icon: "🔄", color: "var(--warning)" };
-    return { state: "Monitoring", icon: "👁", color: "var(--success)" };
+    if (!agentCtx) return { state: "Idle", icon: "😴", color: "#64748b" };
+    if (agentCtx.overdue > 0) return { state: "Alert", icon: "🚨", color: "#ef4444" };
+    if (agentCtx.tasks > 0) return { state: "Working", icon: "⚡", color: "#f59e0b" };
+    return { state: "Active", icon: "🎯", color: "#4ade80" };
   };
 
-  const status = getStatusConfig();
-  const agent = getAgentConfig();
+  const statusConfig = getStatusConfig();
+  const agentConfig = getAgentConfig();
 
   return (
     <aside className="sidebar">
-      {/* LOGO AREA */}
-      <div className="sidebar-logo">
+      {/* Logo */}
+      <div className="logo-section">
         <div className="logo-icon">
-          <span>⚡</span>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#4ade80" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M2 17L12 22L22 17" stroke="#4ade80" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M2 12L12 17L22 12" stroke="#4ade80" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
         </div>
         <div>
           <div className="logo-name">ORA</div>
-          <div className="logo-sub">Personal AI Assistant</div>
+          <div className="logo-sub">AI Assistant</div>
         </div>
       </div>
 
-      {/* CLOCK DISPLAY */}
-      <div className="clock-display">
-        <div className="clock-time">{time}</div>
-        <div className="clock-date">{date} · EAT</div>
+      {/* Time */}
+      <div className="time-section">
+        <div className="time">{time}</div>
+        <div className="date">{date}</div>
       </div>
 
-      {/* SYSTEM STATUS */}
-      <div className="status-panel">
-        <div className="status-header">
+      {/* Status Card */}
+      <div className="status-card">
+        <div className="status-row">
           <span className="status-label">System</span>
-          <span className="status-value" style={{ color: status.color }}>
-            {status.text}
-          </span>
+          <div className="status-badge" style={{ background: `${statusConfig.color}15`, color: statusConfig.color }}>
+            <span className={`status-dot ${statusConfig.dot}`} />
+            {statusConfig.text}
+          </div>
         </div>
-        <div className="status-detail">
-          <div className={`status-indicator ${status.dot}`} />
-          {latency && <span className="status-latency">{latency}ms</span>}
-        </div>
+        {latency && (
+          <div className="status-row">
+            <span className="status-label">Latency</span>
+            <span className="status-value">{latency}ms</span>
+          </div>
+        )}
       </div>
 
-      {/* AGENT STATUS */}
+      {/* Agent Card */}
       {agentCtx && (
-        <div className={`agent-panel ${cycleFlash ? "flash" : ""}`}>
+        <div className={`agent-card ${cycleFlash ? "pulse" : ""}`}>
           <div className="agent-header">
-            <span className="agent-icon">{agent.icon}</span>
-            <span className="agent-state" style={{ color: agent.color }}>
-              {agent.state}
-            </span>
-          </div>
-          <div className="agent-stats">
-            <div className="stat-item">
-              <span className="stat-label">Tasks</span>
-              <span className="stat-number">{agentCtx.tasks ?? 0}</span>
+            <span className="agent-icon">{agentConfig.icon}</span>
+            <div>
+              <div className="agent-state" style={{ color: agentConfig.color }}>
+                {agentConfig.state}
+              </div>
+              <div className="agent-sub">Active Session</div>
             </div>
-            <div className="stat-item">
-              <span className="stat-label">Overdue</span>
-              <span
-                className="stat-number"
-                style={{
-                  color: agentCtx.overdue > 0 ? "var(--error)" : "var(--text-tertiary)",
-                }}
-              >
+          </div>
+          <div className="agent-metrics">
+            <div className="metric">
+              <span className="metric-label">Tasks</span>
+              <span className="metric-value">{agentCtx.tasks ?? 0}</span>
+            </div>
+            <div className="metric">
+              <span className="metric-label">Overdue</span>
+              <span className="metric-value" style={{ color: agentCtx.overdue > 0 ? "#ef4444" : "#64748b" }}>
                 {agentCtx.overdue ?? 0}
               </span>
             </div>
-            <div className="stat-item">
-              <span className="stat-label">Goals</span>
-              <span className="stat-number">{agentCtx.goals ?? 0}</span>
+            <div className="metric">
+              <span className="metric-label">Goals</span>
+              <span className="metric-value">{agentCtx.goals ?? 0}</span>
             </div>
           </div>
         </div>
       )}
 
-      {/* NAVIGATION */}
-      <nav className="sidebar-nav">
-        {nav.map((item) => (
+      {/* Navigation */}
+      <nav className="nav-section">
+        {navItems.map((item) => (
           <button
             key={item.id}
-            className={`nav-item ${current === item.id ? "active" : ""}`}
+            className={`nav-btn ${current === item.id ? "active" : ""}`}
             onClick={() => onNavigate(item.id)}
           >
             <span className="nav-icon">{item.icon}</span>
-            <span className="nav-label">{item.label}</span>
-
+            <span className="nav-text">{item.label}</span>
             {item.id === "alerts" && unreadAlerts > 0 && (
-              <span className="nav-badge">{unreadAlerts > 9 ? "9+" : unreadAlerts}</span>
+              <span className="alert-badge">{unreadAlerts > 9 ? "9+" : unreadAlerts}</span>
             )}
           </button>
         ))}
       </nav>
 
-      {/* FOOTER */}
-      <div className="sidebar-footer">
-        <div className="footer-version">v0.5 · Nairobi, KE</div>
-        <div className="footer-status">
-          <span className={`footer-dot ${online ? "active" : "inactive"}`} />
-          <span>{online ? "Connected" : "Reconnecting"}</span>
+      {/* Footer */}
+      <div className="footer">
+        <div className="version">v0.5 · KE</div>
+        <div className="connection">
+          <div className={`connection-dot ${online ? "online" : "offline"}`} />
+          <span>{online ? "Connected" : "Disconnected"}</span>
         </div>
       </div>
     </aside>
