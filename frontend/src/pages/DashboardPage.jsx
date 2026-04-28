@@ -13,15 +13,10 @@ function Meter({ label, value = 0, unit = "%" }) {
     <div className="meter">
       <div className="meter-header">
         <span className="meter-label">{label}</span>
-        <span className="meter-value" style={{ color }}>
-          {v}{unit}
-        </span>
+        <span className="meter-value" style={{ color }}>{v}{unit}</span>
       </div>
       <div className="meter-track">
-        <div 
-          className="meter-bar" 
-          style={{ width: `${v}%`, background: color }} 
-        />
+        <div className="meter-bar" style={{ width: `${v}%`, background: color }} />
       </div>
     </div>
   );
@@ -31,28 +26,19 @@ function TheNumber({ task }) {
   if (!task) return null;
 
   return (
-    <div className="the-number-card">
-      <div className="the-number-header">
-        ◈ TODAY'S TOP PRIORITY
+    <div className="poi-card the-number-card">
+      <div className="card-header">
+        <span className="card-icon">◆</span>
+        TODAY'S TOP PRIORITY
       </div>
       <div className="the-number-title">{task.title}</div>
       
       <div className="the-number-meta">
-        <span 
-          className={`priority-badge ${task.priority || 'medium'}`}
-        >
+        <span className={`priority-badge ${task.priority || 'medium'}`}>
           {(task.priority || 'MEDIUM').toUpperCase()}
         </span>
-        
         {task.overdue && <span className="overdue-badge">⚠ OVERDUE</span>}
-        
-        {task.reason && <span className="the-number-reason">{task.reason}</span>}
-        
-        {task.score && (
-          <span className="score">
-            SCORE <span className="score-value">{task.score}</span>
-          </span>
-        )}
+        {task.reason && <div className="the-number-reason">{task.reason}</div>}
       </div>
     </div>
   );
@@ -67,39 +53,24 @@ function MpesaWidget({ summary }) {
   const color = ratio >= 3 ? "var(--red)" : ratio >= 1.5 ? "var(--amber)" : "var(--green)";
 
   return (
-    <div className="card mpesa-card">
-      <div className="card-title">// M-Pesa Financial Snapshot</div>
-      
+    <div className="poi-card">
+      <div className="card-header">
+        <span className="card-icon">💳</span>
+        M-PESA FINANCIAL SNAPSHOT
+      </div>
       <div className="mpesa-main">
-        <div>
-          <div className="mpesa-amount" style={{ color }}>
-            KES {(today.total || 0).toLocaleString()}
-          </div>
-          <div className="mpesa-sub">
-            spent today • {today.transactions} transactions
-          </div>
+        <div className="mpesa-amount" style={{ color }}>
+          KES {(today.total || 0).toLocaleString()}
         </div>
-
-        <div className="mpesa-avg">
-          <div className="mpesa-avg-label">Daily Average</div>
-          <div className="mpesa-avg-value">KES {avg.toLocaleString()}</div>
-        </div>
+        <div className="mpesa-sub">spent today • {today.transactions} txns</div>
       </div>
 
       <div className="mpesa-bar-container">
-        <div 
-          className="mpesa-bar" 
-          style={{ 
-            width: `${Math.min(ratio * 40, 100)}%`, 
-            background: color 
-          }} 
-        />
+        <div className="mpesa-bar" style={{ width: `${Math.min(ratio * 40, 100)}%`, background: color }} />
       </div>
 
       {ratio >= 2.5 && (
-        <div className="mpesa-alert">
-          ⚠ Spending is {ratio.toFixed(1)}× above daily average
-        </div>
+        <div className="mpesa-alert">⚠ SPENDING {ratio.toFixed(1)}× ABOVE AVERAGE</div>
       )}
     </div>
   );
@@ -108,18 +79,15 @@ function MpesaWidget({ summary }) {
 function CalendarWidget({ events }) {
   if (!events?.length) {
     return (
-      <div className="card">
-        <div className="card-title">// Today's Calendar</div>
+      <div className="poi-card">
+        <div className="card-header">
+          <span className="card-icon">📅</span>
+          TODAY'S CALENDAR
+        </div>
         <div className="empty">
-          <div className="empty-icon">📅</div>
-          <span>No events today</span>
-          <a 
-            href="/api/auth/google" 
-            target="_blank" 
-            rel="noreferrer"
-            className="connect-link"
-          >
-            Connect Google Calendar →
+          No scheduled events<br />
+          <a href="/api/auth/google" target="_blank" rel="noreferrer" className="connect-link">
+            Connect Google Calendar
           </a>
         </div>
       </div>
@@ -127,31 +95,24 @@ function CalendarWidget({ events }) {
   }
 
   return (
-    <div className="card">
-      <div className="card-title">
-        // Today's Calendar • {events.length} event{events.length > 1 ? "s" : ""}
+    <div className="poi-card">
+      <div className="card-header">
+        <span className="card-icon">📅</span>
+        TODAY'S CALENDAR • {events.length} EVENTS
       </div>
-      {events.slice(0, 5).map((e, i) => {
-        const isImminent = e.minutes_until != null && 
-                          e.minutes_until >= 0 && 
-                          e.minutes_until <= 30;
-        
-        return (
-          <div key={i} className={`calendar-event ${isImminent ? 'imminent' : ''}`}>
-            <div className="cal-time">
-              {e.all_day ? "ALL DAY" : 
-               e.minutes_until != null ? 
-                 (e.minutes_until <= 0 ? "NOW" : `${e.minutes_until}m`) : 
-                 e.start?.slice(11, 16) || "—"}
-            </div>
-            <div className="cal-content">
-              <div className="cal-title">{e.title}</div>
-              {e.location && <div className="cal-location">📍 {e.location}</div>}
-              {isImminent && <div className="cal-imminent">● STARTING SOON</div>}
-            </div>
+      {events.slice(0, 5).map((e, i) => (
+        <div key={i} className="calendar-event">
+          <div className="cal-time">
+            {e.all_day ? "ALL DAY" : e.minutes_until != null 
+              ? (e.minutes_until <= 0 ? "NOW" : `${e.minutes_until}m`) 
+              : e.start?.slice(11, 16) || "—"}
           </div>
-        );
-      })}
+          <div className="cal-content">
+            <div className="cal-title">{e.title}</div>
+            {e.location && <div className="cal-location">📍 {e.location}</div>}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -160,8 +121,11 @@ function GoalsWidget({ goals }) {
   if (!goals?.length) return null;
 
   return (
-    <div className="card">
-      <div className="card-title">// Active Goals ({goals.length})</div>
+    <div className="poi-card">
+      <div className="card-header">
+        <span className="card-icon">🎯</span>
+        ACTIVE GOALS ({goals.length})
+      </div>
       {goals.slice(0, 4).map((g, i) => {
         const pct = g.progress || 0;
         const overdue = g.due_at && new Date(g.due_at) < new Date();
@@ -170,17 +134,14 @@ function GoalsWidget({ goals }) {
         return (
           <div key={i} className="goal-row">
             <div className="goal-title">{g.goal}</div>
-            <div className="goal-bar-track">
-              <div 
-                className="goal-bar-fill" 
-                style={{ width: `${pct}%`, background: color }} 
-              />
+            <div className="goal-progress">
+              <div className="goal-bar-track">
+                <div className="goal-bar-fill" style={{ width: `${pct}%`, background: color }} />
+              </div>
+              <span className="goal-percent">{pct}%</span>
             </div>
-            <div className="goal-meta">
-              <span>{pct}% complete</span>
-              <span style={{ color: overdue ? "var(--red)" : "var(--text3)" }}>
-                {overdue ? "⚠ OVERDUE" : g.due_at ? `due ${g.due_at.slice(0,10)}` : "no deadline"}
-              </span>
+            <div className="goal-due">
+              {overdue ? "⚠ OVERDUE" : g.due_at ? `due ${g.due_at.slice(0,10)}` : "no deadline"}
             </div>
           </div>
         );
@@ -193,41 +154,20 @@ function AgentRibbon({ ctx }) {
   if (!ctx) return null;
 
   return (
-    <div className="agent-ribbon">
-      <div className="agent-ribbon-item">
-        <div className="agent-dot" />
-        <span>AGENT CYCLE</span>
-      </div>
-      <div className="agent-ribbon-item">
-        TASKS <span className="agent-ribbon-val">{ctx.tasks ?? 0}</span>
-      </div>
-      <div className="agent-ribbon-item">
-        OVERDUE <span 
-          className="agent-ribbon-val" 
-          style={{ color: (ctx.overdue ?? 0) > 0 ? "var(--red)" : "var(--green)" }}
-        >
-          {ctx.overdue ?? 0}
-        </span>
-      </div>
-      <div className="agent-ribbon-item">
-        GOALS <span className="agent-ribbon-val">{ctx.goals ?? 0}</span>
-      </div>
-      <div className="agent-ribbon-item">
-        CALENDAR <span className="agent-ribbon-val" style={{ color: "var(--cyan)" }}>
-          {ctx.calendar_today ?? 0}
-        </span>
-      </div>
-      {ctx.pending_actions?.length > 0 && (
-        <div className="agent-ribbon-item pending-actions">
-          {ctx.pending_actions.length} pending action{ctx.pending_actions.length > 1 ? "s" : ""}
-        </div>
-      )}
+    <div className="agent-ribbon poi-ribbon">
+      <div>AGENT CYCLE ACTIVE</div>
+      <div>TASKS: <span className="val">{ctx.tasks ?? 0}</span></div>
+      <div>OVERDUE: <span className="val" style={{color: (ctx.overdue ?? 0) > 0 ? "var(--red)" : "var(--green)"}}>
+        {ctx.overdue ?? 0}
+      </span></div>
+      <div>GOALS: <span className="val">{ctx.goals ?? 0}</span></div>
+      <div>CALENDAR: <span className="val">{ctx.calendar_today ?? 0}</span></div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────
-// MAIN DASHBOARD COMPONENT
+// MAIN DASHBOARD
 // ─────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -242,19 +182,11 @@ export default function DashboardPage() {
 
   const fetchAll = useCallback(async () => {
     const results = await Promise.allSettled([
-      getStatus(),
-      getAlerts(10),
-      getTasks(),
-      getTheNumber(),
-      getMpesaSummary(),
-      getGoals(),
-      getCalendarToday(),
-      getAgentStatus(),
+      getStatus(), getAlerts(10), getTasks(), getTheNumber(),
+      getMpesaSummary(), getGoals(), getCalendarToday(), getAgentStatus(),
     ]);
 
-    const [s, a, t, n, m, g, c, ag] = results.map(r => 
-      r.status === "fulfilled" ? r.value : null
-    );
+    const [s, a, t, n, m, g, c, ag] = results.map(r => r.status === "fulfilled" ? r.value : null);
 
     if (s) setStatus(s);
     if (a) setAlerts(Array.isArray(a) ? a : []);
@@ -288,89 +220,73 @@ export default function DashboardPage() {
   return (
     <div className="page">
       <div className="page-header">
-        <div className="page-title">// Command Center</div>
+        <div className="page-title">// COMMAND CENTER</div>
         <div className="page-sub">Real-time intelligence • Nairobi, KE • EAT</div>
       </div>
 
       <AgentRibbon ctx={agentCtx} />
 
-      {/* Quick Stats Row */}
-      <div className="grid-3" style={{ marginBottom: "1.25rem" }}>
+      <div className="grid-3 stats-row">
         <div className="stat-box">
           <div className="stat-num">{tasks.length}</div>
-          <div className="stat-label">Pending Tasks</div>
+          <div className="stat-label">PENDING TASKS</div>
         </div>
         <div className="stat-box">
           <div className="stat-num" style={{ color: activeAlerts.length > 0 ? "var(--red)" : "var(--green)" }}>
             {activeAlerts.length}
           </div>
-          <div className="stat-label">Active Alerts</div>
+          <div className="stat-label">ACTIVE ALERTS</div>
         </div>
         <div className="stat-box">
           <div className="stat-num" style={{ color: isOnline ? "var(--green)" : "var(--red)" }}>
             {isOnline ? "ONLINE" : "OFFLINE"}
           </div>
-          <div className="stat-label">System Status</div>
+          <div className="stat-label">SYSTEM STATUS</div>
         </div>
       </div>
 
-      {/* The Number */}
+      {/* The Number - Prominent Card */}
       <TheNumber task={theNumber} />
 
       <div className="grid-2">
         {/* System Monitor */}
-        <div className="card">
-          <div className="card-title">// System Monitor</div>
+        <div className="poi-card">
+          <div className="card-header">
+            <span className="card-icon">⚙️</span>
+            SYSTEM MONITOR
+          </div>
           {isOnline ? (
             <>
               <Meter label="CPU LOAD" value={status.cpu} />
               <Meter label="RAM USED" value={status.ram} />
               <div className="sync-time">
-                SYNC: {status.time ? new Date(status.time).toLocaleTimeString() : "—"}
+                LAST SYNC: {status.time ? new Date(status.time).toLocaleTimeString() : "—"}
               </div>
             </>
           ) : (
-            <div className="empty">
-              <div className="empty-icon">⌛</div>
-              {status === null ? "Connecting to ORA..." : "Backend unreachable"}
-            </div>
+            <div className="empty">Backend unreachable</div>
           )}
         </div>
 
-        {/* Alerts Feed */}
-        <div className="card">
-          <div className="card-header-with-action">
-            <div className="card-title">// Alert Feed</div>
+        {/* Alert Feed */}
+        <div className="poi-card">
+          <div className="card-header">
+            <span className="card-icon">⚠️</span>
+            ALERT FEED
             {activeAlerts.length > 0 && (
-              <button className="btn btn-ghost small" onClick={handleAckAll}>
-                ACK ALL
-              </button>
+              <button className="btn btn-ghost small" onClick={handleAckAll}>ACK ALL</button>
             )}
           </div>
-
           {activeAlerts.length === 0 ? (
-            <div className="empty">
-              <div className="empty-icon" style={{ color: "var(--green)" }}>◉</div>
-              All systems nominal
-            </div>
+            <div className="empty success">● ALL SYSTEMS NOMINAL</div>
           ) : (
             activeAlerts.slice(0, 4).map(a => (
               <div key={a.id} className={`alert-row ${a.severity}`}>
-                <div className="alert-header">
-                  <div className="alert-severity">
-                    {a.severity?.toUpperCase()}
-                  </div>
-                  <button 
-                    className="btn btn-ghost tiny" 
-                    onClick={() => handleAck(a.id)}
-                  >
-                    ACK
-                  </button>
-                </div>
                 <div className="alert-msg">{a.message}</div>
                 <div className="alert-time">
-                  {a.timestamp?.slice(11, 19)} • {a.rule_name}
+                  {a.timestamp?.slice(11,19)} • {a.rule_name}
                 </div>
+                <button className="ack-btn" onClick={() => handleAck(a.id)}>ACK</button>
               </div>
             ))
           )}
@@ -379,36 +295,26 @@ export default function DashboardPage() {
         {/* M-Pesa */}
         <MpesaWidget summary={mpesa} />
 
-        {/* Task Queue */}
-        <div className="card">
-          <div className="card-title">// Task Queue • {tasks.length} pending</div>
+        {/* Tasks */}
+        <div className="poi-card">
+          <div className="card-header">
+            <span className="card-icon">📋</span>
+            TASK QUEUE • {tasks.length} PENDING
+          </div>
           {tasks.length === 0 ? (
-            <div className="empty">
-              <div className="empty-icon">◆</div>
-              Queue empty — Add tasks via chat or Telegram
-            </div>
+            <div className="empty">No pending tasks</div>
           ) : (
             tasks.slice(0, 5).map(t => (
               <div key={t.id} className="task-row">
-                <div className="task-info">
-                  <div className="task-title">{t.title}</div>
-                  <div className="task-meta">
-                    #{t.id} • {t.created_at?.slice(0, 10)}
-                    {t.due_at && ` • DUE ${t.due_at.slice(11, 16)}`}
-                  </div>
-                </div>
-                <div className={`priority-badge ${t.priority || 'medium'}`}>
-                  {(t.priority || 'MEDIUM').toUpperCase()}
-                </div>
+                <div className="task-title">{t.title}</div>
+                <div className={`priority-badge ${t.priority}`}>{(t.priority || 'MED').toUpperCase()}</div>
               </div>
             ))
           )}
         </div>
 
-        {/* Calendar */}
+        {/* Calendar & Goals */}
         <CalendarWidget events={calendar} />
-
-        {/* Goals */}
         <GoalsWidget goals={goals} />
       </div>
     </div>

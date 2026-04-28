@@ -268,3 +268,74 @@ body::after {
   color: #ff3333;
   font-weight: 700;
 }
+.poi-card {
+  background: #0f0f1e;
+  border: 1px solid #00ff9d;
+  border-radius: 4px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 0 20px rgba(0, 255, 157, 0.1);
+  position: relative;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #00ddff;
+  font-size: 11px;
+  letter-spacing: 2px;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+}
+
+.card-icon {
+  color: #00ff9d;
+  opacity: 0.9;
+}
+
+.the-number-card {
+  border-color: #00ff9d;
+  background: linear-gradient(135deg, #1a1a2e, #0f0f1e);
+}
+
+.the-number-title {
+  font-size: 1.1rem;
+  color: #ffffff;
+  margin: 8px 0 12px;
+}
+
+.priority-badge {
+  padding: 4px 12px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.overdue-badge {
+  color: var(--red);
+  font-weight: bold;
+  margin-left: 10px;
+}
+
+.alert-row {
+  padding: 10px 0;
+  border-bottom: 1px solid #223344;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ack-btn {
+  background: transparent;
+  border: 1px solid #00ff9d;
+  color: #00ff9d;
+  padding: 4px 10px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.ack-btn:hover {
+  background: rgba(0,255,157,0.1);
+}
