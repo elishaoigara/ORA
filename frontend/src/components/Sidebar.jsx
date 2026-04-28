@@ -1,340 +1,244 @@
-﻿import { useState, useEffect, useCallback } from "react";
-import {
-  getStatus, getAlerts, getTasks, getTheNumber,
-  getMpesaSummary, getGoals, getCalendarToday,
-  getAgentStatus, ackAlert, ackAllAlerts,
-} from "../api";
+﻿import { useState, useEffect, useRef } from "react";
+import { health, getAgentStatus, getAlerts } from "../api";
 
-function Meter({ label, value = 0, unit = "%" }) {
-  const v = Math.min(Math.max(Number(value) || 0, 0), 100);
-  const color = v > 85 ? "var(--red)" : v > 65 ? "var(--amber)" : "var(--green)";
+const navItems = [
+  { id: "dashboard", icon: "🏠", label: "Dashboard" },
+  { id: "chat", icon: "💬", label: "Chat" },
+  { id: "tasks", icon: "✅", label: "Tasks" },
+  { id: "alerts", icon: "⚠️", label: "Alerts" },
+  { id: "knowledge", icon: "📚", label: "Knowledge" },
+  { id: "memory", icon: "🧠", label: "Memory" },
+  { id: "research", icon: "🔬", label: "Research" },
+];
 
-  return (
-    <div className="meter">
-      <div className="meter-header">
-        <span className="meter-label">{label}</span>
-        <span className="meter-value" style={{ color }}>{v}{unit}</span>
-      </div>
-      <div className="meter-track">
-        <div 
-          className="meter-bar" 
-          style={{ width: `${v}%`, background: color }} 
-        />
-      </div>
-    </div>
-  );
-}
+export default function Sidebar({ current, onNavigate }) {
+  const [time, setTime] = useState("");
+  const [date, setDate] = useState("");
+  const [online, setOnline] = useState(false);
+  const [latency, setLatency] = useState(null);
 
-function TheNumber({ task }) {
-  if (!task) return null;
-
-  return (
-    <div className="poi-card the-number-card">
-      <div className="card-header">
-        <span className="card-icon">◆</span>
-        TODAY'S TOP PRIORITY
-      </div>
-      <div className="the-number-title">{task.title}</div>
-      
-      <div className="the-number-meta">
-        <span className={`priority-badge ${task.priority || 'medium'}`}>
-          {(task.priority || 'MEDIUM').toUpperCase()}
-        </span>
-        {task.overdue && <span className="overdue-badge">⚠ OVERDUE</span>}
-        {task.reason && <div className="the-number-reason">{task.reason}</div>}
-      </div>
-    </div>
-  );
-}
-
-function MpesaWidget({ summary }) {
-  if (!summary || summary.status === "error") return null;
-
-  const today = summary.today || { total: 0, transactions: 0 };
-  const avg = summary.average_daily || 0;
-  const ratio = avg > 0 ? today.total / avg : 0;
-  const color = ratio >= 3 ? "var(--red)" : ratio >= 1.5 ? "var(--amber)" : "var(--green)";
-
-  return (
-    <div className="poi-card mpesa-card">
-      <div className="card-header">
-        <span className="card-icon">💳</span>
-        M-PESA FINANCIAL SNAPSHOT
-      </div>
-      <div className="mpesa-main">
-        <div>
-          <div className="mpesa-amount" style={{ color }}>
-            KES {(today.total || 0).toLocaleString()}
-          </div>
-          <div className="mpesa-sub">spent today • {today.transactions} txns</div>
-        </div>
-
-        <div className="mpesa-avg">
-          <div className="mpesa-avg-label">DAILY AVG</div>
-          <div className="mpesa-avg-value">KES {avg.toLocaleString()}</div>
-        </div>
-      </div>
-
-      <div className="mpesa-bar-container">
-        <div 
-          className="mpesa-bar" 
-          style={{ width: `${Math.min(ratio * 40, 100)}%`, background: color }} 
-        />
-      </div>
-
-      {ratio >= 2.5 && (
-        <div className="mpesa-alert">⚠ SPENDING {ratio.toFixed(1)}× ABOVE AVERAGE</div>
-      )}
-    </div>
-  );
-}
-
-function CalendarWidget({ events }) {
-  if (!events?.length) {
-    return (
-      <div className="poi-card">
-        <div className="card-header">
-          <span className="card-icon">📅</span>
-          TODAY'S CALENDAR
-        </div>
-        <div className="empty">
-          No scheduled events<br/>
-          <a href="/api/auth/google" target="_blank" rel="noreferrer" className="connect-link">
-            Connect Google Calendar →
-          </a>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="poi-card">
-      <div className="card-header">
-        <span className="card-icon">📅</span>
-        TODAY'S CALENDAR • {events.length} EVENTS
-      </div>
-      {events.slice(0, 5).map((e, i) => (
-        <div key={i} className="calendar-event">
-          <div className="cal-time">
-            {e.all_day ? "ALL DAY" : 
-             e.minutes_until != null ? 
-               (e.minutes_until <= 0 ? "NOW" : `${e.minutes_until}m`) : 
-               e.start?.slice(11, 16) || "—"}
-          </div>
-          <div className="cal-content">
-            <div className="cal-title">{e.title}</div>
-            {e.location && <div className="cal-location">📍 {e.location}</div>}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function GoalsWidget({ goals }) {
-  if (!goals?.length) return null;
-
-  return (
-    <div className="poi-card">
-      <div className="card-header">
-        <span className="card-icon">🎯</span>
-        ACTIVE GOALS ({goals.length})
-      </div>
-      {goals.slice(0, 4).map((g, i) => {
-        const pct = g.progress || 0;
-        const overdue = g.due_at && new Date(g.due_at) < new Date();
-        const color = overdue ? "var(--red)" : pct >= 70 ? "var(--green)" : "var(--amber)";
-
-        return (
-          <div key={i} className="goal-row">
-            <div className="goal-title">{g.goal}</div>
-            <div className="goal-progress">
-              <div className="goal-bar-track">
-                <div className="goal-bar-fill" style={{ width: `${pct}%`, background: color }} />
-              </div>
-              <span className="goal-percent">{pct}%</span>
-            </div>
-            <div className="goal-due">
-              {overdue ? "⚠ OVERDUE" : g.due_at ? `due ${g.due_at.slice(0,10)}` : "no deadline"}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function AgentRibbon({ ctx }) {
-  if (!ctx) return null;
-
-  return (
-    <div className="agent-ribbon poi-ribbon">
-      <div className="ribbon-item">AGENT CYCLE <span className="status-dot online" /></div>
-      <div>TASKS <span className="val">{ctx.tasks ?? 0}</span></div>
-      <div>OVERDUE <span className="val" style={{color: (ctx.overdue ?? 0) > 0 ? "var(--red)" : "var(--green)"}}>
-        {ctx.overdue ?? 0}
-      </span></div>
-      <div>GOALS <span className="val">{ctx.goals ?? 0}</span></div>
-      <div>CALENDAR <span className="val">{ctx.calendar_today ?? 0}</span></div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// MAIN DASHBOARD
-// ─────────────────────────────────────────────────────────────
-
-export default function DashboardPage() {
-  const [status, setStatus] = useState(null);
-  const [alerts, setAlerts] = useState([]);
-  const [tasks, setTasks] = useState([]);
-  const [theNumber, setTheNumber] = useState(null);
-  const [mpesa, setMpesa] = useState(null);
-  const [goals, setGoals] = useState([]);
-  const [calendar, setCalendar] = useState([]);
+  const [unreadAlerts, setUnreadAlerts] = useState(0);
   const [agentCtx, setAgentCtx] = useState(null);
+  const [cycleFlash, setCycleFlash] = useState(false);
 
-  const fetchAll = useCallback(async () => {
-    const results = await Promise.allSettled([
-      getStatus(), getAlerts(10), getTasks(), getTheNumber(),
-      getMpesaSummary(), getGoals(), getCalendarToday(), getAgentStatus(),
-    ]);
+  const pollingRef = useRef(false);
 
-    const [s, a, t, n, m, g, c, ag] = results.map(r => 
-      r.status === "fulfilled" ? r.value : null
-    );
+  // Clock
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      setTime(now.toLocaleTimeString("en-KE", { hour12: false }));
+      setDate(
+        now
+          .toLocaleDateString("en-KE", {
+            weekday: "long",
+            day: "2-digit",
+            month: "long",
+          })
+      );
+    };
 
-    if (s) setStatus(s);
-    if (a) setAlerts(Array.isArray(a) ? a : []);
-    if (t) setTasks(Array.isArray(t) ? t : []);
-    if (n) setTheNumber(n);
-    if (m) setMpesa(m);
-    if (g) setGoals(Array.isArray(g) ? g : []);
-    if (c) setCalendar(Array.isArray(c) ? c : []);
-    if (ag) setAgentCtx(ag);
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
   }, []);
 
-  const handleAck = async (id) => {
-    await ackAlert(id).catch(() => {});
-    fetchAll();
-  };
-
-  const handleAckAll = async () => {
-    await ackAllAlerts().catch(() => {});
-    fetchAll();
-  };
-
+  // Health check
   useEffect(() => {
-    fetchAll();
-    const interval = setInterval(fetchAll, 15000);
-    return () => clearInterval(interval);
-  }, [fetchAll]);
+    const checkHealth = async () => {
+      const start = performance.now();
+      try {
+        const data = await health();
+        const end = performance.now();
+        setOnline(data?.status === "ok");
+        setLatency(Math.round(end - start));
+      } catch {
+        setOnline(false);
+        setLatency(null);
+      }
+    };
 
-  const activeAlerts = alerts.filter(a => !a.acknowledged);
-  const isOnline = status && typeof status.cpu === "number";
+    checkHealth();
+    const interval = setInterval(checkHealth, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Alerts
+  useEffect(() => {
+    const checkAlerts = async () => {
+      if (pollingRef.current) return;
+      pollingRef.current = true;
+
+      try {
+        const data = await getAlerts(20);
+        if (Array.isArray(data)) {
+          const unread = data.filter((item) => !item.acknowledged).length;
+          setUnreadAlerts(unread);
+        }
+      } catch (error) {
+        console.error("Failed to fetch alerts:", error);
+      }
+
+      pollingRef.current = false;
+    };
+
+    checkAlerts();
+    const interval = setInterval(checkAlerts, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Agent status
+  useEffect(() => {
+    const fetchAgentStatus = async () => {
+      try {
+        const data = await getAgentStatus();
+        setAgentCtx(data);
+        setCycleFlash(true);
+        setTimeout(() => setCycleFlash(false), 600);
+      } catch (error) {
+        console.error("Failed to fetch agent status:", error);
+      }
+    };
+
+    fetchAgentStatus();
+    const interval = setInterval(fetchAgentStatus, 20000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const getStatusConfig = () => {
+    if (!online) return { text: "Offline", color: "#ef4444", bg: "#7f1d1d", dot: "#ef4444" };
+    if (latency > 1000) return { text: "Degraded", color: "#f97316", bg: "#7c2d12", dot: "#f97316" };
+    if (latency > 300) return { text: "Slow", color: "#eab308", bg: "#713f12", dot: "#eab308" };
+    return { text: "Online", color: "#22c55e", bg: "#14532d", dot: "#22c55e" };
+  };
+
+  const getAgentConfig = () => {
+    if (!agentCtx) return { state: "Idle", icon: "💤", color: "#6b7280", bg: "#374151" };
+    if (agentCtx.overdue > 0) return { state: "Critical", icon: "🚨", color: "#ef4444", bg: "#7f1d1d" };
+    if (agentCtx.tasks > 0) return { state: "Active", icon: "⚡", color: "#eab308", bg: "#713f12" };
+    return { state: "Monitoring", icon: "👁️", color: "#22c55e", bg: "#14532d" };
+  };
+
+  const status = getStatusConfig();
+  const agent = getAgentConfig();
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <div className="page-title">// COMMAND CENTER</div>
-        <div className="page-sub">Real-time intelligence • Nairobi, KE • EAT</div>
-      </div>
-
-      <AgentRibbon ctx={agentCtx} />
-
-      <div className="grid-3 stats-row">
-        <div className="stat-box">
-          <div className="stat-num">{tasks.length}</div>
-          <div className="stat-label">PENDING TASKS</div>
-        </div>
-        <div className="stat-box">
-          <div className="stat-num" style={{ color: activeAlerts.length > 0 ? "var(--red)" : "var(--green)" }}>
-            {activeAlerts.length}
+    <aside className="modern-sidebar">
+      {/* Header with Logo */}
+      <div className="sidebar-header">
+        <div className="logo-wrapper">
+          <div className="logo-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#22c55e" strokeWidth="1.5" fill="#22c55e" fillOpacity="0.2"/>
+              <path d="M2 17L12 22L22 17" stroke="#22c55e" strokeWidth="1.5" fill="none"/>
+              <path d="M2 12L12 17L22 12" stroke="#22c55e" strokeWidth="1.5" fill="none"/>
+              <circle cx="12" cy="12" r="2" fill="#22c55e"/>
+            </svg>
           </div>
-          <div className="stat-label">ACTIVE ALERTS</div>
-        </div>
-        <div className="stat-box">
-          <div className="stat-num" style={{ color: isOnline ? "var(--green)" : "var(--red)" }}>
-            {isOnline ? "ONLINE" : "OFFLINE"}
+          <div className="logo-text">
+            <div className="logo-name">ORA</div>
+            <div className="logo-subtitle">AI Core v2.0</div>
           </div>
-          <div className="stat-label">SYSTEM STATUS</div>
         </div>
       </div>
 
-      <TheNumber task={theNumber} />
+      {/* Time Widget */}
+      <div className="time-widget">
+        <div className="time-display">{time}</div>
+        <div className="date-display">{date}</div>
+      </div>
 
-      <div className="grid-2">
-        {/* System Monitor */}
-        <div className="poi-card system-card">
-          <div className="card-header">
-            <span className="card-icon">⚙️</span>
-            SYSTEM MONITOR
+      {/* System Status Card */}
+      <div className="status-card-modern">
+        <div className="card-header">
+          <span className="card-title">System Status</span>
+          <span className={`status-badge ${status.text.toLowerCase()}`} style={{ background: status.bg, color: status.color }}>
+            <span className="status-dot" style={{ background: status.dot }} />
+            {status.text}
+          </span>
+        </div>
+        <div className="card-stats">
+          <div className="stat-row">
+            <span className="stat-label">Uptime</span>
+            <span className="stat-value">99.98%</span>
           </div>
-          {isOnline ? (
-            <>
-              <Meter label="CPU LOAD" value={status.cpu} />
-              <Meter label="RAM USED" value={status.ram} />
-              <div className="sync-time">
-                LAST SYNC: {status.time ? new Date(status.time).toLocaleTimeString() : "—"}
-              </div>
-            </>
-          ) : (
-            <div className="empty">Backend unreachable</div>
+          {latency && (
+            <div className="stat-row">
+              <span className="stat-label">Latency</span>
+              <span className="stat-value">{latency}ms</span>
+            </div>
           )}
+          <div className="stat-row">
+            <span className="stat-label">Last Sync</span>
+            <span className="stat-value">Just now</span>
+          </div>
         </div>
+      </div>
 
-        {/* Alert Feed */}
-        <div className="poi-card alert-card">
+      {/* Agent Status Card */}
+      {agentCtx && (
+        <div className={`agent-card-modern ${cycleFlash ? "pulse" : ""}`}>
           <div className="card-header">
-            <span className="card-icon">⚠️</span>
-            ALERT FEED
-            {activeAlerts.length > 0 && (
-              <button className="btn btn-ghost small" onClick={handleAckAll}>ACK ALL</button>
+            <span className="card-title">Agent Status</span>
+            <span className="agent-badge" style={{ background: agent.bg, color: agent.color }}>
+              {agent.icon} {agent.state}
+            </span>
+          </div>
+          <div className="agent-metrics-grid">
+            <div className="metric-item">
+              <div className="metric-label">Tasks</div>
+              <div className="metric-number">{agentCtx.tasks ?? 0}</div>
+            </div>
+            <div className="metric-item">
+              <div className="metric-label">Overdue</div>
+              <div className="metric-number" style={{ color: agentCtx.overdue > 0 ? "#ef4444" : "#6b7280" }}>
+                {agentCtx.overdue ?? 0}
+              </div>
+            </div>
+            <div className="metric-item">
+              <div className="metric-label">Goals</div>
+              <div className="metric-number">{agentCtx.goals ?? 0}</div>
+            </div>
+            <div className="metric-item">
+              <div className="metric-label">Alerts</div>
+              <div className="metric-number" style={{ color: unreadAlerts > 0 ? "#ef4444" : "#6b7280" }}>
+                {unreadAlerts}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Navigation */}
+      <nav className="navigation">
+        {navItems.map((item) => (
+          <button
+            key={item.id}
+            className={`nav-link ${current === item.id ? "active" : ""}`}
+            onClick={() => onNavigate(item.id)}
+          >
+            <span className="nav-icon">{item.icon}</span>
+            <span className="nav-label">{item.label}</span>
+            {item.id === "alerts" && unreadAlerts > 0 && (
+              <span className="alert-counter">{unreadAlerts > 9 ? "9+" : unreadAlerts}</span>
             )}
-          </div>
+          </button>
+        ))}
+      </nav>
 
-          {activeAlerts.length === 0 ? (
-            <div className="empty success">● ALL SYSTEMS NOMINAL</div>
-          ) : (
-            activeAlerts.slice(0, 4).map(a => (
-              <div key={a.id} className={`alert-row ${a.severity}`}>
-                <div className="alert-msg">{a.message}</div>
-                <div className="alert-time">
-                  {a.timestamp?.slice(11, 19)} • {a.rule_name}
-                </div>
-                <button className="ack-btn" onClick={() => handleAck(a.id)}>ACK</button>
-              </div>
-            ))
-          )}
+      {/* Footer */}
+      <div className="sidebar-footer">
+        <div className="connection-status">
+          <div className={`connection-indicator ${online ? "online" : "offline"}`} />
+          <span className="connection-text">{online ? "Connected to Core" : "Reconnecting..."}</span>
         </div>
-
-        {/* M-Pesa */}
-        <MpesaWidget summary={mpesa} />
-
-        {/* Task Queue */}
-        <div className="poi-card task-card">
-          <div className="card-header">
-            <span className="card-icon">📋</span>
-            TASK QUEUE • {tasks.length} PENDING
-          </div>
-          {tasks.length === 0 ? (
-            <div className="empty">No pending tasks</div>
-          ) : (
-            tasks.slice(0, 5).map(t => (
-              <div key={t.id} className="task-row">
-                <div className="task-title">{t.title}</div>
-                <div className={`priority-badge ${t.priority || 'medium'}`}>
-                  {(t.priority || 'MED').toUpperCase()}
-                </div>
-              </div>
-            ))
-          )}
+        <div className="footer-divider" />
+        <div className="system-info">
+          <span>Nairobi, KE</span>
+          <span>•</span>
+          <span>v2.0.0</span>
         </div>
-
-        {/* Calendar & Goals */}
-        <CalendarWidget events={calendar} />
-        <GoalsWidget goals={goals} />
       </div>
-    </div>
+    </aside>
   );
 }
