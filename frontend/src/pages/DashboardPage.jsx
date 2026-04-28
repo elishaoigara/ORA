@@ -5,9 +5,10 @@ import {
   getAgentStatus, ackAlert, ackAllAlerts,
 } from "../api";
 
+// Meter Component
 function Meter({ label, value = 0, unit = "%" }) {
   const v = Math.min(Math.max(Number(value) || 0, 0), 100);
-  const color = v > 85 ? "var(--red)" : v > 65 ? "var(--amber)" : "var(--green)";
+  const color = v > 85 ? "var(--error)" : v > 65 ? "var(--warning)" : "var(--success)";
 
   return (
     <div className="meter">
@@ -16,23 +17,21 @@ function Meter({ label, value = 0, unit = "%" }) {
         <span className="meter-value" style={{ color }}>{v}{unit}</span>
       </div>
       <div className="meter-track">
-        <div 
-          className="meter-bar" 
-          style={{ width: `${v}%`, background: color }} 
-        />
+        <div className="meter-bar" style={{ width: `${v}%`, background: color }} />
       </div>
     </div>
   );
 }
 
+// The Number Component
 function TheNumber({ task }) {
   if (!task) return null;
 
   return (
     <div className="poi-card the-number-card">
       <div className="card-header">
-        <span className="card-icon">◆</span>
-        TODAY'S TOP PRIORITY
+        <span className="card-icon">🎯</span>
+        TODAY'S PRIORITY
       </div>
       <div className="the-number-title">{task.title}</div>
       
@@ -41,32 +40,33 @@ function TheNumber({ task }) {
           {(task.priority || 'MEDIUM').toUpperCase()}
         </span>
         {task.overdue && <span className="overdue-badge">⚠ OVERDUE</span>}
-        {task.reason && <div className="the-number-reason">{task.reason}</div>}
       </div>
+      {task.reason && <div className="the-number-reason">{task.reason}</div>}
     </div>
   );
 }
 
+// M-Pesa Widget
 function MpesaWidget({ summary }) {
   if (!summary || summary.status === "error") return null;
 
   const today = summary.today || { total: 0, transactions: 0 };
   const avg = summary.average_daily || 0;
   const ratio = avg > 0 ? today.total / avg : 0;
-  const color = ratio >= 3 ? "var(--red)" : ratio >= 1.5 ? "var(--amber)" : "var(--green)";
+  const color = ratio >= 3 ? "var(--error)" : ratio >= 1.5 ? "var(--warning)" : "var(--success)";
 
   return (
-    <div className="poi-card mpesa-card">
+    <div className="poi-card">
       <div className="card-header">
         <span className="card-icon">💳</span>
-        M-PESA FINANCIAL SNAPSHOT
+        M-PESA INSIGHTS
       </div>
       <div className="mpesa-main">
         <div>
           <div className="mpesa-amount" style={{ color }}>
             KES {(today.total || 0).toLocaleString()}
           </div>
-          <div className="mpesa-sub">spent today • {today.transactions} txns</div>
+          <div className="mpesa-sub">spent today • {today.transactions} transactions</div>
         </div>
 
         <div className="mpesa-avg">
@@ -76,29 +76,29 @@ function MpesaWidget({ summary }) {
       </div>
 
       <div className="mpesa-bar-container">
-        <div 
-          className="mpesa-bar" 
-          style={{ width: `${Math.min(ratio * 40, 100)}%`, background: color }} 
-        />
+        <div className="mpesa-bar" style={{ width: `${Math.min(ratio * 40, 100)}%`, background: color }} />
       </div>
 
       {ratio >= 2.5 && (
-        <div className="mpesa-alert">⚠ SPENDING {ratio.toFixed(1)}× ABOVE AVERAGE</div>
+        <div className="mpesa-alert">
+          ⚠ Spending {ratio.toFixed(1)}× above average
+        </div>
       )}
     </div>
   );
 }
 
+// Calendar Widget
 function CalendarWidget({ events }) {
   if (!events?.length) {
     return (
       <div className="poi-card">
         <div className="card-header">
           <span className="card-icon">📅</span>
-          TODAY'S CALENDAR
+          TODAY'S SCHEDULE
         </div>
         <div className="empty">
-          No scheduled events<br/>
+          No events scheduled<br/>
           <a href="/api/auth/google" target="_blank" rel="noreferrer" className="connect-link">
             Connect Google Calendar →
           </a>
@@ -111,7 +111,7 @@ function CalendarWidget({ events }) {
     <div className="poi-card">
       <div className="card-header">
         <span className="card-icon">📅</span>
-        TODAY'S CALENDAR • {events.length} EVENTS
+        TODAY'S SCHEDULE • {events.length} EVENTS
       </div>
       {events.slice(0, 5).map((e, i) => (
         <div key={i} className="calendar-event">
@@ -131,6 +131,7 @@ function CalendarWidget({ events }) {
   );
 }
 
+// Goals Widget
 function GoalsWidget({ goals }) {
   if (!goals?.length) return null;
 
@@ -143,7 +144,7 @@ function GoalsWidget({ goals }) {
       {goals.slice(0, 4).map((g, i) => {
         const pct = g.progress || 0;
         const overdue = g.due_at && new Date(g.due_at) < new Date();
-        const color = overdue ? "var(--red)" : pct >= 70 ? "var(--green)" : "var(--amber)";
+        const color = overdue ? "var(--error)" : pct >= 70 ? "var(--success)" : "var(--warning)";
 
         return (
           <div key={i} className="goal-row">
@@ -155,7 +156,7 @@ function GoalsWidget({ goals }) {
               <span className="goal-percent">{pct}%</span>
             </div>
             <div className="goal-due">
-              {overdue ? "⚠ OVERDUE" : g.due_at ? `due ${g.due_at.slice(0,10)}` : "no deadline"}
+              {overdue ? "⚠ OVERDUE" : g.due_at ? `Due ${g.due_at.slice(0,10)}` : "No deadline"}
             </div>
           </div>
         );
@@ -164,26 +165,35 @@ function GoalsWidget({ goals }) {
   );
 }
 
+// Agent Status Ribbon
 function AgentRibbon({ ctx }) {
   if (!ctx) return null;
 
   return (
-    <div className="agent-ribbon poi-ribbon">
-      <div className="ribbon-item">AGENT CYCLE <span className="status-dot online" /></div>
-      <div>TASKS <span className="val">{ctx.tasks ?? 0}</span></div>
-      <div>OVERDUE <span className="val" style={{color: (ctx.overdue ?? 0) > 0 ? "var(--red)" : "var(--green)"}}>
-        {ctx.overdue ?? 0}
-      </span></div>
-      <div>GOALS <span className="val">{ctx.goals ?? 0}</span></div>
-      <div>CALENDAR <span className="val">{ctx.calendar_today ?? 0}</span></div>
+    <div className="agent-ribbon">
+      <div className="ribbon-item">
+        <span className="status-dot online" />
+        AGENT ACTIVE
+      </div>
+      <div className="ribbon-item">
+        TASKS <span className="val">{ctx.tasks ?? 0}</span>
+      </div>
+      <div className="ribbon-item">
+        OVERDUE <span className="val" style={{color: (ctx.overdue ?? 0) > 0 ? "var(--error)" : "var(--success)"}}>
+          {ctx.overdue ?? 0}
+        </span>
+      </div>
+      <div className="ribbon-item">
+        GOALS <span className="val">{ctx.goals ?? 0}</span>
+      </div>
+      <div className="ribbon-item">
+        TODAY <span className="val">{ctx.calendar_today ?? 0}</span>
+      </div>
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// MAIN DASHBOARD
-// ─────────────────────────────────────────────────────────────
-
+// Main Dashboard
 export default function DashboardPage() {
   const [status, setStatus] = useState(null);
   const [alerts, setAlerts] = useState([]);
@@ -236,28 +246,28 @@ export default function DashboardPage() {
   return (
     <div className="page">
       <div className="page-header">
-        <div className="page-title">// COMMAND CENTER</div>
-        <div className="page-sub">Real-time intelligence • Nairobi, KE • EAT</div>
+        <div className="page-title">Command Center</div>
+        <div className="page-sub">Real-time intelligence • Nairobi, KE</div>
       </div>
 
       <AgentRibbon ctx={agentCtx} />
 
-      <div className="grid-3 stats-row">
+      <div className="stats-row">
         <div className="stat-box">
           <div className="stat-num">{tasks.length}</div>
-          <div className="stat-label">PENDING TASKS</div>
+          <div className="stat-label">Pending Tasks</div>
         </div>
         <div className="stat-box">
-          <div className="stat-num" style={{ color: activeAlerts.length > 0 ? "var(--red)" : "var(--green)" }}>
+          <div className="stat-num" style={{ color: activeAlerts.length > 0 ? "var(--error)" : "var(--success)" }}>
             {activeAlerts.length}
           </div>
-          <div className="stat-label">ACTIVE ALERTS</div>
+          <div className="stat-label">Active Alerts</div>
         </div>
         <div className="stat-box">
-          <div className="stat-num" style={{ color: isOnline ? "var(--green)" : "var(--red)" }}>
+          <div className="stat-num" style={{ color: isOnline ? "var(--success)" : "var(--error)" }}>
             {isOnline ? "ONLINE" : "OFFLINE"}
           </div>
-          <div className="stat-label">SYSTEM STATUS</div>
+          <div className="stat-label">System Status</div>
         </div>
       </div>
 
@@ -265,17 +275,17 @@ export default function DashboardPage() {
 
       <div className="grid-2">
         {/* System Monitor */}
-        <div className="poi-card system-card">
+        <div className="poi-card">
           <div className="card-header">
             <span className="card-icon">⚙️</span>
-            SYSTEM MONITOR
+            System Monitor
           </div>
           {isOnline ? (
             <>
-              <Meter label="CPU LOAD" value={status.cpu} />
-              <Meter label="RAM USED" value={status.ram} />
+              <Meter label="CPU Usage" value={status.cpu} />
+              <Meter label="Memory Usage" value={status.ram} />
               <div className="sync-time">
-                LAST SYNC: {status.time ? new Date(status.time).toLocaleTimeString() : "—"}
+                Last sync: {status.time ? new Date(status.time).toLocaleTimeString() : "—"}
               </div>
             </>
           ) : (
@@ -284,25 +294,25 @@ export default function DashboardPage() {
         </div>
 
         {/* Alert Feed */}
-        <div className="poi-card alert-card">
+        <div className="poi-card">
           <div className="card-header">
             <span className="card-icon">⚠️</span>
-            ALERT FEED
+            Alert Feed
             {activeAlerts.length > 0 && (
-              <button className="btn btn-ghost small" onClick={handleAckAll}>ACK ALL</button>
+              <button className="btn-ghost small" onClick={handleAckAll}>Acknowledge All</button>
             )}
           </div>
 
           {activeAlerts.length === 0 ? (
-            <div className="empty success">● ALL SYSTEMS NOMINAL</div>
+            <div className="empty success">✓ All systems nominal</div>
           ) : (
             activeAlerts.slice(0, 4).map(a => (
-              <div key={a.id} className={`alert-row ${a.severity}`}>
+              <div key={a.id} className="alert-row">
                 <div className="alert-msg">{a.message}</div>
                 <div className="alert-time">
                   {a.timestamp?.slice(11, 19)} • {a.rule_name}
                 </div>
-                <button className="ack-btn" onClick={() => handleAck(a.id)}>ACK</button>
+                <button className="ack-btn" onClick={() => handleAck(a.id)}>Acknowledge</button>
               </div>
             ))
           )}
@@ -312,10 +322,10 @@ export default function DashboardPage() {
         <MpesaWidget summary={mpesa} />
 
         {/* Task Queue */}
-        <div className="poi-card task-card">
+        <div className="poi-card">
           <div className="card-header">
             <span className="card-icon">📋</span>
-            TASK QUEUE • {tasks.length} PENDING
+            Task Queue • {tasks.length} Pending
           </div>
           {tasks.length === 0 ? (
             <div className="empty">No pending tasks</div>
