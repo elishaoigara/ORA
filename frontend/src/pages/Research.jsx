@@ -4,16 +4,37 @@ import "./research.css";
 export default function Research() {
   const [query, setQuery] = useState("");
   const [result, setResult] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const API_URL = import.meta.env.VITE_API_URL;
 
   const runResearch = async () => {
-    const res = await fetch("http://localhost:8000/research", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query }),
-    });
+    if (!query.trim()) return;
 
-    const data = await res.json();
-    setResult(data.result || "No result");
+    try {
+      setLoading(true);
+      setResult("");
+
+      const res = await fetch(`${API_URL}/research`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Request failed");
+      }
+
+      const data = await res.json();
+      setResult(data.result || "No result returned");
+    } catch (error) {
+      console.error(error);
+      setResult("Error: Could not connect to backend");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -41,7 +62,9 @@ export default function Research() {
           placeholder="Ask anything..."
         />
 
-        <button onClick={runResearch}>Run Research</button>
+        <button onClick={runResearch} disabled={loading}>
+          {loading ? "Running..." : "Run Research"}
+        </button>
 
         <div className="result">
           {result}

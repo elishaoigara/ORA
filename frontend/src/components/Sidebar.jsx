@@ -8,6 +8,9 @@ const nav = [
   { id: "alerts",    icon: "◉", label: "Alert Feed" },
   { id: "knowledge", icon: "▣", label: "Knowledge" },
   { id: "memory",    icon: "≡", label: "Memory Core" },
+
+  // ✅ ADDED ORA RESEARCH PAGE
+  { id: "research", icon: "⌬", label: "Research" },
 ]
 
 export default function Sidebar({ current, onNavigate }) {
@@ -37,15 +40,17 @@ export default function Sidebar({ current, onNavigate }) {
           .toUpperCase()
       )
     }
+
     tick()
     const t = setInterval(tick, 1000)
     return () => clearInterval(t)
   }, [])
 
-  /* ───────── HEALTH + LATENCY ───────── */
+  /* ───────── HEALTH CHECK ───────── */
   useEffect(() => {
     const check = async () => {
       const start = performance.now()
+
       try {
         const data = await health()
         const end = performance.now()
@@ -63,7 +68,7 @@ export default function Sidebar({ current, onNavigate }) {
     return () => clearInterval(t)
   }, [])
 
-  /* ───────── ALERT BADGE ───────── */
+  /* ───────── ALERTS ───────── */
   useEffect(() => {
     const check = async () => {
       if (pollingRef.current) return
@@ -71,8 +76,11 @@ export default function Sidebar({ current, onNavigate }) {
 
       try {
         const data = await getAlerts(20)
+
         if (Array.isArray(data)) {
-          setUnreadAlerts(data.filter(a => !a.acknowledged).length)
+          setUnreadAlerts(
+            data.filter(a => !a.acknowledged).length
+          )
         }
       } catch {}
 
@@ -84,14 +92,13 @@ export default function Sidebar({ current, onNavigate }) {
     return () => clearInterval(t)
   }, [])
 
-  /* ───────── AGENT CONTEXT ───────── */
+  /* ───────── AGENT STATUS ───────── */
   useEffect(() => {
     const fetch_ = async () => {
       try {
         const data = await getAgentStatus()
         setAgentCtx(data)
 
-        // flash on update
         setCycleFlash(true)
         setTimeout(() => setCycleFlash(false), 600)
       } catch {}
@@ -110,10 +117,9 @@ export default function Sidebar({ current, onNavigate }) {
     return "SYSTEMS NOMINAL"
   }
 
-  /* ───────── AGENT STATE LABEL ───────── */
+  /* ───────── AGENT STATE ───────── */
   const getAgentState = () => {
     if (!agentCtx) return "IDLE"
-
     if (agentCtx.overdue > 0) return "INTERVENING"
     if (agentCtx.tasks > 0) return "PROCESSING"
     return "MONITORING"
@@ -121,6 +127,7 @@ export default function Sidebar({ current, onNavigate }) {
 
   return (
     <aside className="sidebar">
+
       {/* LOGO */}
       <div className="sidebar-logo">
         <div className="ora-eye">
@@ -135,12 +142,7 @@ export default function Sidebar({ current, onNavigate }) {
       {/* CLOCK */}
       <div className="sidebar-clock">
         <div>{time}</div>
-        <div style={{
-          fontSize: ".55rem",
-          color: "var(--text3)",
-          marginTop: 1,
-          letterSpacing: 2
-        }}>
+        <div style={{ fontSize: ".55rem", color: "var(--text3)" }}>
           {date} · EAT
         </div>
       </div>
@@ -151,11 +153,7 @@ export default function Sidebar({ current, onNavigate }) {
         <span>{getStatusText()}</span>
 
         {latency && (
-          <span style={{
-            marginLeft: "auto",
-            fontSize: ".55rem",
-            color: "var(--text3)"
-          }}>
+          <span style={{ marginLeft: "auto", fontSize: ".55rem" }}>
             {latency}ms
           </span>
         )}
@@ -167,7 +165,6 @@ export default function Sidebar({ current, onNavigate }) {
           className="agent-pulse"
           style={{
             opacity: cycleFlash ? 1 : 0.7,
-            transform: cycleFlash ? "scale(1.02)" : "scale(1)",
             transition: "all .25s ease"
           }}
         >
@@ -177,13 +174,8 @@ export default function Sidebar({ current, onNavigate }) {
             {getAgentState()}
           </span>
 
-          <span style={{
-            marginLeft: "auto",
-            color: "var(--amber)"
-          }}>
-            {agentCtx.tasks ?? 0}T ·
-            {agentCtx.overdue ?? 0}OD ·
-            {agentCtx.goals ?? 0}G
+          <span style={{ marginLeft: "auto", color: "var(--amber)" }}>
+            {agentCtx.tasks ?? 0}T · {agentCtx.overdue ?? 0}OD · {agentCtx.goals ?? 0}G
           </span>
         </div>
       )}
@@ -220,6 +212,7 @@ export default function Sidebar({ current, onNavigate }) {
           {online ? "● LINK STABLE" : "○ RECONNECTING"}
         </div>
       </div>
+
     </aside>
   )
 }
