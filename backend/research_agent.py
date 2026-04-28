@@ -21,7 +21,7 @@ from typing import List, Dict, Any, Optional
 
 from groq import Groq
 from tavily import TavilyClient
-
+import config
 
 # ─────────────────────────────────────────────
 # CLIENTS
