@@ -1,21 +1,29 @@
-﻿/* App-level layout only. All design tokens in index.css */
-
-.app {
+﻿/* FULL APP LAYOUT FIX */
+.app-shell {
   display: flex;
-  min-height: 100dvh; /* fixes mobile viewport issues */
-  overflow: hidden;   /* keeps layout controlled */
-  contain: layout;    /* improves rendering performance */
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+  background: #05060a;
 }
 
-/* Ensure main content handles scrolling, not the whole app */
-.main-content {
+/* MAIN CONTENT AREA */
+.app-main {
   flex: 1;
+  height: 100vh;
   overflow-y: auto;
+  padding: 24px;
+  background: #05060a;
 }
 
-/* Mobile: keep sidebar compact instead of stacking */
+/* MOBILE FIX */
 @media (max-width: 768px) {
-  .app {
-    flex-direction: row; /* maintain sidebar layout */
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .app-main {
+    height: auto;
+    min-height: 100vh;
   }
 }
