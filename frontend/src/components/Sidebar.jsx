@@ -123,7 +123,7 @@ export default function Sidebar({ current, onNavigate }) {
 
   return (
     <aside className="modern-sidebar">
-      {/* Header with Logo */}
+      {/* Header with Logo - Fixed at top */}
       <div className="sidebar-header">
         <div className="logo-wrapper">
           <div className="logo-icon">
@@ -141,13 +141,13 @@ export default function Sidebar({ current, onNavigate }) {
         </div>
       </div>
 
-      {/* Time Widget */}
+      {/* Time Widget - Fixed */}
       <div className="time-widget">
         <div className="time-display">{time}</div>
         <div className="date-display">{date}</div>
       </div>
 
-      {/* System Status Card */}
+      {/* System Status Card - Fixed */}
       <div className="status-card-modern">
         <div className="card-header">
           <span className="card-title">System</span>
@@ -170,7 +170,7 @@ export default function Sidebar({ current, onNavigate }) {
         </div>
       </div>
 
-      {/* Agent Status Card */}
+      {/* Agent Status Card - Fixed */}
       {agentCtx && (
         <div className={`agent-card-modern ${cycleFlash ? "pulse" : ""}`}>
           <div className="card-header">
@@ -198,7 +198,7 @@ export default function Sidebar({ current, onNavigate }) {
         </div>
       )}
 
-      {/* Navigation */}
+      {/* Navigation - THIS NEEDS TO BE SCROLLABLE */}
       <nav className="navigation">
         {navItems.map((item) => (
           <button
@@ -215,7 +215,7 @@ export default function Sidebar({ current, onNavigate }) {
         ))}
       </nav>
 
-      {/* Footer */}
+      {/* Footer - Fixed at bottom */}
       <div className="sidebar-footer">
         <div className="connection-status">
           <div className={`connection-indicator ${online ? "online" : "offline"}`} />

@@ -88,7 +88,7 @@ html, body, #root {
 }
 
 /* ============================================ */
-/* MODERN SIDEBAR */
+/* MODERN SIDEBAR - WITH SCROLLING FIX */
 /* ============================================ */
 
 .modern-sidebar {
@@ -98,11 +98,13 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   position: relative;
-  backdrop-filter: blur(10px);
+  height: 100vh;
+  overflow: hidden; /* Prevents the entire sidebar from scrolling */
 }
 
-/* Logo Section */
+/* Logo Section - Fixed */
 .sidebar-header {
+  flex-shrink: 0;
   padding: 28px 20px 20px;
   border-bottom: 1px solid var(--border);
 }
@@ -121,8 +123,6 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
-  font-weight: 700;
   box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
 }
 
@@ -142,8 +142,9 @@ html, body, #root {
   margin-top: 2px;
 }
 
-/* Time Widget */
+/* Time Widget - Fixed */
 .time-widget {
+  flex-shrink: 0;
   padding: 20px;
   margin: 16px;
   background: var(--bg-card);
@@ -166,8 +167,9 @@ html, body, #root {
   margin-top: 6px;
 }
 
-/* Status Card */
+/* Status Card - Fixed */
 .status-card-modern {
+  flex-shrink: 0;
   margin: 0 16px 16px;
   padding: 16px;
   background: var(--bg-card);
@@ -235,8 +237,9 @@ html, body, #root {
   font-family: 'JetBrains Mono', monospace;
 }
 
-/* Agent Card */
+/* Agent Card - Fixed */
 .agent-card-modern {
+  flex-shrink: 0;
   margin: 0 16px 16px;
   padding: 16px;
   background: linear-gradient(135deg, var(--bg-card), var(--bg-secondary));
@@ -293,13 +296,37 @@ html, body, #root {
   color: var(--text-primary);
 }
 
-/* Navigation */
+/* Navigation - THIS IS THE SCROLLABLE PART */
 .navigation {
   flex: 1;
-  padding: 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 12px;
   display: flex;
   flex-direction: column;
   gap: 4px;
+  
+  /* Custom scrollbar for navigation */
+  scrollbar-width: thin;
+  scrollbar-color: var(--green-dim) var(--bg-tertiary);
+}
+
+.navigation::-webkit-scrollbar {
+  width: 4px;
+}
+
+.navigation::-webkit-scrollbar-track {
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+.navigation::-webkit-scrollbar-thumb {
+  background: var(--green-dim);
+  border-radius: 4px;
+}
+
+.navigation::-webkit-scrollbar-thumb:hover {
+  background: var(--green-primary);
 }
 
 .nav-link {
@@ -352,8 +379,9 @@ html, body, #root {
   text-align: center;
 }
 
-/* Sidebar Footer */
+/* Sidebar Footer - Fixed at bottom */
 .sidebar-footer {
+  flex-shrink: 0;
   padding: 20px;
   border-top: 1px solid var(--border);
   margin-top: auto;
@@ -1118,7 +1146,23 @@ html, body, #root {
   cursor: not-allowed;
 }
 
-/* Typing Dots Animation */
+/* Clear Button */
+.clear-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.clear-btn:hover {
+  background: var(--bg-hover);
+  color: var(--error);
+}
+
+/* Animations */
 @keyframes typingDot {
   0%, 60%, 100% { transform: translateY(0); }
   30% { transform: translateY(-6px); }
