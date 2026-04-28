@@ -1,570 +1,335 @@
-/**
- * ORA ChatPage — Upgraded
- * - Conversational system prompt (talks like a real assistant, not a robot)
- * - Action confirmation cards (task added, reminder set, etc.)
- * - Markdown-lite rendering (bold, code, lists)
- * - Message reaction / feedback buttons
- * - Smart quick-action chips that update contextually
- * - Typing indicator with random "thinking" states
- * - Copy-to-clipboard on assistant messages
- * - Voice input button (Web Speech API, no backend needed)
- */
+/** @jsxImportSource react */
+import { useState, useEffect, useRef, useCallback, forwardRef } from "react";
+import { sendMessage, getConversations } from "../api";
+import BASE from "../api";
 
-import { useState, useEffect, useRef, useCallback } from "react"
-import { sendMessage, getConversations } from "../api"
-import BASE from "../api"
-
-// ── Quick action sets ───────────────────────────────────────
+// Quick action sets
 const QUICK_SETS = {
   default: [
-    { label: "📋 Tasks",    msg: "show my pending tasks" },
-    { label: "🎯 Goals",    msg: "what are my active goals" },
-    { label: "💳 Spend",    msg: "how much have I spent today" },
+    { label: "📋 Tasks", msg: "show my pending tasks" },
+    { label: "🎯 Goals", msg: "what are my active goals" },
+    { label: "💳 Spend", msg: "how much have I spent today" },
     { label: "📊 Briefing", msg: "give me a full briefing" },
-    { label: "⚡ Alerts",   msg: "any active alerts" },
+    { label: "⚡ Alerts", msg: "any active alerts" },
     { label: "📅 Calendar", msg: "what's on my calendar today" },
-    { label: "🔮 Focus",    msg: "what should I focus on right now" },
+    { label: "🔮 Focus", msg: "what should I focus on right now" },
   ],
   task: [
-    { label: "✅ Done",     msg: "mark the last task as complete" },
-    { label: "📋 All",      msg: "show all my tasks" },
-    { label: "⚡ High",     msg: "show high priority tasks" },
-    { label: "➕ Add",      msg: "add task " },
+    { label: "✅ Complete", msg: "mark the last task as complete" },
+    { label: "📋 All Tasks", msg: "show all my tasks" },
+    { label: "⚡ High Priority", msg: "show high priority tasks" },
+    { label: "➕ Add Task", msg: "add task " },
   ],
   morning: [
-    { label: "☀️ Brief",   msg: "give me my morning briefing" },
-    { label: "📅 Today",   msg: "what's on my calendar today" },
-    { label: "🎯 Goals",   msg: "check my goal progress" },
-    { label: "🔮 Focus",   msg: "what should I prioritize today" },
+    { label: "☀️ Briefing", msg: "give me my morning briefing" },
+    { label: "📅 Today", msg: "what's on my calendar today" },
+    { label: "🎯 Goals", msg: "check my goal progress" },
+    { label: "🔮 Focus", msg: "what should I prioritize today" },
   ],
-}
+};
 
-// ── Thinking states ─────────────────────────────────────────
-const THINKING = [
-  "Querying memory...",
-  "Checking context...",
-  "Scanning knowledge base...",
-  "Cross-referencing data...",
+// Thinking states
+const THINKING_STATES = [
+  "Analyzing context...",
+  "Searching memory...",
+  "Processing request...",
   "Formulating response...",
-  "Pulling your context...",
-  "Running inference...",
-]
+  "Checking knowledge base...",
+];
 
 export default function ChatPage() {
-  const [messages, setMessages]     = useState([])
-  const [input, setInput]           = useState("")
-  const [loading, setLoading]       = useState(false)
-  const [backendState, setBackendState] = useState("connecting")
-  const [thinkingText, setThinkingText] = useState(THINKING[0])
-  const [quickSet, setQuickSet]     = useState("default")
-  const [listening, setListening]   = useState(false)
-  const [copiedIdx, setCopiedIdx]   = useState(null)
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [backendState, setBackendState] = useState("connecting");
+  const [thinkingText, setThinkingText] = useState(THINKING_STATES[0]);
+  const [quickSet, setQuickSet] = useState("default");
+  const [listening, setListening] = useState(false);
+  const [copiedIdx, setCopiedIdx] = useState(null);
 
-  const bottomRef   = useRef(null)
-  const thinkRef    = useRef(null)
-  const recognRef   = useRef(null)
-  const textareaRef = useRef(null)
+  const bottomRef = useRef(null);
+  const thinkRef = useRef(null);
+  const recognRef = useRef(null);
+  const textareaRef = useRef(null);
 
-  // ── Health check ──────────────────────────────────────────
+  // Health check
   useEffect(() => {
     fetch(`${BASE}/api/health`)
       .then(r => r.ok ? r.json() : null)
       .then(d => setBackendState(d?.status === "ok" ? "online" : "cold"))
-      .catch(() => setBackendState("cold"))
-  }, [])
+      .catch(() => setBackendState("cold"));
+  }, []);
 
-  // ── Load history ──────────────────────────────────────────
+  // Load history
   useEffect(() => {
     getConversations(40)
       .then(data => setMessages(Array.isArray(data) ? data : []))
-      .catch(() => {})
-  }, [])
+      .catch(() => {});
+  }, []);
 
-  // ── Auto scroll ───────────────────────────────────────────
+  // Auto scroll
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages, loading])
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
 
-  // ── Thinking cycle ────────────────────────────────────────
+  // Thinking cycle
   useEffect(() => {
     if (loading) {
-      let i = 0
+      let i = 0;
       thinkRef.current = setInterval(() => {
-        i = (i + 1) % THINKING.length
-        setThinkingText(THINKING[i])
-      }, 1400)
+        i = (i + 1) % THINKING_STATES.length;
+        setThinkingText(THINKING_STATES[i]);
+      }, 1500);
     } else {
-      clearInterval(thinkRef.current)
+      clearInterval(thinkRef.current);
     }
-    return () => clearInterval(thinkRef.current)
-  }, [loading])
+    return () => clearInterval(thinkRef.current);
+  }, [loading]);
 
-  // ── Context-aware quick set ───────────────────────────────
+  // Context-aware quick actions
   useEffect(() => {
-    const h = new Date().getHours()
-    if (h >= 6 && h < 10) setQuickSet("morning")
-    else setQuickSet("default")
-  }, [])
+    const hour = new Date().getHours();
+    if (hour >= 6 && hour < 10) setQuickSet("morning");
+    else setQuickSet("default");
+  }, []);
 
-  // ── Send ──────────────────────────────────────────────────
+  // Send message
   const send = useCallback(async (textOverride) => {
-    const text = (textOverride ?? input).trim()
-    if (!text || loading) return
+    const text = (textOverride ?? input).trim();
+    if (!text || loading) return;
 
-    // If action chip ends with space (e.g. "add task "), focus input instead
     if (textOverride?.endsWith(" ")) {
-      setInput(textOverride)
-      textareaRef.current?.focus()
-      return
+      setInput(textOverride);
+      textareaRef.current?.focus();
+      return;
     }
 
-    setInput("")
-    setLoading(true)
+    setInput("");
+    setLoading(true);
 
     setMessages(prev => [...prev, {
       role: "user",
       content: text,
       timestamp: new Date().toISOString(),
-    }])
+    }]);
 
     try {
-      const res = await sendMessage(text)
+      const res = await sendMessage(text);
 
       setMessages(prev => [...prev, {
         role: "assistant",
-        content: res?.reply || "[EMPTY RESPONSE]",
-        model:   res?.model,
-        cached:  res?.cached,
-        intent:  res?.intent,
+        content: res?.reply || "No response received.",
+        model: res?.model,
+        cached: res?.cached,
+        intent: res?.intent,
         timestamp: new Date().toISOString(),
         type: "response",
         action: res?.intent ? { type: res.intent, reply: res.reply } : null,
-      }])
-      setBackendState("online")
+      }]);
+      setBackendState("online");
 
-      // Switch quick set after task-related actions
       if (res?.intent?.includes("task") || res?.intent?.includes("remind")) {
-        setQuickSet("task")
-        setTimeout(() => setQuickSet("default"), 30000)
+        setQuickSet("task");
+        setTimeout(() => setQuickSet("default"), 30000);
       }
 
-    } catch {
+    } catch (error) {
       setMessages(prev => [...prev, {
         role: "assistant",
-        content: "ORA is temporarily unreachable — Render free tier may be spinning up. Try again in 30 seconds.",
+        content: "Unable to reach ORA. The system may be starting up. Please try again in a moment.",
         isError: true,
         timestamp: new Date().toISOString(),
         type: "error",
-      }])
-      setBackendState("cold")
+      }]);
+      setBackendState("cold");
     }
 
-    setLoading(false)
-  }, [input, loading])
+    setLoading(false);
+  }, [input, loading]);
 
-  // ── Voice input ───────────────────────────────────────────
+  // Voice input
   const toggleVoice = useCallback(() => {
     if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) {
-      alert("Voice input not supported in this browser.")
-      return
+      alert("Voice input is not supported in this browser.");
+      return;
     }
+    
     if (listening) {
-      recognRef.current?.stop()
-      setListening(false)
-      return
+      recognRef.current?.stop();
+      setListening(false);
+      return;
     }
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    const r = new SR()
-    r.lang = "en-KE"
-    r.interimResults = false
-    r.onresult = e => {
-      const transcript = e.results[0][0].transcript
-      setInput(transcript)
-      setListening(false)
-    }
-    r.onerror = () => setListening(false)
-    r.onend   = () => setListening(false)
-    r.start()
-    recognRef.current = r
-    setListening(true)
-  }, [listening])
+    
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-KE";
+    recognition.interimResults = false;
+    
+    recognition.onresult = (e) => {
+      const transcript = e.results[0][0].transcript;
+      setInput(transcript);
+      setListening(false);
+    };
+    
+    recognition.onerror = () => setListening(false);
+    recognition.onend = () => setListening(false);
+    recognition.start();
+    
+    recognRef.current = recognition;
+    setListening(true);
+  }, [listening]);
 
-  // ── Copy ──────────────────────────────────────────────────
-  const copyMsg = useCallback((text, idx) => {
+  // Copy to clipboard
+  const copyMessage = useCallback((text, idx) => {
     navigator.clipboard.writeText(text).then(() => {
-      setCopiedIdx(idx)
-      setTimeout(() => setCopiedIdx(null), 2000)
-    })
-  }, [])
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx(null), 2000);
+    });
+  }, []);
 
-  // ── Clear history ─────────────────────────────────────────
+  // Clear chat
   const clearChat = useCallback(() => {
-    if (window.confirm("Clear conversation history?")) {
-      setMessages([])
+    if (window.confirm("Clear your conversation history?")) {
+      setMessages([]);
     }
-  }, [])
+  }, []);
 
-  // ── Render ────────────────────────────────────────────────
-  const chips = QUICK_SETS[quickSet] || QUICK_SETS.default
+  const currentChips = QUICK_SETS[quickSet] || QUICK_SETS.default;
+  const statusColor = backendState === "online" ? "#22c55e" : backendState === "cold" ? "#eab308" : "#64748b";
+  const statusText = backendState === "online" ? "Online" : backendState === "cold" ? "Starting" : "Connecting";
 
   return (
-    <div className="chat-page">
-
-      {/* HEADER */}
-      <div className="chat-header">
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <div className="page-title">NEURAL LINK</div>
-          <StatusDot state={backendState} />
+    <div className="chat-container-modern">
+      {/* Header */}
+      <div className="chat-header-modern">
+        <div className="chat-title-section">
+          <span className="chat-icon">💬</span>
+          <div>
+            <h2 className="chat-title">Neural Link</h2>
+            <p className="chat-subtitle">Conversational AI Assistant</p>
+          </div>
         </div>
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-          <button
-            className="pill"
-            style={{ fontSize: "0.65rem", padding: "3px 10px", opacity: 0.6 }}
-            onClick={clearChat}
-          >CLR</button>
+        <div className="chat-actions">
+          <div className="status-badge-modern" style={{ color: statusColor }}>
+            <span className="status-icon">{backendState === "online" ? "●" : backendState === "cold" ? "◐" : "○"}</span>
+            <span className="status-label">{statusText}</span>
+          </div>
+          <button className="clear-btn" onClick={clearChat} title="Clear history">🗑️</button>
         </div>
       </div>
 
-      {/* QUICK CHIPS */}
-      <div className="pill-row">
-        {chips.map(q => (
-          <button
-            key={q.label}
-            className="pill"
-            onClick={() => send(q.msg)}
-            disabled={loading}
-          >
-            {q.label}
+      {/* Quick Actions */}
+      <div className="quick-actions-modern">
+        {currentChips.map((chip) => (
+          <button key={chip.label} className="action-chip" onClick={() => send(chip.msg)} disabled={loading}>
+            {chip.label}
           </button>
         ))}
       </div>
 
-      {/* MESSAGES */}
-      <div className="chat-messages">
-
-        {messages.length === 0 && <IdleState />}
-
-        {messages.map((m, i) => (
-          <Message
-            key={i}
-            msg={m}
-            idx={i}
-            onCopy={copyMsg}
-            copied={copiedIdx === i}
-          />
-        ))}
-
-        {loading && <TypingIndicator text={thinkingText} />}
-
+      {/* Messages Area */}
+      <div className="messages-area">
+        {messages.length === 0 && (
+          <div className="welcome-modern">
+            <div className="welcome-icon">✨</div>
+            <h3 className="welcome-title">Welcome back, Elisha.</h3>
+            <p className="welcome-text">ORA is standing by. Ask me about tasks, goals, spending, or anything you need assistance with.</p>
+            <div className="welcome-hint">Try: "Show my pending tasks" or "What should I focus on?"</div>
+          </div>
+        )}
+        
+        {messages.map((msg, idx) => {
+          const isUser = msg.role === "user";
+          const isError = msg.isError;
+          return (
+            <div key={idx} className={`message-item ${isUser ? "user-message" : "assistant-message"} fade-in`}>
+              <div className="message-avatar-modern">{isUser ? "👤" : "✨"}</div>
+              <div className="message-bubble-modern">
+                {!isUser && (
+                  <div className="message-meta">
+                    <span className="message-sender">ORA Assistant</span>
+                    {msg.cached && <span className="message-badge">Cached</span>}
+                    {msg.intent && <span className="message-badge">{msg.intent.replace(/_/g, " ")}</span>}
+                  </div>
+                )}
+                
+                {msg.action && (
+                  <div className="action-card-modern">
+                    <span className="action-icon">✅</span>
+                    <span className="action-text">Action Executed: {msg.action.type?.replace(/_/g, " ").toUpperCase()}</span>
+                  </div>
+                )}
+                
+                <div className="message-content-modern" style={{ color: isError ? "#ef4444" : "#e2e8f0" }}>
+                  {msg.content}
+                </div>
+                
+                <div className="message-footer">
+                  <span className="message-time">
+                    {(() => {
+                      try {
+                        return new Date(msg.timestamp).toLocaleTimeString("en-KE", { hour12: false, hour: "2-digit", minute: "2-digit" });
+                      } catch {
+                        return "";
+                      }
+                    })()}
+                  </span>
+                  {!isUser && !isError && (
+                    <button className="copy-btn" onClick={() => copyMessage(msg.content, idx)}>
+                      {copiedIdx === idx ? "✓ Copied" : "📋 Copy"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        
+        {loading && (
+          <div className="typing-indicator-modern">
+            <div className="typing-avatar">✨</div>
+            <div className="typing-bubble">
+              <div className="typing-dots"><span></span><span></span><span></span></div>
+              <div className="typing-text">{thinkingText}</div>
+            </div>
+          </div>
+        )}
+        
         <div ref={bottomRef} />
       </div>
 
-      {/* INPUT */}
-      <ChatInput
-        ref={textareaRef}
-        value={input}
-        setValue={setInput}
-        onSend={() => send()}
-        loading={loading}
-        onVoice={toggleVoice}
-        listening={listening}
-      />
-
-    </div>
-  )
-}
-
-// ── Message ────────────────────────────────────────────────
-function Message({ msg, idx, onCopy, copied }) {
-  const isUser = msg.role === "user"
-
-  return (
-    <div className={`msg ${msg.role} fade-in`}>
-
-      <div className="msg-avatar">
-        {isUser ? "EL" : "◎"}
-      </div>
-
-      <div className="msg-bubble" style={{ position: "relative" }}>
-
-        {!isUser && (
-          <div className="msg-label">
-            {msgLabel(msg)}
-          </div>
-        )}
-
-        {/* Action confirmation card */}
-        {msg.action && <ActionCard action={msg.action} />}
-
-        {/* Rendered content */}
-        <div className="msg-content">
-          <RenderMarkdown text={msg.content} />
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.4rem" }}>
-          <span className="event-time">{formatTime(msg.timestamp)}</span>
-
-          {!isUser && !msg.isError && (
-            <button
-              onClick={() => onCopy(msg.content, idx)}
-              style={{
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                color: copied ? "var(--green)" : "var(--text3)",
-                fontSize: "0.6rem",
-                fontFamily: "inherit",
-                letterSpacing: "0.05em",
-                padding: 0,
-              }}
-            >
-              {copied ? "COPIED ✓" : "COPY"}
-            </button>
-          )}
-        </div>
-
-      </div>
-    </div>
-  )
-}
-
-// ── Action confirmation card ───────────────────────────────
-function ActionCard({ action }) {
-  const icons = {
-    add_task:     "✅",
-    remind:       "⏰",
-    set_goal:     "🎯",
-    search_docs:  "🔍",
-    spend_summary:"💳",
-    check_tasks:  "📋",
-  }
-  const icon = icons[action.type] || "⚡"
-  const label = action.type?.replace(/_/g, " ").toUpperCase()
-
-  return (
-    <div style={{
-      background: "rgba(0,255,157,0.04)",
-      border: "1px solid rgba(0,255,157,0.15)",
-      borderRadius: "4px",
-      padding: "6px 10px",
-      marginBottom: "8px",
-      fontSize: "0.68rem",
-      color: "var(--green)",
-      letterSpacing: "0.08em",
-      display: "flex",
-      alignItems: "center",
-      gap: "6px",
-    }}>
-      <span>{icon}</span>
-      <span>ACTION EXECUTED // {label}</span>
-    </div>
-  )
-}
-
-// ── Markdown-lite renderer ─────────────────────────────────
-function RenderMarkdown({ text }) {
-  if (!text) return null
-
-  // Split by lines and render
-  const lines = text.split("\n")
-
-  return (
-    <div style={{ lineHeight: 1.6 }}>
-      {lines.map((line, i) => {
-        // Code block (simple)
-        if (line.startsWith("```") || line.startsWith("    ")) {
-          return (
-            <code key={i} style={{
-              display: "block",
-              background: "rgba(0,0,0,0.4)",
-              border: "1px solid var(--border)",
-              borderRadius: "3px",
-              padding: "2px 8px",
-              fontFamily: "'Share Tech Mono', monospace",
-              fontSize: "0.78rem",
-              color: "var(--cyan)",
-              margin: "2px 0",
-            }}>
-              {line.replace(/^```\w*/, "").trim()}
-            </code>
-          )
-        }
-
-        // Bullet
-        if (line.match(/^[-•*]\s/)) {
-          const content = renderInline(line.slice(2))
-          return <div key={i} style={{ paddingLeft: "1rem" }}>• {content}</div>
-        }
-
-        // Numbered list
-        if (line.match(/^\d+\.\s/)) {
-          const content = renderInline(line.replace(/^\d+\.\s/, ""))
-          const num = line.match(/^(\d+)/)[1]
-          return <div key={i} style={{ paddingLeft: "1rem" }}>{num}. {content}</div>
-        }
-
-        // Empty line
-        if (line.trim() === "") return <div key={i} style={{ height: "0.4rem" }} />
-
-        // Normal line
-        return <p key={i} style={{ margin: 0 }}>{renderInline(line)}</p>
-      })}
-    </div>
-  )
-}
-
-function renderInline(text) {
-  // Bold **text**
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i} style={{ color: "var(--text2)" }}>{part.slice(2, -2)}</strong>
-    }
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return <code key={i} style={{ fontFamily: "'Share Tech Mono', monospace", color: "var(--cyan)", fontSize: "0.82em", background: "rgba(6,182,212,0.08)", padding: "0 4px", borderRadius: "2px" }}>{part.slice(1, -1)}</code>
-    }
-    return part
-  })
-}
-
-// ── Chat input ─────────────────────────────────────────────
-import { forwardRef } from "react"
-
-const ChatInput = forwardRef(function ChatInput({ value, setValue, onSend, loading, onVoice, listening }, ref) {
-  return (
-    <div className="chat-input-area">
-      <div className="chat-input-row">
-
-        <textarea
-          ref={ref}
-          className="chat-textarea"
-          value={value}
-          disabled={loading}
-          onChange={e => setValue(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault()
-              onSend()
-            }
-          }}
-          placeholder={listening ? "🎙 LISTENING..." : "TRANSMIT TO ORA  (enter to send, shift+enter for newline)"}
-          style={listening ? { borderColor: "var(--red)", boxShadow: "0 0 12px rgba(239,68,68,0.3)" } : {}}
-        />
-
-        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-          <button
-            className="btn-send"
-            onClick={onSend}
-            disabled={loading || !value.trim()}
-          >
-            {loading ? "···" : "SEND ▶"}
-          </button>
-
-          <button
-            onClick={onVoice}
-            style={{
-              background: listening ? "rgba(239,68,68,0.15)" : "transparent",
-              border: `1px solid ${listening ? "var(--red)" : "var(--border2)"}`,
-              color: listening ? "var(--red)" : "var(--text3)",
-              borderRadius: "4px",
-              padding: "6px",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              fontSize: "0.75rem",
-              transition: "all 0.2s",
+      {/* Input Area */}
+      <div className="input-area-modern">
+        <div className="input-wrapper">
+          <textarea
+            ref={textareaRef}
+            className="chat-textarea-modern"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
             }}
-            title="Voice input"
-          >
-            {listening ? "⏹ STOP" : "🎙 VOICE"}
-          </button>
-        </div>
-
-      </div>
-
-      {/* Render-free-tier note */}
-      <div style={{ fontSize: "0.6rem", color: "var(--text3)", marginTop: "4px", textAlign: "center", letterSpacing: "0.05em" }}>
-        RENDER FREE TIER — COLD START MAY TAKE 30s · SHIFT+ENTER FOR NEWLINE
-      </div>
-    </div>
-  )
-})
-
-// ── Status dot ─────────────────────────────────────────────
-function StatusDot({ state }) {
-  const map = {
-    online:     { color: "var(--green)",  label: "ONLINE",     pulse: "pulse-g" },
-    cold:       { color: "var(--amber)",  label: "COLD",       pulse: "pulse-a" },
-    connecting: { color: "var(--text3)",  label: "CONNECTING", pulse: "" },
-  }
-  const { color, label, pulse } = map[state] || map.connecting
-
-  return (
-    <span style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "0.65rem", letterSpacing: "0.1em" }}>
-      <span style={{
-        width: 6, height: 6, borderRadius: "50%",
-        background: color,
-        display: "inline-block",
-        animation: pulse ? `${pulse} 2s ease infinite` : "none",
-      }} />
-      <span style={{ color }}>{label}</span>
-    </span>
-  )
-}
-
-// ── Idle state ─────────────────────────────────────────────
-function IdleState() {
-  const hour = new Date().getHours()
-  const greeting =
-    hour < 5  ? "Night owl mode activated." :
-    hour < 12 ? "Good morning, Elisha." :
-    hour < 17 ? "Afternoon, Elisha." :
-    hour < 21 ? "Good evening, Elisha." :
-                "Late night session — noted."
-
-  return (
-    <div className="empty" style={{ marginTop: "5rem", gap: "0.75rem" }}>
-      <div className="glow-green" style={{ fontSize: "2.5rem", animation: "pulse-g 3s ease infinite" }}>◎</div>
-      <div style={{ fontSize: "1rem", color: "var(--text2)" }}>{greeting}</div>
-      <div style={{ fontSize: "0.72rem", color: "var(--text3)", letterSpacing: "0.1em" }}>
-        ORA IS STANDING BY — ALL SYSTEMS NOMINAL
-      </div>
-    </div>
-  )
-}
-
-// ── Typing indicator ───────────────────────────────────────
-function TypingIndicator({ text }) {
-  return (
-    <div className="msg assistant fade-in">
-      <div className="msg-avatar">◎</div>
-      <div className="msg-bubble">
-        <div className="msg-label">ORA // PROCESSING</div>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <div className="thinking-dots">
-            <span /><span /><span />
+            placeholder={listening ? "🎙 Listening..." : "Type your message... (Enter to send)"}
+            disabled={loading}
+            style={listening ? { borderColor: "#ef4444", boxShadow: "0 0 0 2px rgba(239, 68, 68, 0.2)" } : {}}
+          />
+          <div className="input-buttons">
+            <button className="voice-btn" onClick={toggleVoice} style={listening ? { borderColor: "#ef4444", background: "rgba(239, 68, 68, 0.1)" } : {}}>
+              {listening ? "⏹️" : "🎙️"}
+            </button>
+            <button className="send-btn" onClick={() => send()} disabled={loading || !input.trim()}>
+              {loading ? "⏳" : "📤"}
+            </button>
           </div>
-          <span style={{ fontSize: "0.68rem", color: "var(--text3)", letterSpacing: "0.08em", animation: "fade-in 0.3s ease" }}>
-            {text}
-          </span>
+        </div>
+        <div className="input-note">
+          <span>🔌 Render free tier — cold start may take 30 seconds</span>
+          <span>⏎ Enter to send · ⇧ Enter for new line</span>
         </div>
       </div>
     </div>
-  )
-}
-
-// ── Helpers ───────────────────────────────────────────────
-function formatTime(ts) {
-  try {
-    return new Date(ts).toLocaleTimeString("en-KE", { hour12: false })
-  } catch {
-    return ""
-  }
-}
-
-function msgLabel(m) {
-  if (m.isError) return "ORA // ERROR"
-  if (m.cached)  return "ORA // CACHE HIT"
-  if (m.intent)  return `ORA // ${m.intent.replace(/_/g, " ").toUpperCase()}`
-  if (m.model?.includes("70b")) return "ORA // DEEP THINK"
-  return "ORA // RESPONSE"
+  );
 }
