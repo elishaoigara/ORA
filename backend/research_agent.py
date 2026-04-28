@@ -1,11 +1,6 @@
 """
 ORA Research Agent — Intelligence Core v3 (FIXED)
 =================================================
-- Tavily web search integrated properly
-- Clean function structure (no global execution bugs)
-- Groq reasoning pipeline (draft → refine)
-- Citation extraction
-- Render-safe
 """
 
 from __future__ import annotations
@@ -17,14 +12,42 @@ import hashlib
 import sqlite3
 import re
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 from groq import Groq
+
 try:
     from tavily import TavilyClient
 except Exception:
     TavilyClient = None
+
 import config
+
+
+# ─────────────────────────────────────────────
+# INIT DB (FIXED - CRITICAL)
+# ─────────────────────────────────────────────
+
+def init_db():
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS research_sessions (
+            session_id TEXT PRIMARY KEY,
+            title TEXT,
+            query TEXT,
+            result TEXT,
+            sources TEXT,
+            citations TEXT,
+            word_count INTEGER,
+            updated_at TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+init_db()  # MUST RUN ON IMPORT
+
 
 # ─────────────────────────────────────────────
 # CLIENTS
@@ -45,10 +68,10 @@ def _tavily_client():
 
 
 # ─────────────────────────────────────────────
-# WEB SEARCH (TAVILY)
+# WEB SEARCH
 # ─────────────────────────────────────────────
 
-def _web_search(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
+def _web_search(query: str, max_results: int = 5):
     client = _tavily_client()
 
     if not client:
@@ -59,22 +82,18 @@ def _web_search(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
         res = client.search(query=query, max_results=max_results)
         return res.get("results", [])
     except Exception as e:
-        print("[Web Search Error]", str(e))
+        print("[Web Search Error]", e)
         return []
 
 
-def _format_web(results: List[Dict[str, Any]]) -> str:
+def _format_web(results):
     if not results:
         return ""
 
-    formatted = []
-    for i, r in enumerate(results, 1):
-        formatted.append(
-            f"[{i}] {r.get('title','')}\n"
-            f"{r.get('content','')}\n"
-            f"Source: {r.get('url','')}"
-        )
-    return "\n\n".join(formatted)
+    return "\n\n".join([
+        f"[{i+1}] {r.get('title','')}\n{r.get('content','')}\nSource: {r.get('url','')}"
+        for i, r in enumerate(results)
+    ])
 
 
 # ─────────────────────────────────────────────
@@ -82,7 +101,8 @@ def _format_web(results: List[Dict[str, Any]]) -> str:
 # ─────────────────────────────────────────────
 
 def _call_groq(messages, model="llama-3.3-70b-versatile",
-               max_tokens=3000, temperature=0.3) -> str:
+               max_tokens=3000, temperature=0.3):
+
     client = _groq_client()
 
     for attempt in range(3):
@@ -98,7 +118,7 @@ def _call_groq(messages, model="llama-3.3-70b-versatile",
             print("[Groq retry]", e)
             time.sleep(1.5 * (attempt + 1))
 
-    raise RuntimeError("Groq API failed after retries")
+    raise RuntimeError("Groq API failed")
 
 
 # ─────────────────────────────────────────────
@@ -107,47 +127,28 @@ def _call_groq(messages, model="llama-3.3-70b-versatile",
 
 SYSTEM_PROMPT = """
 You are a senior AI research analyst.
-
-RULES:
-- No vague language
-- Always include specific systems, models, companies, or numbers
-- Every claim must be grounded in evidence when available
-- Focus on insight, not summary
-
-STRUCTURE:
-1. Thesis
-2. Analytical sections (4–6)
-3. Implications
-4. Key Takeaways
+Be precise, factual, and analytical.
 """
-
 
 REFINER_PROMPT = """
-Improve this research:
-- remove vagueness
-- increase specificity
-- strengthen reasoning
-- add analytical depth
-
-Return only improved version.
+Improve clarity, depth, and specificity.
+Return only improved output.
 """
 
 
 # ─────────────────────────────────────────────
-# SESSION
+# SESSION HELPERS
 # ─────────────────────────────────────────────
 
-def _new_session_id(query: str) -> str:
+def _new_session_id(query: str):
     return hashlib.md5(f"{query}{datetime.utcnow()}".encode()).hexdigest()[:12]
 
 
 def _save_session(session_id, title, query, result, sources, citations, word_count):
-    from config import DB_PATH
+    conn = sqlite3.connect(config.DB_PATH)
 
-    conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         INSERT OR REPLACE INTO research_sessions
-        (session_id, title, query, result, sources, citations, word_count, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
     """, (
         session_id,
@@ -158,78 +159,66 @@ def _save_session(session_id, title, query, result, sources, citations, word_cou
         json.dumps(citations),
         word_count
     ))
+
     conn.commit()
     conn.close()
 
 
-# ─────────────────────────────────────────────
-# UTIL
-# ─────────────────────────────────────────────
-
-def _extract_citations(text: str) -> List[str]:
+def _extract_citations(text: str):
     return re.findall(r"\[Source:\s*(.*?)\]", text)
 
 
 # ─────────────────────────────────────────────
-# MAIN: DEEP RESEARCH
+# MAIN RESEARCH ENGINE
 # ─────────────────────────────────────────────
 
-def deep_research(query: str, n_sources: int = 5) -> Dict[str, Any]:
+def deep_research(query: str, n_sources: int = 5):
+
     session_id = _new_session_id(query)
 
-    # 1. WEB SEARCH
-    web_results = _web_search(query)
+    web_results = _web_search(query, n_sources)
     web_context = _format_web(web_results)
 
-    # 2. BUILD PROMPT
-    user_prompt = f"""
-Research Topic: {query}
+    prompt = f"""
+Topic: {query}
 
-Use ONLY these sources:
-
-{web_context if web_context else "No web sources available."}
+Sources:
+{web_context or "No sources available"}
 
 Rules:
-- Do NOT hallucinate facts
-- Every claim must reference a source URL if available
-- Be specific: models, companies, dates, metrics
+- Use only sources above
+- Be factual and specific
 """
 
-    # 3. DRAFT
     draft = _call_groq([
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt}
+        {"role": "user", "content": prompt}
     ])
 
-    # 4. REFINE
     refined = _call_groq([
         {"role": "system", "content": REFINER_PROMPT},
         {"role": "user", "content": draft}
     ], temperature=0.2)
 
     citations = _extract_citations(refined)
-    word_count = len(refined.split())
-
-    title = query[:60]
-
     sources = [r.get("url") for r in web_results if r.get("url")]
 
     _save_session(
         session_id,
-        title,
+        query[:60],
         query,
         refined,
         sources,
         citations,
-        word_count
+        len(refined.split())
     )
 
     return {
         "session_id": session_id,
-        "title": title,
+        "title": query[:60],
         "result": refined,
         "sources": sources,
-        "word_count": word_count,
+        "word_count": len(refined.split()),
         "status": "complete"
     }
 
@@ -238,7 +227,8 @@ Rules:
 # DOCUMENT ANALYSIS
 # ─────────────────────────────────────────────
 
-def analyze_document(query: str, filename: str, text: str) -> Dict[str, Any]:
+def analyze_document(query: str, filename: str, text: str):
+
     session_id = _new_session_id(filename)
 
     context = text[:8000]
@@ -253,8 +243,6 @@ def analyze_document(query: str, filename: str, text: str) -> Dict[str, Any]:
         {"role": "user", "content": draft}
     ])
 
-    word_count = len(refined.split())
-
     _save_session(
         session_id,
         f"Analysis: {filename}",
@@ -262,7 +250,7 @@ def analyze_document(query: str, filename: str, text: str) -> Dict[str, Any]:
         refined,
         [filename],
         [],
-        word_count
+        len(refined.split())
     )
 
     return {
@@ -270,20 +258,27 @@ def analyze_document(query: str, filename: str, text: str) -> Dict[str, Any]:
         "result": refined,
         "status": "complete"
     }
-def get_sessions(limit: int = 15):
-    import sqlite3
-    from config import DB_PATH
 
-    conn = sqlite3.connect(DB_PATH)
+
+# ─────────────────────────────────────────────
+# SESSION API (FIXED)
+# ─────────────────────────────────────────────
+
+def get_sessions(limit: int = 15):
+
+    conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
 
-    rows = conn.execute("""
-        SELECT session_id, title, query, result, word_count, updated_at
-        FROM research_sessions
-        ORDER BY updated_at DESC
-        LIMIT ?
-    """, (limit,)).fetchall()
-
-    conn.close()
+    try:
+        rows = conn.execute("""
+            SELECT session_id, title, query, result, word_count, updated_at
+            FROM research_sessions
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
 
     return [dict(r) for r in rows]
