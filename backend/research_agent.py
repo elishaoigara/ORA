@@ -6,7 +6,6 @@ import time
 import hashlib
 import sqlite3
 from datetime import datetime
-from typing import Optional
 
 from groq import Groq
 
@@ -19,11 +18,11 @@ import config
 
 
 # ─────────────────────────────────────────────
-# DB INIT
+# DB
 # ─────────────────────────────────────────────
 
 def init_db():
-    conn = sqlite3.connect(config.DB_PATH, timeout=10)
+    conn = sqlite3.connect(config.DB_PATH)
     cur = conn.cursor()
 
     cur.execute("""
@@ -33,15 +32,14 @@ def init_db():
             query TEXT,
             result TEXT,
             sources TEXT,
-            citations TEXT,
-            word_count INTEGER,
-            mode TEXT DEFAULT 'research',
+            mode TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
     conn.commit()
     conn.close()
+
 
 init_db()
 
@@ -50,263 +48,212 @@ init_db()
 # CLIENTS
 # ─────────────────────────────────────────────
 
-def _groq_client():
-    key = os.getenv("GROQ_API_KEY")
-    if not key:
-        raise RuntimeError("Missing GROQ_API_KEY")
-    return Groq(api_key=key)
+def groq_client():
+    return Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 
-def _tavily_client():
-    key = os.getenv("TAVILY_API_KEY")
-    if not key or TavilyClient is None:
+def tavily_client():
+    if not TavilyClient:
         return None
-    return TavilyClient(api_key=key)
+    key = os.getenv("TAVILY_API_KEY")
+    return TavilyClient(api_key=key) if key else None
 
 
 # ─────────────────────────────────────────────
-# WEB SEARCH
+# WEB
 # ─────────────────────────────────────────────
 
-def _web_search(query: str, max_results: int = 5):
-    client = _tavily_client()
+def web_search(query: str, n=5):
+    client = tavily_client()
     if not client:
         return []
 
     try:
-        res = client.search(query=query, max_results=max_results)
-        return res.get("results") or []
+        return client.search(query=query, max_results=n).get("results", [])
     except Exception:
         return []
 
 
-def _format_web(results):
-    if not results:
-        return ""
+def format_sources(results):
+    return [r.get("url") for r in results if r.get("url")]
 
-    return "\n\n".join(
-        f"[{i+1}] {r.get('title','')}\n{r.get('content','')}\nSource: {r.get('url','')}"
-        for i, r in enumerate(results)
+
+# ─────────────────────────────────────────────
+# AI CALL
+# ─────────────────────────────────────────────
+
+def call_llm(messages):
+    client = groq_client()
+
+    res = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=messages,
+        temperature=0.3,
+        max_tokens=2000
     )
 
-
-# ─────────────────────────────────────────────
-# GROQ CALL
-# ─────────────────────────────────────────────
-
-def _call_groq(messages, model="llama-3.3-70b-versatile",
-               max_tokens=2500, temperature=0.3):
-
-    client = _groq_client()
-
-    for attempt in range(3):
-        try:
-            res = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-            text = res.choices[0].message.content
-            if text and text.strip():
-                return text.strip()
-        except Exception:
-            time.sleep(1.5 * (attempt + 1))
-
-    return "⚠️ AI temporarily unavailable."
+    content = res.choices[0].message.content or ""
+    return content.strip()
 
 
 # ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
 
-def _new_session_id(query: str):
-    return hashlib.md5(
-        f"{query}{datetime.utcnow()}".encode()
-    ).hexdigest()[:12]
+def session_id(text):
+    return hashlib.md5(text.encode()).hexdigest()[:12]
 
 
-def _save_session(session_id, title, query, result,
-                  sources, citations, word_count, mode):
+def save(session, title, query, result, sources, mode):
+    conn = sqlite3.connect(config.DB_PATH)
 
-    try:
-        conn = sqlite3.connect(config.DB_PATH, timeout=10)
-
-        conn.execute("""
-            INSERT OR REPLACE INTO research_sessions (
-                session_id, title, query, result,
-                sources, citations, word_count, mode, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-        """, (
-            session_id,
-            title,
-            query,
-            result,
-            json.dumps(sources or []),
-            json.dumps(citations or []),
-            word_count,
-            mode
-        ))
-
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
-
-
-# ─────────────────────────────────────────────
-# CORE RESEARCH
-# ─────────────────────────────────────────────
-
-def deep_research(query: str, n_sources: int = 5):
-
-    session_id = _new_session_id(query)
-
-    web_results = _web_search(query, n_sources)
-    web_context = _format_web(web_results)
-
-    prompt = f"""
-Topic: {query}
-
-Sources:
-{web_context}
-
-Write a structured research analysis.
-"""
-
-    result = _call_groq([
-        {"role": "system", "content": "You are a precise research assistant."},
-        {"role": "user", "content": prompt}
-    ])
-
-    sources = [r.get("url") for r in web_results if r.get("url")]
-
-    _save_session(
-        session_id,
-        query[:60],
+    conn.execute("""
+        INSERT OR REPLACE INTO research_sessions
+        (session_id, title, query, result, sources, mode)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        session,
+        title,
         query,
         result,
-        sources,
-        [],
-        len(result.split()),
-        "research"
+        json.dumps(sources),
+        mode
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# ─────────────────────────────────────────────
+# CORE ENGINE
+# ─────────────────────────────────────────────
+
+def deep_research(query: str):
+
+    sid = session_id(query)
+
+    web = web_search(query)
+    context = "\n".join(
+        f"{r.get('title','')}: {r.get('content','')}"
+        for r in web
     )
 
+    result = call_llm([
+        {"role": "system", "content": "You are a research assistant."},
+        {"role": "user", "content": f"Topic: {query}\n\nSources:\n{context}"}
+    ])
+
+    sources = format_sources(web)
+
+    save(sid, query[:60], query, result, sources, "research")
+
     return {
-        "session_id": session_id,
-        "title": query[:60],
-        "result": result,
+        "id": sid,
+        "type": "research",
+        "title": query,
+        "content": result,
         "sources": sources,
+        "meta": {
+            "word_count": len(result.split()),
+            "created_at": str(datetime.utcnow())
+        },
         "status": "complete"
     }
 
 
 # ─────────────────────────────────────────────
-# DOCUMENT ANALYSIS
+# ESSAY
 # ─────────────────────────────────────────────
 
-def analyze_document(query: str, filename: str, text: str):
+def write_essay(query: str):
 
-    session_id = _new_session_id(filename)
+    data = deep_research(query)
 
-    result = _call_groq([
-        {"role": "system", "content": "You are a document analyst."},
-        {"role": "user", "content": f"{text[:8000]}\n\nQuestion: {query}"}
+    return {
+        "id": data["id"],
+        "type": "essay",
+        "title": data["title"],
+        "content": data["content"],
+        "sources": data["sources"],
+        "status": "complete"
+    }
+
+
+# ─────────────────────────────────────────────
+# DOCUMENT
+# ─────────────────────────────────────────────
+
+def analyze_document(query: str, text: str, filename: str):
+
+    sid = session_id(filename)
+
+    result = call_llm([
+        {"role": "system", "content": "You analyze documents clearly."},
+        {"role": "user", "content": text[:8000] + "\n\nQuestion: " + query}
     ])
 
-    _save_session(
-        session_id,
-        f"Analysis: {filename}",
-        query,
-        result,
-        [filename],
-        [],
-        len(result.split()),
-        "document"
-    )
-
     return {
-        "session_id": session_id,
+        "id": sid,
+        "type": "document",
         "title": filename,
-        "result": result,
+        "content": result,
+        "sources": [],
         "status": "complete"
     }
 
 
 # ─────────────────────────────────────────────
-# ESSAY (FIXED CONTRACT)
-# ─────────────────────────────────────────────
-
-def write_essay(query: str, **kwargs):
-
-    result = deep_research(query)
-
-    return {
-        "session_id": result["session_id"],
-        "title": result["title"],
-        "result": result["result"],
-        "sources": result["sources"],
-        "status": "complete"
-    }
-
-
-# ─────────────────────────────────────────────
-# PRESENTATION (FIXED CONTRACT)
+# PRESENTATION (FIXED OUTPUT)
 # ─────────────────────────────────────────────
 
 def generate_presentation(query: str, slides: int = 5):
 
-    result = deep_research(query, n_sources=slides)
-
-    slides = max(3, min(slides, 6))
+    data = deep_research(query)
 
     chunks = [
-        result["result"][i:i + 600]
-        for i in range(0, len(result["result"]), 600)
+        data["content"][i:i+600]
+        for i in range(0, len(data["content"]), 600)
     ]
 
-    output = [{"title": "Introduction", "content": query}]
+    slides_out = [
+        {"title": "Intro", "content": query}
+    ]
 
-    for i in range(min(slides - 2, len(chunks))):
-        output.append({
-            "title": f"Insight {i+1}",
-            "content": chunks[i]
+    for i, chunk in enumerate(chunks[:slides-2]):
+        slides_out.append({
+            "title": f"Slide {i+1}",
+            "content": chunk
         })
 
-    output.append({
+    slides_out.append({
         "title": "Sources",
-        "content": "\n".join(result["sources"])
+        "content": "\n".join(data["sources"])
     })
 
     return {
-        "session_id": result["session_id"],
-        "title": result["title"],
-        "slides": output,
+        "id": data["id"],
+        "type": "presentation",
+        "title": data["title"],
+        "slides": slides_out,
         "status": "complete"
     }
 
 
 # ─────────────────────────────────────────────
-# SESSION API
+# SESSION FETCH
 # ─────────────────────────────────────────────
 
-def get_sessions(limit: int = 15):
+def get_sessions(limit=15):
 
-    try:
-        conn = sqlite3.connect(config.DB_PATH)
-        conn.row_factory = sqlite3.Row
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.row_factory = sqlite3.Row
 
-        rows = conn.execute("""
-            SELECT session_id, title, query, result, word_count, mode, created_at
-            FROM research_sessions
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
+    rows = conn.execute("""
+        SELECT * FROM research_sessions
+        ORDER BY created_at DESC
+        LIMIT ?
+    """, (limit,)).fetchall()
 
-        conn.close()
+    conn.close()
 
-        return [dict(r) for r in rows]
-
-    except Exception:
-        return []
+    return [dict(r) for r in rows]
