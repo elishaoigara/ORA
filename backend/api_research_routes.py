@@ -1,17 +1,23 @@
+"""
+ORA Research Routes — Clean, Stable, and Fully Compatible with Frontend
+"""
+
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
-import os, tempfile, traceback
+import os
+import tempfile
+import traceback
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
 
 # ─────────────────────────────────────────────
-# MODELS
+# REQUEST MODELS
 # ─────────────────────────────────────────────
 
 class ResearchRequest(BaseModel):
     query: str
-    n_sources: int = 5
+    n_sources: int = 8
 
 
 class EssayRequest(BaseModel):
@@ -22,34 +28,20 @@ class EssayRequest(BaseModel):
 
 class PresentationRequest(BaseModel):
     topic: str
-    slides: int = 5
-
-
-class CompareRequest(BaseModel):
-    query: str
-    filenames: list[str]
-
-
-class AskDocRequest(BaseModel):
-    question: str
-    filename: str
-
-
-class SummarizeRequest(BaseModel):
-    filename: str
-    style: str = "executive"
+    slides: int = 8
 
 
 # ─────────────────────────────────────────────
-# SAFE IMPORT WRAPPER
+# HELPER: Safe import research_agent
 # ─────────────────────────────────────────────
 
-def _safe_import(name):
+def _get_research_agent():
     try:
-        from research_agent import __dict__ as ra
-        return ra.get(name)
-    except Exception:
-        return None
+        import research_agent
+        return research_agent
+    except Exception as e:
+        print(f"[RESEARCH ROUTES] Failed to import research_agent: {e}")
+        raise HTTPException(status_code=500, detail="Research agent not available")
 
 
 # ─────────────────────────────────────────────
@@ -57,45 +49,64 @@ def _safe_import(name):
 # ─────────────────────────────────────────────
 
 @router.get("/sessions")
-def list_sessions(limit: int = 20):
+def list_sessions(limit: int = 15):
     try:
-        from research_agent import get_sessions
-        return get_sessions(limit)
-    except Exception:
+        ra = _get_research_agent()
+        return ra.get_sessions(limit=limit)
+    except Exception as e:
+        print(f"[RESEARCH] list_sessions error: {e}")
         return []
 
 
+@router.get("/sessions/{session_id}")
+def get_session(session_id: str):
+    """Used by frontend when loading a previous session"""
+    try:
+        ra = _get_research_agent()
+        session = ra.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return session
+    except Exception as e:
+        print(f"[RESEARCH] get_session error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load session")
+
+
 # ─────────────────────────────────────────────
-# UPLOAD (SAFE MODE ONLY)
+# UPLOAD (Document Analysis)
 # ─────────────────────────────────────────────
 
 @router.post("/upload")
-async def upload(file: UploadFile = File(...), query: str = Form("")):
+async def upload(
+    file: UploadFile = File(...),
+    query: str = Form("")
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
     try:
         content = await file.read()
-        filename = file.filename or "doc.txt"
+        filename = file.filename
 
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(content)
-            path = tmp.name
+        # Decode text safely
+        try:
+            text = content.decode("utf-8", errors="ignore")
+        except Exception:
+            text = str(content)[:15000]
 
-        from research_agent import analyze_document
-
-        text = content.decode("utf-8", errors="ignore")
-
-        result = analyze_document(
-            query or "Analyze this document",
-            filename,
-            text
+        ra = _get_research_agent()
+        result = ra.analyze_document(
+            query=query or "Analyze this document",
+            filename=filename,
+            text=text
         )
-
-        os.unlink(path)
 
         return result
 
-    except Exception:
-        print(traceback.format_exc())
-        raise HTTPException(500, "Upload failed")
+    except Exception as e:
+        print(f"[RESEARCH UPLOAD ERROR] {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Document analysis failed")
 
 
 # ─────────────────────────────────────────────
@@ -105,90 +116,90 @@ async def upload(file: UploadFile = File(...), query: str = Form("")):
 @router.post("/search")
 def search(payload: ResearchRequest):
     try:
-        from research_agent import deep_research
-        return deep_research(payload.query, payload.n_sources)
-    except Exception:
-        print(traceback.format_exc())
-        raise HTTPException(500, "Search failed")
+        ra = _get_research_agent()
+        return ra.deep_research(payload.query, payload.n_sources)
+    except Exception as e:
+        print(f"[RESEARCH SEARCH ERROR] {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Search failed")
 
 
 # ─────────────────────────────────────────────
-# ESSAY (FIXED CALL)
+# ESSAY
 # ─────────────────────────────────────────────
 
 @router.post("/essay")
 def essay(payload: EssayRequest):
     try:
-        from research_agent import write_essay
-        return write_essay(payload.topic)
-    except Exception:
-        print(traceback.format_exc())
-        raise HTTPException(500, "Essay failed")
+        ra = _get_research_agent()
+        return ra.write_essay(payload.topic)
+    except Exception as e:
+        print(f"[RESEARCH ESSAY ERROR] {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Essay generation failed")
 
 
 # ─────────────────────────────────────────────
-# PRESENTATION (FIXED)
+# PRESENTATION
 # ─────────────────────────────────────────────
 
 @router.post("/presentation")
 def presentation(payload: PresentationRequest):
     try:
-        from research_agent import generate_presentation
-        return generate_presentation(payload.topic, payload.slides)
-    except Exception:
-        print(traceback.format_exc())
-        raise HTTPException(500, "Presentation failed")
+        ra = _get_research_agent()
+        return ra.generate_presentation(payload.topic, payload.slides)
+    except Exception as e:
+        print(f"[RESEARCH PRESENTATION ERROR] {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Presentation generation failed")
 
 
 # ─────────────────────────────────────────────
-# DOCUMENTS LIST
+# DOCUMENTS (for Knowledge Base tab)
 # ─────────────────────────────────────────────
 
 @router.get("/documents")
-def documents():
+def get_documents():
+    """Return documents for the Knowledge Base tab in Research page"""
     try:
         from knowledge.pipeline import get_all_documents
         return get_all_documents()
-    except Exception:
+    except Exception as e:
+        print(f"[RESEARCH DOCUMENTS ERROR] {e}")
         return []
 
 
 # ─────────────────────────────────────────────
-# STATS (FIXED SAFE ACCESS)
+# STATS
 # ─────────────────────────────────────────────
 
 @router.get("/stats")
-def stats():
+def get_stats():
+    """Simple stats for Research header"""
     try:
         import sqlite3
         from config import DB_PATH
         from research_agent import get_sessions
 
         conn = sqlite3.connect(DB_PATH)
-
         total_sessions = conn.execute(
             "SELECT COUNT(*) FROM research_sessions"
         ).fetchone()[0]
-
         conn.close()
 
-        sessions = get_sessions(5)
-
-        recent = []
-        for s in sessions:
-            recent.append({
-                "title": s.get("title", ""),
-                "mode": s.get("mode", "research"),
-                "created_at": s.get("created_at", "")
-            })
+        recent_sessions = get_sessions(limit=5)
 
         return {
             "total_sessions": total_sessions,
-            "recent_sessions": recent
+            "documents_indexed": 0,      # Can be expanded later
+            "total_chunks": 0,
+            "recent_sessions": recent_sessions
         }
-
-    except Exception:
+    except Exception as e:
+        print(f"[RESEARCH STATS ERROR] {e}")
         return {
             "total_sessions": 0,
+            "documents_indexed": 0,
+            "total_chunks": 0,
             "recent_sessions": []
         }
