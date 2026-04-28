@@ -1,14 +1,3 @@
-"""
-ORA Research Agent — PRODUCTION SAFE CORE (FINAL HARDENED VERSION)
-==================================================================
-Fixes:
-- Render stability issues
-- Groq timeout safety
-- Safe DB handling
-- Web search null safety
-- Production cost control hooks ready
-"""
-
 from __future__ import annotations
 
 import os
@@ -31,7 +20,7 @@ import config
 
 
 # ─────────────────────────────────────────────
-# DB INIT (SAFE)
+# DB
 # ─────────────────────────────────────────────
 
 def init_db():
@@ -55,7 +44,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 init_db()
 
 
@@ -78,12 +66,11 @@ def _tavily_client():
 
 
 # ─────────────────────────────────────────────
-# WEB SEARCH (SAFE)
+# WEB SEARCH
 # ─────────────────────────────────────────────
 
 def _web_search(query: str, max_results: int = 5):
     client = _tavily_client()
-
     if not client:
         return []
 
@@ -105,11 +92,11 @@ def _format_web(results):
 
 
 # ─────────────────────────────────────────────
-# GROQ CALL (PROTECTED)
+# GROQ (SAFE)
 # ─────────────────────────────────────────────
 
 def _call_groq(messages, model="llama-3.3-70b-versatile",
-               max_tokens=1800, temperature=0.3):
+               max_tokens=2500, temperature=0.3):
 
     client = _groq_client()
 
@@ -121,13 +108,15 @@ def _call_groq(messages, model="llama-3.3-70b-versatile",
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            return res.choices[0].message.content or ""
 
-        except Exception as e:
-            wait = 1.5 * (attempt + 1)
-            time.sleep(wait)
+            text = res.choices[0].message.content
+            if text and text.strip():
+                return text
 
-    return "Error: AI service unavailable."
+        except Exception:
+            time.sleep(1.5 * (attempt + 1))
+
+    return "⚠️ Unable to generate response at this time."
 
 
 # ─────────────────────────────────────────────
@@ -140,19 +129,12 @@ def _new_session_id(query: str):
     ).hexdigest()[:12]
 
 
-def _extract_citations(text: str):
-    return re.findall(r"\[Source:\s*(.*?)\]", text)
-
-
-def _safe_db():
-    return sqlite3.connect(config.DB_PATH, timeout=10)
-
-
 def _save_session(session_id, title, query, result,
                   sources, citations, word_count, mode):
 
     try:
-        conn = _safe_db()
+        conn = sqlite3.connect(config.DB_PATH, timeout=10)
+
         conn.execute("""
             INSERT OR REPLACE INTO research_sessions (
                 session_id, title, query, result,
@@ -178,7 +160,7 @@ def _save_session(session_id, title, query, result,
 
 
 # ─────────────────────────────────────────────
-# CORE RESEARCH ENGINE (COST OPTIMIZED)
+# CORE RESEARCH
 # ─────────────────────────────────────────────
 
 def deep_research(query: str, n_sources: int = 5):
@@ -194,18 +176,15 @@ Topic: {query}
 Sources:
 {web_context}
 
-Rules:
-- Be concise
-- Use only sources
+Write a full structured analysis.
 """
 
     result = _call_groq([
-        {"role": "system", "content": "You are a precise research AI."},
+        {"role": "system", "content": "You are a precise research analyst."},
         {"role": "user", "content": prompt}
     ])
 
     sources = [r.get("url") for r in web_results if r.get("url")]
-    citations = _extract_citations(result)
 
     _save_session(
         session_id,
@@ -213,7 +192,7 @@ Rules:
         query,
         result,
         sources,
-        citations,
+        [],
         len(result.split()),
         "research"
     )
@@ -221,7 +200,7 @@ Rules:
     return {
         "session_id": session_id,
         "title": query[:60],
-        "result": result[:2500],  # HARD COST LIMIT
+        "result": result,   # ✅ NO TRUNCATION
         "sources": sources,
         "word_count": len(result.split()),
         "status": "complete"
@@ -254,13 +233,13 @@ def analyze_document(query: str, filename: str, text: str):
 
     return {
         "session_id": session_id,
-        "result": result[:2500],
+        "result": result,   # ✅ FULL OUTPUT
         "status": "complete"
     }
 
 
 # ─────────────────────────────────────────────
-# ESSAY (SAFE)
+# ESSAY
 # ─────────────────────────────────────────────
 
 def write_essay(query: str, **kwargs):
@@ -269,25 +248,26 @@ def write_essay(query: str, **kwargs):
 
     return {
         "title": result["title"],
-        "essay": result["result"],
+        "essay": result["result"],   # ✅ FULL TEXT
         "sources": result["sources"],
-        "mode": "essay"
+        "mode": "essay",
+        "status": "complete"
     }
 
 
 # ─────────────────────────────────────────────
-# PRESENTATION (SAFE + FAST)
+# PRESENTATION
 # ─────────────────────────────────────────────
 
 def generate_presentation(query: str, slides: int = 5):
 
     result = deep_research(query, n_sources=slides)
 
-    slides = max(3, min(slides, 6))  # cost control
+    slides = max(3, min(slides, 6))
 
     chunks = [
-        result["result"][i:i + 500]
-        for i in range(0, min(len(result["result"]), 2000), 500)
+        result["result"][i:i + 600]
+        for i in range(0, len(result["result"]), 600)
     ]
 
     output = [{"title": "Introduction", "content": query}]
@@ -306,26 +286,19 @@ def generate_presentation(query: str, slides: int = 5):
     return {
         "title": result["title"],
         "mode": "presentation",
-        "slides": output
+        "slides": output,
+        "status": "complete"
     }
 
 
 # ─────────────────────────────────────────────
-# DOCUMENT COMPATIBILITY
-# ─────────────────────────────────────────────
-
-def summarize_document(query: str, filename: str = "", text: str = ""):
-    return analyze_document(query, filename, text)
-
-
-# ─────────────────────────────────────────────
-# SESSION API
+# SESSIONS
 # ─────────────────────────────────────────────
 
 def get_sessions(limit: int = 15):
 
     try:
-        conn = _safe_db()
+        conn = sqlite3.connect(config.DB_PATH)
         conn.row_factory = sqlite3.Row
 
         rows = conn.execute("""
