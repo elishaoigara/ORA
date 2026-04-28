@@ -1,12 +1,11 @@
 import { useState } from "react";
-import "./research.css";
+
+const API_BASE = "https://ora-oovf.onrender.com";
 
 export default function Research() {
   const [query, setQuery] = useState("");
   const [result, setResult] = useState("");
   const [loading, setLoading] = useState(false);
-
-  const API_URL = import.meta.env.VITE_API_URL;
 
   const runResearch = async () => {
     if (!query.trim()) return;
@@ -15,23 +14,26 @@ export default function Research() {
       setLoading(true);
       setResult("");
 
-      const res = await fetch(`${API_URL}/research`, {
+      const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({
+          message: query,
+        }),
       });
 
-      if (!res.ok) {
-        throw new Error("Request failed");
-      }
-
       const data = await res.json();
-      setResult(data.result || "No result returned");
-    } catch (error) {
-      console.error(error);
-      setResult("Error: Could not connect to backend");
+
+      setResult(
+        data.response ||
+        data.message ||
+        JSON.stringify(data, null, 2)
+      );
+    } catch (err) {
+      console.error(err);
+      setResult("❌ Failed to connect to ORA backend");
     } finally {
       setLoading(false);
     }
@@ -39,20 +41,6 @@ export default function Research() {
 
   return (
     <div className="ora-container">
-      {/* SIDEBAR */}
-      <div id="sidebar">
-        <div className="sidebar-header">
-          <div className="logo">
-            <div className="logo-mark">ORA</div>
-            <div>
-              <div className="logo-text">ORA</div>
-              <div className="logo-sub">Research Agent</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* MAIN */}
       <div className="main">
         <h1>ORA Research Agent</h1>
 
@@ -63,7 +51,7 @@ export default function Research() {
         />
 
         <button onClick={runResearch} disabled={loading}>
-          {loading ? "Running..." : "Run Research"}
+          {loading ? "Researching..." : "Run Research"}
         </button>
 
         <div className="result">
