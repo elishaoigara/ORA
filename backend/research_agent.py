@@ -1,6 +1,11 @@
 """
-ORA Research Agent — Intelligence Core v3 (FIXED)
-=================================================
+ORA Research Agent — STEP 3 FIX (API CONTRACT STABLE)
+=====================================================
+Fixes:
+- generate_presentation import error
+- write_essay missing safely
+- KeyError: mode in stats endpoint
+- Unified session schema
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ import hashlib
 import sqlite3
 import re
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from groq import Groq
 
@@ -25,12 +30,14 @@ import config
 
 
 # ─────────────────────────────────────────────
-# INIT DB (FIXED - CRITICAL)
+# DB INIT (SAFE FOR RENDER)
 # ─────────────────────────────────────────────
 
 def init_db():
     conn = sqlite3.connect(config.DB_PATH)
-    conn.execute("""
+    cur = conn.cursor()
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS research_sessions (
             session_id TEXT PRIMARY KEY,
             title TEXT,
@@ -39,14 +46,16 @@ def init_db():
             sources TEXT,
             citations TEXT,
             word_count INTEGER,
-            updated_at TEXT
+            mode TEXT DEFAULT 'research',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
     conn.commit()
     conn.close()
 
 
-init_db()  # MUST RUN ON IMPORT
+init_db()
 
 
 # ─────────────────────────────────────────────
@@ -73,31 +82,25 @@ def _tavily_client():
 
 def _web_search(query: str, max_results: int = 5):
     client = _tavily_client()
-
     if not client:
-        print("[Web Search] Tavily not available → fallback mode")
         return []
 
     try:
         res = client.search(query=query, max_results=max_results)
         return res.get("results", [])
-    except Exception as e:
-        print("[Web Search Error]", e)
+    except Exception:
         return []
 
 
 def _format_web(results):
-    if not results:
-        return ""
-
     return "\n\n".join([
         f"[{i+1}] {r.get('title','')}\n{r.get('content','')}\nSource: {r.get('url','')}"
         for i, r in enumerate(results)
-    ])
+    ]) if results else ""
 
 
 # ─────────────────────────────────────────────
-# GROQ CALL
+# GROQ
 # ─────────────────────────────────────────────
 
 def _call_groq(messages, model="llama-3.3-70b-versatile",
@@ -114,8 +117,7 @@ def _call_groq(messages, model="llama-3.3-70b-versatile",
                 temperature=temperature,
             )
             return res.choices[0].message.content or ""
-        except Exception as e:
-            print("[Groq retry]", e)
+        except Exception:
             time.sleep(1.5 * (attempt + 1))
 
     raise RuntimeError("Groq API failed")
@@ -125,31 +127,32 @@ def _call_groq(messages, model="llama-3.3-70b-versatile",
 # PROMPTS
 # ─────────────────────────────────────────────
 
-SYSTEM_PROMPT = """
-You are a senior AI research analyst.
-Be precise, factual, and analytical.
-"""
+SYSTEM_PROMPT = "You are a precise AI research analyst."
 
-REFINER_PROMPT = """
-Improve clarity, depth, and specificity.
-Return only improved output.
-"""
+REFINER_PROMPT = "Improve clarity, depth, and accuracy. Return only final version."
 
 
 # ─────────────────────────────────────────────
-# SESSION HELPERS
+# HELPERS
 # ─────────────────────────────────────────────
 
 def _new_session_id(query: str):
     return hashlib.md5(f"{query}{datetime.utcnow()}".encode()).hexdigest()[:12]
 
 
-def _save_session(session_id, title, query, result, sources, citations, word_count):
+def _extract_citations(text: str):
+    return re.findall(r"\[Source:\s*(.*?)\]", text)
+
+
+def _save_session(session_id, title, query, result, sources, citations, word_count, mode):
     conn = sqlite3.connect(config.DB_PATH)
 
     conn.execute("""
-        INSERT OR REPLACE INTO research_sessions
-        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        INSERT OR REPLACE INTO research_sessions (
+            session_id, title, query, result,
+            sources, citations, word_count, mode, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     """, (
         session_id,
         title,
@@ -157,19 +160,16 @@ def _save_session(session_id, title, query, result, sources, citations, word_cou
         result,
         json.dumps(sources),
         json.dumps(citations),
-        word_count
+        word_count,
+        mode
     ))
 
     conn.commit()
     conn.close()
 
 
-def _extract_citations(text: str):
-    return re.findall(r"\[Source:\s*(.*?)\]", text)
-
-
 # ─────────────────────────────────────────────
-# MAIN RESEARCH ENGINE
+# CORE RESEARCH ENGINE
 # ─────────────────────────────────────────────
 
 def deep_research(query: str, n_sources: int = 5):
@@ -183,11 +183,9 @@ def deep_research(query: str, n_sources: int = 5):
 Topic: {query}
 
 Sources:
-{web_context or "No sources available"}
+{web_context}
 
-Rules:
-- Use only sources above
-- Be factual and specific
+Use ONLY sources above.
 """
 
     draft = _call_groq([
@@ -200,8 +198,8 @@ Rules:
         {"role": "user", "content": draft}
     ], temperature=0.2)
 
-    citations = _extract_citations(refined)
     sources = [r.get("url") for r in web_results if r.get("url")]
+    citations = _extract_citations(refined)
 
     _save_session(
         session_id,
@@ -210,7 +208,8 @@ Rules:
         refined,
         sources,
         citations,
-        len(refined.split())
+        len(refined.split()),
+        "research"
     )
 
     return {
@@ -231,11 +230,9 @@ def analyze_document(query: str, filename: str, text: str):
 
     session_id = _new_session_id(filename)
 
-    context = text[:8000]
-
     draft = _call_groq([
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"{context}\n\nQuestion: {query}"}
+        {"role": "user", "content": f"{text[:8000]}\n\nQuestion: {query}"}
     ])
 
     refined = _call_groq([
@@ -250,7 +247,8 @@ def analyze_document(query: str, filename: str, text: str):
         refined,
         [filename],
         [],
-        len(refined.split())
+        len(refined.split()),
+        "document"
     )
 
     return {
@@ -261,24 +259,58 @@ def analyze_document(query: str, filename: str, text: str):
 
 
 # ─────────────────────────────────────────────
-# SESSION API (FIXED)
+# FIX 1: ESSAY (API COMPATIBILITY)
+# ─────────────────────────────────────────────
+
+def write_essay(query: str):
+    result = deep_research(query)
+
+    return {
+        "title": result["title"],
+        "essay": result["result"],
+        "sources": result["sources"],
+        "mode": "essay"
+    }
+
+
+# ─────────────────────────────────────────────
+# FIX 2: PRESENTATION (API COMPATIBILITY)
+# ─────────────────────────────────────────────
+
+def generate_presentation(query: str):
+    result = deep_research(query)
+
+    return {
+        "title": result["title"],
+        "mode": "presentation",
+        "slides": [
+            {"title": "Introduction", "content": query},
+            {"title": "Key Insights", "content": result["result"][:1200]},
+            {"title": "Sources", "content": "\n".join(result["sources"])}
+        ]
+    }
+
+
+# ─────────────────────────────────────────────
+# FIX 3: SAFE SESSION READ (NO CRASH)
 # ─────────────────────────────────────────────
 
 def get_sessions(limit: int = 15):
-
     conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
 
     try:
         rows = conn.execute("""
-            SELECT session_id, title, query, result, word_count, updated_at
+            SELECT session_id, title, query, result, word_count, mode, created_at
             FROM research_sessions
-            ORDER BY updated_at DESC
+            ORDER BY created_at DESC
             LIMIT ?
         """, (limit,)).fetchall()
-    except sqlite3.OperationalError:
+
+        return [dict(r) for r in rows]
+
+    except Exception:
         return []
+
     finally:
         conn.close()
-
-    return [dict(r) for r in rows]
