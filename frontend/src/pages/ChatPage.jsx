@@ -33,6 +33,7 @@ const THINKING_STATES = [
   "Searching memory...",
   "Processing request...",
   "Formulating response...",
+  "Checking knowledge base...",
 ];
 
 export default function ChatPage() {
@@ -194,76 +195,104 @@ export default function ChatPage() {
 
   const currentChips = QUICK_SETS[quickSet] || QUICK_SETS.default;
   const statusColor = backendState === "online" ? "#22c55e" : backendState === "cold" ? "#eab308" : "#64748b";
-  const statusText = backendState === "online" ? "Online" : backendState === "cold" ? "Starting" : "Connecting";
 
   return (
-    <div className="chat-container-modern">
-      {/* Header */}
-      <div className="chat-header-modern">
-        <div className="chat-title-section">
-          <span className="chat-icon">💬</span>
-          <div>
-            <h2 className="chat-title">Neural Link</h2>
-            <p className="chat-subtitle">Conversational AI Assistant</p>
-          </div>
+    <div className="dashboard-container">
+      {/* Header - Same as Dashboard */}
+      <div className="dashboard-header">
+        <div>
+          <h1 className="dashboard-title">Neural Link</h1>
+          <p className="dashboard-subtitle">Conversational AI Assistant</p>
         </div>
-        <div className="chat-actions">
-          <div className="status-badge-modern" style={{ color: statusColor }}>
-            <span className="status-icon">{backendState === "online" ? "●" : backendState === "cold" ? "◐" : "○"}</span>
-            <span className="status-label">{statusText}</span>
-          </div>
-          <button className="clear-btn" onClick={clearChat} title="Clear history">🗑️</button>
+        <div className="header-time" style={{ color: statusColor }}>
+          <span className="status-dot" style={{ background: statusColor }}></span>
+          {backendState === "online" ? "ONLINE" : backendState === "cold" ? "STARTING" : "CONNECTING"}
         </div>
       </div>
 
-      {/* Quick Actions */}
-      <div className="quick-actions-modern">
-        {currentChips.map((chip) => (
-          <button key={chip.label} className="action-chip" onClick={() => send(chip.msg)} disabled={loading}>
-            {chip.label}
-          </button>
-        ))}
+      {/* Stats Cards - Same as Dashboard */}
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-icon">💬</div>
+          <div className="stat-content">
+            <div className="stat-number">{messages.length}</div>
+            <div className="stat-label">Messages</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon">⚡</div>
+          <div className="stat-content">
+            <div className="stat-number">{messages.filter(m => m.role === "assistant" && !m.isError).length}</div>
+            <div className="stat-label">Responses</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon">🎯</div>
+          <div className="stat-content">
+            <div className="stat-number">{messages.filter(m => m.intent).length}</div>
+            <div className="stat-label">Actions</div>
+          </div>
+        </div>
       </div>
 
-      {/* Messages Area */}
-      <div className="messages-area">
-        {messages.length === 0 && (
-          <div className="welcome-modern">
-            <div className="welcome-icon">✨</div>
-            <h3 className="welcome-title">Welcome back.</h3>
-            <p className="welcome-text">ORA is standing by. Ask me about tasks, goals, spending, or anything you need assistance with.</p>
-            <div className="welcome-hint">Try: "Show my pending tasks" or "What should I focus on?"</div>
-          </div>
-        )}
+      {/* Quick Actions - Styled like Dashboard cards */}
+      <div className="dashboard-card">
+        <div className="card-header">
+          <span className="card-icon">⚡</span>
+          <span className="card-title">Quick Commands</span>
+          <span className="card-badge">{currentChips.length}</span>
+        </div>
+        <div className="tasks-list" style={{ gap: "10px", flexDirection: "row", flexWrap: "wrap" }}>
+          {currentChips.map((chip) => (
+            <button
+              key={chip.label}
+              className="ack-btn"
+              onClick={() => send(chip.msg)}
+              disabled={loading}
+              style={{ padding: "8px 16px", fontSize: "12px" }}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Messages - Styled like Dashboard alerts */}
+      <div className="dashboard-card">
+        <div className="card-header">
+          <span className="card-icon">💬</span>
+          <span className="card-title">Conversation</span>
+          <span className="card-badge">{messages.length}</span>
+        </div>
         
-        {messages.map((msg, idx) => {
-          const isUser = msg.role === "user";
-          const isError = msg.isError;
-          return (
-            <div key={idx} className={`message-item ${isUser ? "user-message" : "assistant-message"} fade-in`}>
-              <div className="message-avatar-modern">{isUser ? "👤" : "✨"}</div>
-              <div className="message-bubble-modern">
-                {!isUser && (
-                  <div className="message-meta">
-                    <span className="message-sender">ORA Assistant</span>
-                    {msg.cached && <span className="message-badge">Cached</span>}
-                    {msg.intent && <span className="message-badge">{msg.intent.replace(/_/g, " ")}</span>}
-                  </div>
-                )}
-                
-                {msg.action && (
-                  <div className="action-card-modern">
-                    <span className="action-icon">✅</span>
-                    <span className="action-text">Action Executed: {msg.action.type?.replace(/_/g, " ").toUpperCase()}</span>
-                  </div>
-                )}
-                
-                <div className="message-content-modern" style={{ color: isError ? "#ef4444" : "#e2e8f0" }}>
-                  {msg.content}
-                </div>
-                
-                <div className="message-footer">
-                  <span className="message-time">
+        <div className="alerts-list" style={{ maxHeight: "500px", overflowY: "auto" }}>
+          {messages.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-icon">✨</div>
+              <div className="empty-text">No messages yet</div>
+              <div className="connect-link" style={{ cursor: "default" }}>
+                Start a conversation below
+              </div>
+            </div>
+          )}
+          
+          {messages.map((msg, idx) => {
+            const isUser = msg.role === "user";
+            const isError = msg.isError;
+            return (
+              <div 
+                key={idx} 
+                className="alert-item" 
+                style={{ 
+                  borderLeftColor: isUser ? "var(--green-primary)" : "var(--info)",
+                  background: isUser ? "rgba(34, 197, 94, 0.05)" : "var(--bg-primary)",
+                  flexDirection: "column",
+                  alignItems: "flex-start"
+                }}
+              >
+                <div className="alert-message" style={{ fontWeight: "bold", marginBottom: "8px" }}>
+                  {isUser ? "👤 You" : "✨ ORA Assistant"}
+                  <span className="alert-time" style={{ marginLeft: "12px" }}>
                     {(() => {
                       try {
                         return new Date(msg.timestamp).toLocaleTimeString("en-KE", { hour12: false, hour: "2-digit", minute: "2-digit" });
@@ -272,60 +301,107 @@ export default function ChatPage() {
                       }
                     })()}
                   </span>
-                  {!isUser && !isError && (
-                    <button className="copy-btn" onClick={() => copyMessage(msg.content, idx)}>
-                      {copiedIdx === idx ? "✓ Copied" : "📋 Copy"}
-                    </button>
-                  )}
                 </div>
+                
+                {msg.action && (
+                  <div className="finance-alert" style={{ marginBottom: "8px", width: "100%" }}>
+                    ✅ Action Executed: {msg.action.type?.replace(/_/g, " ").toUpperCase()}
+                  </div>
+                )}
+                
+                <div className="alert-message" style={{ color: isError ? "var(--error)" : "var(--text-primary)", whiteSpace: "pre-wrap" }}>
+                  {msg.content}
+                </div>
+                
+                {!isUser && !isError && (
+                  <button 
+                    className="ack-btn" 
+                    onClick={() => copyMessage(msg.content, idx)}
+                    style={{ marginTop: "8px", alignSelf: "flex-end" }}
+                  >
+                    {copiedIdx === idx ? "✓ Copied!" : "📋 Copy"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          
+          {loading && (
+            <div className="alert-item" style={{ borderLeftColor: "var(--warning)" }}>
+              <div className="alert-message">
+                <span className="typing-dots" style={{ display: "inline-flex", gap: "4px", marginRight: "8px" }}>
+                  <span style={{ width: "6px", height: "6px", background: "var(--green-primary)", borderRadius: "50%", animation: "pulse 1.4s infinite" }}></span>
+                  <span style={{ width: "6px", height: "6px", background: "var(--green-primary)", borderRadius: "50%", animation: "pulse 1.4s infinite 0.2s" }}></span>
+                  <span style={{ width: "6px", height: "6px", background: "var(--green-primary)", borderRadius: "50%", animation: "pulse 1.4s infinite 0.4s" }}></span>
+                </span>
+                {thinkingText}
               </div>
             </div>
-          );
-        })}
-        
-        {loading && (
-          <div className="typing-indicator-modern">
-            <div className="typing-avatar">✨</div>
-            <div className="typing-bubble">
-              <div className="typing-dots"><span></span><span></span><span></span></div>
-              <div className="typing-text">{thinkingText}</div>
-            </div>
-          </div>
-        )}
-        
-        <div ref={bottomRef} />
+          )}
+          
+          <div ref={bottomRef} />
+        </div>
       </div>
 
-      {/* Input Area */}
-      <div className="input-area-modern">
-        <div className="input-wrapper">
-          <textarea
-            ref={textareaRef}
-            className="chat-textarea-modern"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            placeholder={listening ? "🎙 Listening..." : "Type your message... (Enter to send)"}
-            disabled={loading}
-            style={listening ? { borderColor: "#ef4444", boxShadow: "0 0 0 2px rgba(239, 68, 68, 0.2)" } : {}}
-          />
-          <div className="input-buttons">
-            <button className="voice-btn" onClick={toggleVoice} style={listening ? { borderColor: "#ef4444", background: "rgba(239, 68, 68, 0.1)" } : {}}>
-              {listening ? "⏹️" : "🎙️"}
-            </button>
-            <button className="send-btn" onClick={() => send()} disabled={loading || !input.trim()}>
-              {loading ? "⏳" : "📤"}
-            </button>
-          </div>
+      {/* Input Area - Styled like Dashboard cards */}
+      <div className="dashboard-card" style={{ marginBottom: 0 }}>
+        <div className="card-header">
+          <span className="card-icon">📝</span>
+          <span className="card-title">Message Input</span>
+          <button 
+            className="ack-btn" 
+            onClick={toggleVoice}
+            style={{ background: listening ? "rgba(239, 68, 68, 0.1)" : "transparent", borderColor: listening ? "var(--error)" : "var(--border-light)" }}
+          >
+            {listening ? "⏹️ Stop" : "🎙️ Voice"}
+          </button>
         </div>
-        <div className="input-note">
-          <span>🔌 Render free tier — cold start may take 30 seconds</span>
-          <span>⏎ Enter to send · ⇧ Enter for new line</span>
+        
+        <textarea
+          ref={textareaRef}
+          className="chat-textarea-modern"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          placeholder={listening ? "🎙 Listening..." : "Type your message... (Enter to send)"}
+          disabled={loading}
+          style={{
+            width: "100%",
+            padding: "12px",
+            background: "var(--bg-primary)",
+            border: `1px solid ${listening ? "var(--error)" : "var(--border)"}`,
+            borderRadius: "var(--radius-md)",
+            color: "var(--text-primary)",
+            fontFamily: "inherit",
+            fontSize: "13px",
+            resize: "vertical",
+            marginBottom: "12px"
+          }}
+        />
+        
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
+          <div className="alert-meta" style={{ fontSize: "10px" }}>
+            <span>⏎ Enter to send</span>
+            <span>⇧ Enter for new line</span>
+          </div>
+          <button 
+            className="ack-all-btn" 
+            onClick={() => send()}
+            disabled={loading || !input.trim()}
+            style={{ background: "var(--green-primary)", color: "var(--bg-primary)" }}
+          >
+            {loading ? "⏳ Sending..." : "📤 Send Message"}
+          </button>
+        </div>
+        
+        <div className="sync-info" style={{ marginTop: "12px" }}>
+          <span className="sync-label">Free Tier</span>
+          <span className="sync-time">Cold start may take 30 seconds</span>
         </div>
       </div>
     </div>
