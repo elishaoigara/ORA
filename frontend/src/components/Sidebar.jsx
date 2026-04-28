@@ -112,67 +112,26 @@ export default function Sidebar({ current, onNavigate }) {
           <div className="logo-icon">◆</div>
           <div>
             <div className="logo-name">ORA</div>
-            <div className="logo-subtitle">Command Center</div>
+            <div className="logo-subtitle">v2.0</div>
           </div>
         </div>
       </div>
 
-      {/* Time Widget */}
-      <div className="time-widget">
-        <div className="time-display">{time}</div>
+      {/* Time Widget - Compact */}
+      <div className="time-widget" style={{ padding: "12px", margin: "8px" }}>
+        <div className="time-display" style={{ fontSize: "20px" }}>{time}</div>
         <div className="date-display">{date}</div>
       </div>
 
-      {/* Status Card */}
-      <div className="status-card-modern">
-        <div className="card-header">
-          <span className="card-title">Agent Online</span>
-          <div className="status-badge">
-            <div className="status-dot"></div>
-            ACTIVE
-          </div>
-        </div>
-        <div className="card-stats">
-          <div className="stat-row">
-            <span className="stat-label">Status</span>
-            <span className="stat-value">{online ? "ACTIVE" : "OFFLINE"}</span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-label">Latency</span>
-            <span className="stat-value">{latency || "—"}ms</span>
-          </div>
-          <div className="stat-row">
-            <span className="stat-label">Tasks</span>
-            <span className="stat-value">{agentCtx?.tasks || 0}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Agent Card */}
-      <div className={`agent-card-modern ${cycleFlash ? "pulse" : ""}`}>
-        <div className="agent-badge">
-          <div className="status-dot"></div>
-          AGENT
-        </div>
-        <div className="agent-metrics-grid">
-          <div className="metric-item">
-            <div className="metric-label">Overdue</div>
-            <div className="metric-number">{agentCtx?.overdue || 0}</div>
-          </div>
-          <div className="metric-item">
-            <div className="metric-label">Goals</div>
-            <div className="metric-number">{agentCtx?.goals || 0}</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Navigation */}
-      <nav className="navigation">
+      {/* Navigation - MAIN FOCUS */}
+      <nav className="navigation" style={{ flex: 1, padding: "8px" }}>
+        <div style={{ fontSize: "10px", fontWeight: "600", color: "var(--text-tertiary)", padding: "8px 12px", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "4px" }}>Navigation</div>
         {navItems.map((item) => (
           <button
             key={item.id}
             onClick={() => onNavigate(item.id)}
             className={`nav-link ${current === item.id ? "active" : ""}`}
+            style={{ marginBottom: "4px" }}
           >
             <span className="nav-icon">{item.icon}</span>
             <span className="nav-label">{item.label}</span>
@@ -183,19 +142,34 @@ export default function Sidebar({ current, onNavigate }) {
         ))}
       </nav>
 
+      {/* Status Card - Compact */}
+      <div className="status-card-modern" style={{ margin: "8px", padding: "12px" }}>
+        <div className="card-header">
+          <span className="card-title">Status</span>
+          <div className="status-badge" style={{ fontSize: "9px", padding: "2px 6px" }}>
+            <div className="status-dot" style={{ width: "4px", height: "4px" }}></div>
+            OK
+          </div>
+        </div>
+        <div className="card-stats" style={{ gap: "6px" }}>
+          <div className="stat-row" style={{ fontSize: "11px" }}>
+            <span className="stat-label">Latency</span>
+            <span className="stat-value">{latency || "—"}ms</span>
+          </div>
+          <div className="stat-row" style={{ fontSize: "11px" }}>
+            <span className="stat-label">Tasks</span>
+            <span className="stat-value">{agentCtx?.tasks || 0}</span>
+          </div>
+        </div>
+      </div>
+
       {/* Footer */}
       <div className="sidebar-footer">
         <div className="connection-status">
           <div className={`connection-indicator ${online ? "online" : "offline"}`}></div>
-          <span className="connection-text">
-            {online ? "Connected" : "Disconnected"}
+          <span className="connection-text" style={{ fontSize: "10px" }}>
+            {online ? "Connected" : "Offline"}
           </span>
-        </div>
-        <div className="footer-divider"></div>
-        <div className="system-info">
-          <span>v2.0</span>
-          <span>•</span>
-          <span>KE</span>
         </div>
       </div>
     </aside>
