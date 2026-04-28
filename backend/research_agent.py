@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import json
-import time
 import hashlib
 import sqlite3
 from datetime import datetime
@@ -18,7 +17,7 @@ import config
 
 
 # ─────────────────────────────────────────────
-# DB
+# DB INIT
 # ─────────────────────────────────────────────
 
 def init_db():
@@ -27,12 +26,12 @@ def init_db():
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS research_sessions (
-            session_id TEXT PRIMARY KEY,
+            id TEXT PRIMARY KEY,
+            type TEXT,
             title TEXT,
             query TEXT,
-            result TEXT,
+            content TEXT,
             sources TEXT,
-            mode TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -60,7 +59,7 @@ def tavily_client():
 
 
 # ─────────────────────────────────────────────
-# WEB
+# WEB SEARCH
 # ─────────────────────────────────────────────
 
 def web_search(query: str, n=5):
@@ -69,17 +68,25 @@ def web_search(query: str, n=5):
         return []
 
     try:
-        return client.search(query=query, max_results=n).get("results", [])
+        res = client.search(query=query, max_results=n)
+        return res.get("results", [])
     except Exception:
         return []
 
 
-def format_sources(results):
+def extract_sources(results):
     return [r.get("url") for r in results if r.get("url")]
 
 
+def format_context(results):
+    return "\n\n".join(
+        f"{r.get('title','')}\n{r.get('content','')}"
+        for r in results
+    )
+
+
 # ─────────────────────────────────────────────
-# AI CALL
+# LLM
 # ─────────────────────────────────────────────
 
 def call_llm(messages):
@@ -92,32 +99,32 @@ def call_llm(messages):
         max_tokens=2000
     )
 
-    content = res.choices[0].message.content or ""
-    return content.strip()
+    return (res.choices[0].message.content or "").strip()
 
 
 # ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
 
-def session_id(text):
+def make_id(text: str):
     return hashlib.md5(text.encode()).hexdigest()[:12]
 
 
-def save(session, title, query, result, sources, mode):
+def save_db(id, type_, title, query, content, sources):
     conn = sqlite3.connect(config.DB_PATH)
 
     conn.execute("""
         INSERT OR REPLACE INTO research_sessions
-        (session_id, title, query, result, sources, mode)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (id, type, title, query, content, sources, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
-        session,
+        id,
+        type_,
         title,
         query,
-        result,
+        content,
         json.dumps(sources),
-        mode
+        datetime.utcnow().isoformat()
     ))
 
     conn.commit()
@@ -125,44 +132,35 @@ def save(session, title, query, result, sources, mode):
 
 
 # ─────────────────────────────────────────────
-# CORE ENGINE
+# CORE RESEARCH (FIXED)
 # ─────────────────────────────────────────────
 
-def deep_research(query: str):
+def deep_research(query: str, n_sources: int = 5):
 
-    sid = session_id(query)
+    sid = make_id(query)
 
-    web = web_search(query)
-    context = "\n".join(
-        f"{r.get('title','')}: {r.get('content','')}"
-        for r in web
-    )
+    web = web_search(query, n_sources)
+    context = format_context(web)
+    sources = extract_sources(web)
 
     result = call_llm([
-        {"role": "system", "content": "You are a research assistant."},
+        {"role": "system", "content": "You are a senior research analyst."},
         {"role": "user", "content": f"Topic: {query}\n\nSources:\n{context}"}
     ])
 
-    sources = format_sources(web)
-
-    save(sid, query[:60], query, result, sources, "research")
+    save_db(sid, "research", query[:60], query, result, sources)
 
     return {
         "id": sid,
         "type": "research",
         "title": query,
         "content": result,
-        "sources": sources,
-        "meta": {
-            "word_count": len(result.split()),
-            "created_at": str(datetime.utcnow())
-        },
-        "status": "complete"
+        "sources": sources
     }
 
 
 # ─────────────────────────────────────────────
-# ESSAY
+# ESSAY (FIXED)
 # ─────────────────────────────────────────────
 
 def write_essay(query: str):
@@ -180,17 +178,19 @@ def write_essay(query: str):
 
 
 # ─────────────────────────────────────────────
-# DOCUMENT
+# DOCUMENT (FIXED)
 # ─────────────────────────────────────────────
 
 def analyze_document(query: str, text: str, filename: str):
 
-    sid = session_id(filename)
+    sid = make_id(filename)
 
     result = call_llm([
-        {"role": "system", "content": "You analyze documents clearly."},
+        {"role": "system", "content": "You analyze documents clearly and concisely."},
         {"role": "user", "content": text[:8000] + "\n\nQuestion: " + query}
     ])
+
+    save_db(sid, "document", filename, query, result, [])
 
     return {
         "id": sid,
@@ -203,23 +203,25 @@ def analyze_document(query: str, text: str, filename: str):
 
 
 # ─────────────────────────────────────────────
-# PRESENTATION (FIXED OUTPUT)
+# PRESENTATION (FIXED — IMPORTANT)
 # ─────────────────────────────────────────────
 
 def generate_presentation(query: str, slides: int = 5):
 
     data = deep_research(query)
 
+    content = data["content"]
+
     chunks = [
-        data["content"][i:i+600]
-        for i in range(0, len(data["content"]), 600)
+        content[i:i+600]
+        for i in range(0, len(content), 600)
     ]
 
     slides_out = [
-        {"title": "Intro", "content": query}
+        {"title": "Introduction", "content": query}
     ]
 
-    for i, chunk in enumerate(chunks[:slides-2]):
+    for i, chunk in enumerate(chunks[:max(1, slides-2)]):
         slides_out.append({
             "title": f"Slide {i+1}",
             "content": chunk
@@ -235,12 +237,14 @@ def generate_presentation(query: str, slides: int = 5):
         "type": "presentation",
         "title": data["title"],
         "slides": slides_out,
+        "content": content,   # 🔥 IMPORTANT: backend compatibility fix
+        "sources": data["sources"],
         "status": "complete"
     }
 
 
 # ─────────────────────────────────────────────
-# SESSION FETCH
+# SESSIONS
 # ─────────────────────────────────────────────
 
 def get_sessions(limit=15):
