@@ -5,7 +5,6 @@ import json
 import time
 import hashlib
 import sqlite3
-import re
 from datetime import datetime
 from typing import Optional
 
@@ -20,7 +19,7 @@ import config
 
 
 # ─────────────────────────────────────────────
-# DB
+# DB INIT
 # ─────────────────────────────────────────────
 
 def init_db():
@@ -92,7 +91,7 @@ def _format_web(results):
 
 
 # ─────────────────────────────────────────────
-# GROQ (SAFE)
+# GROQ SAFE CALL
 # ─────────────────────────────────────────────
 
 def _call_groq(messages, model="llama-3.3-70b-versatile",
@@ -111,12 +110,12 @@ def _call_groq(messages, model="llama-3.3-70b-versatile",
 
             text = res.choices[0].message.content
             if text and text.strip():
-                return text
+                return text.strip()
 
         except Exception:
             time.sleep(1.5 * (attempt + 1))
 
-    return "⚠️ Unable to generate response at this time."
+    return "⚠️ AI temporarily unavailable. Please try again."
 
 
 # ─────────────────────────────────────────────
@@ -146,8 +145,8 @@ def _save_session(session_id, title, query, result,
             title,
             query,
             result,
-            json.dumps(sources),
-            json.dumps(citations),
+            json.dumps(sources or []),
+            json.dumps(citations or []),
             word_count,
             mode
         ))
@@ -160,7 +159,7 @@ def _save_session(session_id, title, query, result,
 
 
 # ─────────────────────────────────────────────
-# CORE RESEARCH
+# CORE RESEARCH ENGINE
 # ─────────────────────────────────────────────
 
 def deep_research(query: str, n_sources: int = 5):
@@ -176,7 +175,7 @@ Topic: {query}
 Sources:
 {web_context}
 
-Write a full structured analysis.
+Write a structured, detailed analysis.
 """
 
     result = _call_groq([
@@ -200,7 +199,7 @@ Write a full structured analysis.
     return {
         "session_id": session_id,
         "title": query[:60],
-        "result": result,   # ✅ NO TRUNCATION
+        "content": result,          # 🔥 UNIFIED FIELD (IMPORTANT FIX)
         "sources": sources,
         "word_count": len(result.split()),
         "status": "complete"
@@ -233,13 +232,14 @@ def analyze_document(query: str, filename: str, text: str):
 
     return {
         "session_id": session_id,
-        "result": result,   # ✅ FULL OUTPUT
+        "title": filename,
+        "content": result,   # 🔥 FIXED
         "status": "complete"
     }
 
 
 # ─────────────────────────────────────────────
-# ESSAY
+# ESSAY (FIXED CONTRACT)
 # ─────────────────────────────────────────────
 
 def write_essay(query: str, **kwargs):
@@ -247,16 +247,17 @@ def write_essay(query: str, **kwargs):
     result = deep_research(query)
 
     return {
+        "session_id": result["session_id"],
+        "type": "essay",
         "title": result["title"],
-        "essay": result["result"],   # ✅ FULL TEXT
+        "content": result["content"],   # 🔥 FRONTEND SAFE
         "sources": result["sources"],
-        "mode": "essay",
         "status": "complete"
     }
 
 
 # ─────────────────────────────────────────────
-# PRESENTATION
+# PRESENTATION (FIXED)
 # ─────────────────────────────────────────────
 
 def generate_presentation(query: str, slides: int = 5):
@@ -266,8 +267,8 @@ def generate_presentation(query: str, slides: int = 5):
     slides = max(3, min(slides, 6))
 
     chunks = [
-        result["result"][i:i + 600]
-        for i in range(0, len(result["result"]), 600)
+        result["content"][i:i + 600]
+        for i in range(0, len(result["content"]), 600)
     ]
 
     output = [{"title": "Introduction", "content": query}]
@@ -284,8 +285,9 @@ def generate_presentation(query: str, slides: int = 5):
     })
 
     return {
+        "session_id": result["session_id"],
+        "type": "presentation",
         "title": result["title"],
-        "mode": "presentation",
         "slides": output,
         "status": "complete"
     }
