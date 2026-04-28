@@ -1,0 +1,374 @@
+/* ─────────────────────────────────────────────
+   ORA Research UI — Production CSS
+   File: research.css
+   ───────────────────────────────────────────── */
+
+/* ── ROOT VARIABLES ─────────────────────────── */
+:root {
+  --ora: #00ff9d;
+  --ora-dim: rgba(0,255,157,0.12);
+  --ora-mid: rgba(0,255,157,0.35);
+
+  --bg: #070709;
+  --bg2: #0d0d10;
+  --bg3: #141418;
+  --bg4: #1a1a20;
+
+  --border: rgba(255,255,255,0.06);
+  --border-hover: rgba(0,255,157,0.3);
+
+  --text: #e8e8ec;
+  --text2: #8888a0;
+  --text3: #505060;
+
+  --red: #ff4455;
+  --amber: #ffaa00;
+  --blue: #4488ff;
+  --purple: #aa66ff;
+
+  --radius: 10px;
+
+  --font-serif: 'Playfair Display', Georgia, serif;
+  --font-sans: 'DM Sans', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+/* ── RESET ─────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── BODY ──────────────────────────────────── */
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  height: 100vh;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── SIDEBAR ──────────────────────────────── */
+#sidebar {
+  width: 260px;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo-mark {
+  width: 28px;
+  height: 28px;
+  background: var(--ora);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #000;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.logo-text {
+  font-family: var(--font-serif);
+  font-size: 16px;
+}
+
+.sidebar-nav {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+}
+
+.nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: var(--text2);
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.nav-btn:hover {
+  background: var(--bg3);
+  color: var(--text);
+}
+
+.nav-btn.active {
+  background: var(--ora-dim);
+  color: var(--ora);
+}
+
+/* ── MAIN ─────────────────────────────────── */
+#main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── TOPBAR ───────────────────────────────── */
+#topbar {
+  height: 50px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+}
+
+#topbar-title {
+  font-family: var(--font-serif);
+  font-size: 16px;
+}
+
+/* ── PANELS ──────────────────────────────── */
+.panel {
+  display: none;
+  flex: 1;
+}
+
+.panel.active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── HOME ───────────────────────────────── */
+#panel-home {
+  padding: 40px;
+  overflow-y: auto;
+}
+
+.home-heading {
+  font-family: var(--font-serif);
+  font-size: 32px;
+  margin-bottom: 12px;
+}
+
+.home-heading em {
+  color: var(--ora);
+}
+
+/* ── CARDS ──────────────────────────────── */
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.quick-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  padding: 18px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.quick-card:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-2px);
+}
+
+/* ── FORM ───────────────────────────────── */
+.field-label {
+  font-size: 11px;
+  color: var(--text3);
+  margin-bottom: 5px;
+  font-family: var(--font-mono);
+}
+
+.field-input,
+.field-select,
+.field-textarea {
+  width: 100%;
+  padding: 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  outline: none;
+}
+
+.field-input:focus,
+.field-select:focus,
+.field-textarea:focus {
+  border-color: var(--border-hover);
+}
+
+/* ── BUTTONS ────────────────────────────── */
+.run-btn {
+  width: 100%;
+  padding: 11px;
+  background: var(--ora);
+  border: none;
+  border-radius: 6px;
+  color: #000;
+  cursor: pointer;
+}
+
+.run-btn:hover {
+  background: #00e68a;
+}
+
+/* ── OUTPUT ────────────────────────────── */
+.output-body {
+  line-height: 1.8;
+}
+
+.output-body h1,
+.output-body h2 {
+  margin: 20px 0 10px;
+  font-family: var(--font-serif);
+}
+
+.output-body h2 {
+  color: var(--ora);
+}
+
+/* ── LOADER ───────────────────────────── */
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 2px solid var(--bg4);
+  border-top: 2px solid var(--ora);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── TOAST ────────────────────────────── */
+#toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: var(--bg3);
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  opacity: 0;
+  transition: 0.3s;
+}
+
+#toast.show {
+  opacity: 1;
+}
+
+/* ── SCROLLBAR ────────────────────────── */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg4);
+}
+/* ── SIDEBAR EXTRA UI ───────────────────── */
+
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ora-eye {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--bg3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+}
+
+.ora-eye-inner {
+  width: 10px;
+  height: 10px;
+  background: var(--ora);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--ora);
+}
+
+.ora-name {
+  font-family: var(--font-serif);
+  font-size: 14px;
+}
+
+.ora-sub {
+  font-size: 10px;
+  color: var(--text3);
+}
+
+.sidebar-clock {
+  padding: 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  border-bottom: 1px solid var(--border);
+}
+
+.status-dot.offline {
+  background: var(--red);
+}
+
+.agent-pulse {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ora);
+  box-shadow: 0 0 6px var(--ora);
+}
+
+.nav-badge {
+  margin-left: auto;
+  background: var(--red);
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+}
