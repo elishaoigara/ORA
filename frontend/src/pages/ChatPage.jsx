@@ -33,7 +33,6 @@ const THINKING_STATES = [
   "Searching memory...",
   "Processing request...",
   "Formulating response...",
-  "Checking knowledge base...",
 ];
 
 export default function ChatPage() {
