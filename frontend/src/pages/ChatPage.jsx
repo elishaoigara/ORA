@@ -1,5 +1,4 @@
-/** @jsxImportSource react */
-import { useState, useEffect, useRef, useCallback, forwardRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { sendMessage, getConversations } from "../api";
 import BASE from "../api";
 
@@ -232,7 +231,7 @@ export default function ChatPage() {
         {messages.length === 0 && (
           <div className="welcome-modern">
             <div className="welcome-icon">✨</div>
-            <h3 className="welcome-title">Welcome back, Elisha.</h3>
+            <h3 className="welcome-title">Welcome back.</h3>
             <p className="welcome-text">ORA is standing by. Ask me about tasks, goals, spending, or anything you need assistance with.</p>
             <div className="welcome-hint">Try: "Show my pending tasks" or "What should I focus on?"</div>
           </div>
