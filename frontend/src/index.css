@@ -721,3 +721,53 @@ html, body, #root {
     align-items: flex-start;
   }
 }
+/* Smoother Card Animations - POI Style */
+.poi-card {
+  transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+  opacity: 0;
+  transform: translateY(20px);
+  animation: cardEnter 0.6s forwards;
+}
+
+.poi-card:nth-child(1) { animation-delay: 0.05s; }
+.poi-card:nth-child(2) { animation-delay: 0.15s; }
+.poi-card:nth-child(3) { animation-delay: 0.25s; }
+.poi-card:nth-child(4) { animation-delay: 0.35s; }
+
+@keyframes cardEnter {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Hover glow effect */
+.poi-card:hover {
+  box-shadow: 0 0 25px rgba(0, 255, 157, 0.25);
+  border-color: #00ff9d;
+  transform: translateY(-2px);
+}
+
+/* Alert row smooth transition */
+.alert-row {
+  transition: background 0.3s ease;
+}
+
+.alert-row:hover {
+  background: rgba(255, 60, 60, 0.08);
+}
+
+/* Meter bar animation */
+.meter-bar {
+  transition: width 1.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Priority badge pulse */
+.priority-badge.high {
+  animation: priorityPulse 2s ease-in-out infinite;
+}
+
+@keyframes priorityPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  70% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+}
