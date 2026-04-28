@@ -29,12 +29,11 @@ export default function Sidebar({ current, onNavigate }) {
       const now = new Date();
       setTime(now.toLocaleTimeString("en-KE", { hour12: false }));
       setDate(
-        now
-          .toLocaleDateString("en-KE", {
-            weekday: "long",
-            day: "2-digit",
-            month: "long",
-          })
+        now.toLocaleDateString("en-KE", {
+          weekday: "short",
+          day: "2-digit",
+          month: "short",
+        })
       );
     };
 
@@ -106,17 +105,17 @@ export default function Sidebar({ current, onNavigate }) {
   }, []);
 
   const getStatusConfig = () => {
-    if (!online) return { text: "Offline", color: "#ef4444", bg: "#7f1d1d", dot: "#ef4444" };
-    if (latency > 1000) return { text: "Degraded", color: "#f97316", bg: "#7c2d12", dot: "#f97316" };
-    if (latency > 300) return { text: "Slow", color: "#eab308", bg: "#713f12", dot: "#eab308" };
-    return { text: "Online", color: "#22c55e", bg: "#14532d", dot: "#22c55e" };
+    if (!online) return { text: "Offline", color: "#ef4444", bg: "rgba(239, 68, 68, 0.1)", dot: "#ef4444" };
+    if (latency > 1000) return { text: "Degraded", color: "#f97316", bg: "rgba(249, 115, 22, 0.1)", dot: "#f97316" };
+    if (latency > 300) return { text: "Slow", color: "#eab308", bg: "rgba(234, 179, 8, 0.1)", dot: "#eab308" };
+    return { text: "Online", color: "#10b981", bg: "rgba(16, 185, 129, 0.1)", dot: "#10b981" };
   };
 
   const getAgentConfig = () => {
-    if (!agentCtx) return { state: "Idle", icon: "💤", color: "#6b7280", bg: "#374151" };
-    if (agentCtx.overdue > 0) return { state: "Critical", icon: "🚨", color: "#ef4444", bg: "#7f1d1d" };
-    if (agentCtx.tasks > 0) return { state: "Active", icon: "⚡", color: "#eab308", bg: "#713f12" };
-    return { state: "Monitoring", icon: "👁️", color: "#22c55e", bg: "#14532d" };
+    if (!agentCtx) return { state: "Idle", icon: "💤", color: "#71717a", bg: "rgba(113, 113, 122, 0.1)" };
+    if (agentCtx.overdue > 0) return { state: "Critical", icon: "🚨", color: "#ef4444", bg: "rgba(239, 68, 68, 0.1)" };
+    if (agentCtx.tasks > 0) return { state: "Active", icon: "⚡", color: "#f59e0b", bg: "rgba(245, 158, 11, 0.1)" };
+    return { state: "Monitoring", icon: "👁️", color: "#10b981", bg: "rgba(16, 185, 129, 0.1)" };
   };
 
   const status = getStatusConfig();
@@ -128,16 +127,16 @@ export default function Sidebar({ current, onNavigate }) {
       <div className="sidebar-header">
         <div className="logo-wrapper">
           <div className="logo-icon">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#22c55e" strokeWidth="1.5" fill="#22c55e" fillOpacity="0.2"/>
-              <path d="M2 17L12 22L22 17" stroke="#22c55e" strokeWidth="1.5" fill="none"/>
-              <path d="M2 12L12 17L22 12" stroke="#22c55e" strokeWidth="1.5" fill="none"/>
-              <circle cx="12" cy="12" r="2" fill="#22c55e"/>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#10b981" strokeWidth="1.5" fill="#10b981" fillOpacity="0.15"/>
+              <path d="M2 17L12 22L22 17" stroke="#10b981" strokeWidth="1.5" fill="none"/>
+              <path d="M2 12L12 17L22 12" stroke="#10b981" strokeWidth="1.5" fill="none"/>
+              <circle cx="12" cy="12" r="2" fill="#10b981"/>
             </svg>
           </div>
           <div className="logo-text">
             <div className="logo-name">ORA</div>
-            <div className="logo-subtitle">AI Core v2.0</div>
+            <div className="logo-subtitle">AI Assistant</div>
           </div>
         </div>
       </div>
@@ -151,17 +150,13 @@ export default function Sidebar({ current, onNavigate }) {
       {/* System Status Card */}
       <div className="status-card-modern">
         <div className="card-header">
-          <span className="card-title">System Status</span>
-          <span className={`status-badge ${status.text.toLowerCase()}`} style={{ background: status.bg, color: status.color }}>
+          <span className="card-title">System</span>
+          <span className="status-badge" style={{ background: status.bg, color: status.color }}>
             <span className="status-dot" style={{ background: status.dot }} />
             {status.text}
           </span>
         </div>
         <div className="card-stats">
-          <div className="stat-row">
-            <span className="stat-label">Uptime</span>
-            <span className="stat-value">99.98%</span>
-          </div>
           {latency && (
             <div className="stat-row">
               <span className="stat-label">Latency</span>
@@ -169,8 +164,8 @@ export default function Sidebar({ current, onNavigate }) {
             </div>
           )}
           <div className="stat-row">
-            <span className="stat-label">Last Sync</span>
-            <span className="stat-value">Just now</span>
+            <span className="stat-label">Connection</span>
+            <span className="stat-value">{online ? "Stable" : "Lost"}</span>
           </div>
         </div>
       </div>
@@ -179,7 +174,7 @@ export default function Sidebar({ current, onNavigate }) {
       {agentCtx && (
         <div className={`agent-card-modern ${cycleFlash ? "pulse" : ""}`}>
           <div className="card-header">
-            <span className="card-title">Agent Status</span>
+            <span className="card-title">Agent</span>
             <span className="agent-badge" style={{ background: agent.bg, color: agent.color }}>
               {agent.icon} {agent.state}
             </span>
@@ -191,19 +186,13 @@ export default function Sidebar({ current, onNavigate }) {
             </div>
             <div className="metric-item">
               <div className="metric-label">Overdue</div>
-              <div className="metric-number" style={{ color: agentCtx.overdue > 0 ? "#ef4444" : "#6b7280" }}>
+              <div className="metric-number" style={{ color: agentCtx.overdue > 0 ? "#ef4444" : "#71717a" }}>
                 {agentCtx.overdue ?? 0}
               </div>
             </div>
             <div className="metric-item">
               <div className="metric-label">Goals</div>
               <div className="metric-number">{agentCtx.goals ?? 0}</div>
-            </div>
-            <div className="metric-item">
-              <div className="metric-label">Alerts</div>
-              <div className="metric-number" style={{ color: unreadAlerts > 0 ? "#ef4444" : "#6b7280" }}>
-                {unreadAlerts}
-              </div>
             </div>
           </div>
         </div>
@@ -230,13 +219,13 @@ export default function Sidebar({ current, onNavigate }) {
       <div className="sidebar-footer">
         <div className="connection-status">
           <div className={`connection-indicator ${online ? "online" : "offline"}`} />
-          <span className="connection-text">{online ? "Connected to Core" : "Reconnecting..."}</span>
+          <span className="connection-text">{online ? "Connected" : "Disconnected"}</span>
         </div>
         <div className="footer-divider" />
         <div className="system-info">
-          <span>Nairobi, KE</span>
+          <span>KE</span>
           <span>•</span>
-          <span>v2.0.0</span>
+          <span>v2.0</span>
         </div>
       </div>
     </aside>
