@@ -20,10 +20,7 @@ function Meter({ label, value = 0, unit = "%" }) {
       <div className="meter-track">
         <div 
           className="meter-bar" 
-          style={{ 
-            width: `${v}%`, 
-            background: color 
-          }} 
+          style={{ width: `${v}%`, background: color }} 
         />
       </div>
     </div>
@@ -42,24 +39,20 @@ function TheNumber({ task }) {
       
       <div className="the-number-meta">
         <span 
-          className="priority-badge"
-          style={{ 
-            background: task.priority === "high" ? "rgba(239,68,68,0.15)" : 
-                       task.priority === "medium" ? "rgba(245,158,11,0.15)" : "rgba(0,255,157,0.15)",
-            color: task.priority === "high" ? "var(--red)" : 
-                   task.priority === "medium" ? "var(--amber)" : "var(--green)"
-          }}
+          className={`priority-badge ${task.priority || 'medium'}`}
         >
-          {task.priority?.toUpperCase()}
+          {(task.priority || 'MEDIUM').toUpperCase()}
         </span>
         
         {task.overdue && <span className="overdue-badge">⚠ OVERDUE</span>}
         
-        <span className="the-number-reason">{task.reason}</span>
+        {task.reason && <span className="the-number-reason">{task.reason}</span>}
         
-        <span className="score">
-          SCORE <span className="score-value">{task.score}</span>
-        </span>
+        {task.score && (
+          <span className="score">
+            SCORE <span className="score-value">{task.score}</span>
+          </span>
+        )}
       </div>
     </div>
   );
@@ -70,11 +63,11 @@ function MpesaWidget({ summary }) {
 
   const today = summary.today || { total: 0, transactions: 0 };
   const avg = summary.average_daily || 0;
-  const ratio = avg > 0 ? (today.total / avg) : 0;
+  const ratio = avg > 0 ? today.total / avg : 0;
   const color = ratio >= 3 ? "var(--red)" : ratio >= 1.5 ? "var(--amber)" : "var(--green)";
 
   return (
-    <div className="card">
+    <div className="card mpesa-card">
       <div className="card-title">// M-Pesa Financial Snapshot</div>
       
       <div className="mpesa-main">
@@ -82,7 +75,9 @@ function MpesaWidget({ summary }) {
           <div className="mpesa-amount" style={{ color }}>
             KES {(today.total || 0).toLocaleString()}
           </div>
-          <div className="mpesa-sub">spent today • {today.transactions} transactions</div>
+          <div className="mpesa-sub">
+            spent today • {today.transactions} transactions
+          </div>
         </div>
 
         <div className="mpesa-avg">
@@ -95,7 +90,7 @@ function MpesaWidget({ summary }) {
         <div 
           className="mpesa-bar" 
           style={{ 
-            width: `${Math.min(ratio * 35, 100)}%`, 
+            width: `${Math.min(ratio * 40, 100)}%`, 
             background: color 
           }} 
         />
@@ -137,7 +132,9 @@ function CalendarWidget({ events }) {
         // Today's Calendar • {events.length} event{events.length > 1 ? "s" : ""}
       </div>
       {events.slice(0, 5).map((e, i) => {
-        const isImminent = e.minutes_until != null && e.minutes_until >= 0 && e.minutes_until <= 30;
+        const isImminent = e.minutes_until != null && 
+                          e.minutes_until >= 0 && 
+                          e.minutes_until <= 30;
         
         return (
           <div key={i} className={`calendar-event ${isImminent ? 'imminent' : ''}`}>
@@ -205,7 +202,10 @@ function AgentRibbon({ ctx }) {
         TASKS <span className="agent-ribbon-val">{ctx.tasks ?? 0}</span>
       </div>
       <div className="agent-ribbon-item">
-        OVERDUE <span className="agent-ribbon-val" style={{ color: (ctx.overdue ?? 0) > 0 ? "var(--red)" : "var(--green)" }}>
+        OVERDUE <span 
+          className="agent-ribbon-val" 
+          style={{ color: (ctx.overdue ?? 0) > 0 ? "var(--red)" : "var(--green)" }}
+        >
           {ctx.overdue ?? 0}
         </span>
       </div>
@@ -227,7 +227,7 @@ function AgentRibbon({ ctx }) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// MAIN DASHBOARD
+// MAIN DASHBOARD COMPONENT
 // ─────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -266,12 +266,12 @@ export default function DashboardPage() {
     if (ag) setAgentCtx(ag);
   }, []);
 
-  const ack = async (id) => {
+  const handleAck = async (id) => {
     await ackAlert(id).catch(() => {});
     fetchAll();
   };
 
-  const ackAll = async () => {
+  const handleAckAll = async () => {
     await ackAllAlerts().catch(() => {});
     fetchAll();
   };
@@ -294,7 +294,7 @@ export default function DashboardPage() {
 
       <AgentRibbon ctx={agentCtx} />
 
-      {/* Quick Stats */}
+      {/* Quick Stats Row */}
       <div className="grid-3" style={{ marginBottom: "1.25rem" }}>
         <div className="stat-box">
           <div className="stat-num">{tasks.length}</div>
@@ -332,17 +332,17 @@ export default function DashboardPage() {
           ) : (
             <div className="empty">
               <div className="empty-icon">⌛</div>
-              {status === null ? "Connecting..." : "Backend unreachable"}
+              {status === null ? "Connecting to ORA..." : "Backend unreachable"}
             </div>
           )}
         </div>
 
-        {/* Alerts */}
+        {/* Alerts Feed */}
         <div className="card">
           <div className="card-header-with-action">
             <div className="card-title">// Alert Feed</div>
             {activeAlerts.length > 0 && (
-              <button className="btn btn-ghost small" onClick={ackAll}>
+              <button className="btn btn-ghost small" onClick={handleAckAll}>
                 ACK ALL
               </button>
             )}
@@ -357,10 +357,13 @@ export default function DashboardPage() {
             activeAlerts.slice(0, 4).map(a => (
               <div key={a.id} className={`alert-row ${a.severity}`}>
                 <div className="alert-header">
-                  <div className="alert-severity" style={{ color: a.severity === "high" ? "var(--red)" : "var(--amber)" }}>
+                  <div className="alert-severity">
                     {a.severity?.toUpperCase()}
                   </div>
-                  <button className="btn btn-ghost tiny" onClick={() => ack(a.id)}>
+                  <button 
+                    className="btn btn-ghost tiny" 
+                    onClick={() => handleAck(a.id)}
+                  >
                     ACK
                   </button>
                 </div>
@@ -382,7 +385,7 @@ export default function DashboardPage() {
           {tasks.length === 0 ? (
             <div className="empty">
               <div className="empty-icon">◆</div>
-              No pending tasks
+              Queue empty — Add tasks via chat or Telegram
             </div>
           ) : (
             tasks.slice(0, 5).map(t => (
@@ -394,8 +397,8 @@ export default function DashboardPage() {
                     {t.due_at && ` • DUE ${t.due_at.slice(11, 16)}`}
                   </div>
                 </div>
-                <div className={`priority-badge ${t.priority}`}>
-                  {t.priority?.toUpperCase()}
+                <div className={`priority-badge ${t.priority || 'medium'}`}>
+                  {(t.priority || 'MEDIUM').toUpperCase()}
                 </div>
               </div>
             ))
