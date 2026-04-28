@@ -1,248 +1,934 @@
-/* ORA Research — Modern Dark UI (matched with main app) */
-.research-page {
-  height: 100vh;
-  background: #020408;
-  color: #e2e8f0;
+/* ORA Research Agent — Cyber/Military Theme
+   Matches: Rajdhani font, amber+green accents, dark bg, scanline aesthetic
+   ─────────────────────────────────────────────────────────────────────── */
+
+.r-page {
   display: flex;
   flex-direction: column;
-  font-family: 'Inter', system-ui, sans-serif;
+  height: 100%;
   overflow: hidden;
+  background: var(--bg);
+  font-family: 'Rajdhani', sans-serif;
 }
 
-.research-header {
-  padding: 20px 24px;
-  border-bottom: 1px solid #1e2937;
-  background: rgba(2, 4, 8, 0.95);
-  backdrop-filter: blur(8px);
-  z-index: 10;
+/* ── HEADER ──────────────────────────────────────────────── */
+.r-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border2);
+  background: var(--bg1);
+  flex-shrink: 0;
+  gap: 16px;
 }
 
-.research-logo {
+.r-header-left {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.logo-mark {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(135deg, #00ff9d, #00cc7a);
-  border-radius: 8px;
+.r-logo-mark {
+  width: 34px;
+  height: 34px;
+  background: linear-gradient(135deg, var(--green), #00cc7a);
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #000;
-  font-weight: 700;
-  font-size: 15px;
-  box-shadow: 0 0 15px rgba(0, 255, 157, 0.6);
-}
-
-.research-title {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.4px;
-}
-
-.research-subtitle {
+  font-family: 'Share Tech Mono', monospace;
   font-size: 11px;
-  color: #00ff9d;
-  font-family: 'JetBrains Mono', monospace;
-  letter-spacing: 1px;
+  font-weight: 700;
+  color: #000;
+  box-shadow: 0 0 14px rgba(0,255,157,0.5);
+  flex-shrink: 0;
 }
 
-.research-main {
+.r-title {
+  font-family: 'Orbitron', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text2);
+  letter-spacing: 0.12em;
+}
+
+.r-subtitle {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--green);
+  letter-spacing: 0.14em;
+  margin-top: 2px;
+}
+
+.r-header-stats {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.r-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.r-stat-num {
+  font-family: 'Orbitron', monospace;
+  font-size: 16px;
+  color: var(--amber);
+  line-height: 1;
+}
+
+.r-stat-num.r-model {
+  font-size: 12px;
+  color: var(--green);
+}
+
+.r-stat-label {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 8px;
+  color: var(--text3);
+  letter-spacing: 0.1em;
+}
+
+.r-stat-div {
+  width: 1px;
+  height: 24px;
+  background: var(--border2);
+}
+
+/* ── TABS ────────────────────────────────────────────────── */
+.r-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 16px;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--border2);
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.r-tabs::-webkit-scrollbar { display: none; }
+
+.r-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text3);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.r-tab:hover {
+  color: var(--text2);
+  border-bottom-color: var(--border2);
+}
+
+.r-tab.active {
+  color: var(--amber);
+  border-bottom-color: var(--amber);
+}
+
+.r-tab-icon {
+  font-size: 13px;
+}
+
+/* ── BODY LAYOUT ─────────────────────────────────────────── */
+.r-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── LEFT PANEL ──────────────────────────────────────────── */
+.r-left {
+  width: 270px;
+  flex-shrink: 0;
+  background: var(--bg1);
+  border-right: 1px solid var(--border2);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.r-section-label {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text3);
+  letter-spacing: 0.12em;
+  padding: 14px 16px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.r-config {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── FORM ELEMENTS ───────────────────────────────────────── */
+.r-label {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text3);
+  letter-spacing: 0.1em;
+  display: block;
+  margin-bottom: -4px;
+}
+
+.r-textarea {
+  width: 100%;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--text2);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.r-textarea:focus {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 2px rgba(245,158,11,0.12);
+}
+.r-textarea::placeholder { color: var(--text3); }
+
+.r-select {
+  width: 100%;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 9px 12px;
+  color: var(--text2);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%233d5a70'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+.r-select:focus { border-color: var(--amber); }
+.r-select option { background: var(--bg2); }
+
+/* ── UPLOAD ZONE ─────────────────────────────────────────── */
+.r-upload-zone {
+  border: 1.5px dashed var(--border2);
+  border-radius: 8px;
+  padding: 18px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: var(--bg2);
+}
+.r-upload-zone:hover, .r-upload-zone.has-file {
+  border-color: var(--amber);
+  background: rgba(245,158,11,0.05);
+}
+
+.r-upload-icon {
+  font-size: 22px;
+  color: var(--text3);
+  margin-bottom: 6px;
+}
+
+.r-upload-text {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  color: var(--text);
+  letter-spacing: 0.06em;
+}
+
+.r-upload-hint {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text3);
+  margin-top: 4px;
+  letter-spacing: 0.06em;
+}
+
+.r-file-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+
+.r-file-name {
+  font-size: 12px;
+  color: var(--text2);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.r-file-size {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: var(--text3);
+  flex-shrink: 0;
+}
+
+.r-file-rm {
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.r-file-rm:hover { color: var(--red); }
+
+/* ── RUN BUTTON ──────────────────────────────────────────── */
+.r-run-btn {
+  width: 100%;
+  padding: 11px;
+  background: linear-gradient(135deg, var(--amber), #d97706);
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+  overflow: hidden;
+}
+.r-run-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.15), transparent);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.r-run-btn:hover:not(:disabled)::before { opacity: 1; }
+.r-run-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(245,158,11,0.35); }
+.r-run-btn:disabled {
+  background: var(--bg3);
+  color: var(--text3);
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* ── SESSIONS ────────────────────────────────────────────── */
+.r-sessions {
+  border-bottom: 1px solid var(--border);
+}
+
+.r-session-row {
+  padding: 9px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.12s;
+}
+.r-session-row:hover { background: var(--bg2); }
+
+.r-session-title {
+  font-size: 12px;
+  color: var(--text2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+
+.r-session-meta {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text3);
+  margin-top: 2px;
+  letter-spacing: 0.04em;
+}
+
+/* ── KB ROWS ─────────────────────────────────────────────── */
+.r-kb-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.r-kb-row:last-child { border: none; }
+
+.r-kb-icon { font-size: 16px; flex-shrink: 0; }
+
+.r-kb-name {
+  font-size: 12px;
+  color: var(--text2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.r-kb-meta {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text3);
+  margin-top: 2px;
+}
+
+.r-empty-small {
+  font-size: 12px;
+  color: var(--text3);
+  text-align: center;
+  padding: 16px 0;
+  font-family: 'Share Tech Mono', monospace;
+  letter-spacing: 0.06em;
+}
+
+/* ── RIGHT PANEL ─────────────────────────────────────────── */
+.r-right {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* ── LOADING STATE ───────────────────────────────────────── */
+.r-loading {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 24px;
-  gap: 20px;
-  overflow: auto;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 40px;
 }
 
-.mode-selector {
+.r-spinner {
+  width: 44px;
+  height: 44px;
+  border: 2px solid var(--border2);
+  border-top-color: var(--amber);
+  border-right-color: var(--green);
+  border-radius: 50%;
+  animation: r-spin 0.9s linear infinite;
+}
+@keyframes r-spin { to { transform: rotate(360deg); } }
+
+.r-load-msg {
+  font-family: 'Orbitron', monospace;
+  font-size: 12px;
+  color: var(--amber);
+  letter-spacing: 0.12em;
+  animation: r-pulse 1.4s ease-in-out infinite;
+}
+@keyframes r-pulse { 0%,100%{opacity:0.5} 50%{opacity:1} }
+
+.r-load-sub {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text3);
+  letter-spacing: 0.1em;
+}
+
+/* ── EMPTY STATE ─────────────────────────────────────────── */
+.r-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px;
+  text-align: center;
+}
+
+.r-empty-icon {
+  font-size: 52px;
+  color: var(--text3);
+  opacity: 0.25;
+  font-family: 'Share Tech Mono', monospace;
+}
+
+.r-empty-title {
+  font-family: 'Orbitron', monospace;
+  font-size: 14px;
+  color: var(--text3);
+  letter-spacing: 0.1em;
+}
+
+.r-empty-sub {
+  font-size: 13px;
+  color: var(--text3);
+}
+
+.r-empty-caps {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.r-empty-cap {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text3);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 3px 8px;
+  letter-spacing: 0.08em;
+}
+
+/* ── OUTPUT WRAPPER ──────────────────────────────────────── */
+.r-output-wrap {
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 100%;
+}
+
+.r-output-header {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border2);
+}
+
+.r-output-title {
+  font-family: 'Orbitron', monospace;
+  font-size: 15px;
+  color: var(--text2);
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.r-output-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.r-tag {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg2);
+  color: var(--text3);
+  border: 1px solid var(--border2);
+}
+.r-tag.amber { background: rgba(245,158,11,0.1); color: var(--amber); border-color: rgba(245,158,11,0.3); }
+.r-tag.green { background: rgba(0,255,157,0.08); color: var(--green); border-color: rgba(0,255,157,0.25); }
+
+/* ── OUTPUT BODY (markdown) ──────────────────────────────── */
+.r-output-body {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--text);
+  flex: 1;
+}
+
+.r-output-body h1 {
+  font-family: 'Orbitron', monospace;
+  font-size: 15px;
+  color: var(--text2);
+  letter-spacing: 0.08em;
+  margin: 22px 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border2);
+}
+
+.r-output-body h2 {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--amber);
+  letter-spacing: 0.06em;
+  margin: 18px 0 6px;
+}
+
+.r-output-body h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--green);
+  margin: 14px 0 4px;
+  letter-spacing: 0.04em;
+}
+
+.r-output-body p { margin-bottom: 12px; }
+
+.r-output-body ul {
+  margin: 0 0 12px 20px;
+}
+.r-output-body li {
+  margin-bottom: 5px;
+  color: var(--text);
+}
+
+.r-output-body strong { color: var(--text2); font-weight: 600; }
+.r-output-body em { color: var(--text3); font-style: italic; }
+
+.r-output-body code {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  padding: 1px 6px;
+  color: var(--amber);
+}
+
+.r-output-body blockquote {
+  border-left: 2px solid var(--amber);
+  padding-left: 14px;
+  margin: 14px 0;
+  color: var(--text3);
+  font-style: italic;
+}
+
+.r-citation {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: var(--green);
+  background: rgba(0,255,157,0.06);
+  border: 1px solid rgba(0,255,157,0.2);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ── OUTPUT ACTIONS ──────────────────────────────────────── */
+.r-output-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  padding-top: 14px;
+  border-top: 1px solid var(--border2);
 }
 
-.mode-btn {
-  padding: 8px 16px;
-  background: #111827;
-  border: 1px solid #1e2937;
-  border-radius: 8px;
-  color: #94a3b8;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.mode-btn.active,
-.mode-btn:hover {
-  background: rgba(0, 255, 157, 0.1);
-  border-color: #00ff9d;
-  color: #00ff9d;
-}
-
-.input-area {
-  background: #0a0f1a;
-  border: 1px solid #1e2937;
-  border-radius: 12px;
-  padding: 20px;
-}
-
-.research-input {
-  width: 100%;
-  background: #020408;
-  border: 1px solid #1e2937;
-  border-radius: 10px;
-  padding: 14px 16px;
-  color: #e2e8f0;
-  font-size: 15px;
-  resize: vertical;
-  min-height: 80px;
-  outline: none;
-}
-
-.research-input:focus {
-  border-color: #00ff9d;
-  box-shadow: 0 0 0 3px rgba(0, 255, 157, 0.15);
-}
-
-.input-actions {
-  margin-top: 12px;
-  text-align: right;
-}
-
-.run-btn {
-  background: #00ff9d;
-  color: #000;
-  border: none;
-  padding: 12px 28px;
-  border-radius: 8px;
-  font-weight: 600;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.run-btn:hover:not(:disabled) {
-  background: #00e68a;
-  transform: translateY(-1px);
-}
-
-.run-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.output-area {
-  flex: 1;
-  background: #0a0f1a;
-  border: 1px solid #1e2937;
-  border-radius: 12px;
-  padding: 24px;
-  min-height: 300px;
-  overflow: auto;
-}
-
-.loading-state {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  color: #64748b;
-}
-
-.spinner {
-  width: 42px;
-  height: 42px;
-  border: 3px solid #1e2937;
-  border-top-color: #00ff9d;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.result-card {
-  background: #111827;
-  border: 1px solid #00ff9d33;
-  border-radius: 12px;
-  padding: 20px;
-}
-
-.result-header {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 16px;
+.r-act-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  background: none;
+  color: var(--text3);
+  font-family: 'Rajdhani', sans-serif;
   font-size: 12px;
-  color: #64748b;
-}
-
-.result-mode {
-  color: #00ff9d;
   font-weight: 600;
-  letter-spacing: 0.5px;
-}
-
-.result-content {
-  line-height: 1.75;
-  white-space: pre-wrap;
-  color: #cbd5e1;
-}
-
-.result-actions {
-  margin-top: 20px;
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.action-btn {
-  background: transparent;
-  border: 1px solid #1e2937;
-  color: #94a3b8;
-  padding: 8px 16px;
-  border-radius: 6px;
-  font-size: 13px;
+  letter-spacing: 0.06em;
   cursor: pointer;
-  transition: all 0.2s;
-}
-
-.action-btn:hover {
-  border-color: #00ff9d;
-  color: #00ff9d;
-}
-
-.empty-state {
-  height: 100%;
+  transition: all 0.15s;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  color: #475569;
+  gap: 5px;
+}
+.r-act-btn:hover { border-color: var(--amber); color: var(--amber); background: rgba(245,158,11,0.06); }
+.r-act-btn.primary {
+  background: rgba(245,158,11,0.1);
+  border-color: rgba(245,158,11,0.4);
+  color: var(--amber);
+}
+
+/* ── EXTRACTION GRID ─────────────────────────────────────── */
+.r-extract-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
 
-.empty-icon {
-  font-size: 48px;
-  opacity: 0.3;
+.r-ext-card {
+  background: var(--bg1);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.r-ext-card.full { grid-column: 1 / -1; }
+.r-ext-card.highlight {
+  border-color: rgba(0,255,157,0.3);
+  background: rgba(0,255,157,0.04);
 }
 
-.empty-text {
+.r-ext-title {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text3);
+  letter-spacing: 0.1em;
+  margin-bottom: 8px;
+}
+.r-ext-card.highlight .r-ext-title { color: var(--green); }
+
+.r-ext-item {
+  font-size: 12px;
+  color: var(--text);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.4;
+}
+.r-ext-item:last-child { border: none; }
+
+.r-ext-text {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+}
+.r-ext-card.highlight .r-ext-text { color: var(--green); }
+
+.r-ext-empty {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: var(--text3);
+}
+
+/* ── PRESENTATION VIEWER ─────────────────────────────────── */
+.r-pptx {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.r-pptx-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg1);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 8px 14px;
+}
+
+.r-pptx-nav {
+  background: none;
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  color: var(--text2);
+  cursor: pointer;
+  padding: 4px 12px;
   font-size: 14px;
+  transition: all 0.12s;
+}
+.r-pptx-nav:hover:not(:disabled) { border-color: var(--amber); color: var(--amber); }
+.r-pptx-nav:disabled { opacity: 0.25; cursor: not-allowed; }
+
+.r-pptx-counter {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  color: var(--text3);
+  flex: 1;
+  text-align: center;
+  letter-spacing: 0.08em;
 }
 
-/* Responsive */
-@media (max-width: 768px) {
-  .research-main {
-    padding: 16px;
-  }
-  .mode-selector {
-    justify-content: center;
-  }
+/* ── SLIDE CANVAS ────────────────────────────────────────── */
+.r-slide {
+  aspect-ratio: 16/9;
+  background: linear-gradient(135deg, var(--bg1) 0%, var(--bg2) 100%);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  padding: 36px 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.r-slide-glow {
+  position: absolute;
+  top: -60px; right: -60px;
+  width: 240px; height: 240px;
+  background: radial-gradient(circle, rgba(245,158,11,0.06) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.r-slide::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: linear-gradient(to bottom, transparent, var(--amber), transparent);
+  opacity: 0.5;
+}
+
+.r-slide-title,
+.r-slide-heading {
+  font-family: 'Orbitron', monospace;
+  font-size: clamp(14px, 2.2vw, 22px);
+  color: var(--text2);
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+  margin-bottom: 16px;
+}
+
+.r-slide-subtitle {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: clamp(10px, 1.2vw, 13px);
+  color: var(--amber);
+  letter-spacing: 0.1em;
+}
+
+.r-slide-quote {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: clamp(13px, 1.8vw, 18px);
+  font-style: italic;
+  color: var(--text2);
+  line-height: 1.6;
+  border-left: 3px solid var(--amber);
+  padding-left: 18px;
+  margin-bottom: 14px;
+}
+
+.r-slide-attr {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: clamp(9px, 1vw, 11px);
+  color: var(--amber);
+  letter-spacing: 0.08em;
+}
+
+.r-slide-points {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.r-slide-point {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: clamp(11px, 1.3vw, 14px);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.r-point-dot {
+  color: var(--green);
+  flex-shrink: 0;
+  margin-top: 1px;
+  font-size: 12px;
+}
+
+.r-slide-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.r-col-head {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: clamp(8px, 0.9vw, 10px);
+  color: var(--amber);
+  letter-spacing: 0.1em;
+  margin-bottom: 8px;
+}
+
+/* ── PPTX THUMBNAILS ─────────────────────────────────────── */
+.r-pptx-thumbs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 8px 2px;
+  scrollbar-width: thin;
+}
+
+.r-pptx-thumb {
+  flex-shrink: 0;
+  width: 90px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.r-pptx-thumb:hover, .r-pptx-thumb.active { border-color: var(--amber); background: rgba(245,158,11,0.06); }
+
+.r-thumb-num {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 8px;
+  color: var(--amber);
+  margin-bottom: 3px;
+}
+
+.r-thumb-title {
+  font-size: 9px;
+  color: var(--text3);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+
+.r-pptx-notes {
+  background: var(--bg1);
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--text3);
+  line-height: 1.6;
+}
+
+.r-notes-label {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--text3);
+  letter-spacing: 0.08em;
+  margin-right: 8px;
+}
+
+/* ── TOAST ───────────────────────────────────────────────── */
+.r-toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 10px 16px;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text2);
+  z-index: 9999;
+  letter-spacing: 0.04em;
+  animation: r-fadein 0.25s ease;
+  max-width: 280px;
+}
+.r-toast.success { border-color: rgba(0,255,157,0.4); color: var(--green); }
+.r-toast.error   { border-color: rgba(239,68,68,0.4);  color: var(--red); }
+
+@keyframes r-fadein {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── RESPONSIVE ──────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .r-body { flex-direction: column; overflow: auto; }
+  .r-left { width: 100%; border-right: none; border-bottom: 1px solid var(--border2); max-height: 280px; }
+  .r-header-stats { display: none; }
+  .r-extract-grid { grid-template-columns: 1fr; }
+  .r-slide-cols { grid-template-columns: 1fr; gap: 12px; }
 }
