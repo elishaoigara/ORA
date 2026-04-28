@@ -1,35 +1,34 @@
-﻿import { useState, useEffect, useRef } from "react"
-import { health, getAgentStatus, getAlerts } from "../api"
+﻿/** @jsxImportSource react */
+import { useState, useEffect, useRef } from "react";
+import { health, getAgentStatus, getAlerts } from "../api";
 
 const nav = [
-  { id: "dashboard", icon: "◈", label: "Command" },
-  { id: "chat",      icon: "◎", label: "Neural Link" },
-  { id: "tasks",     icon: "◆", label: "Task Queue" },
-  { id: "alerts",    icon: "◉", label: "Alert Feed" },
-  { id: "knowledge", icon: "▣", label: "Knowledge" },
-  { id: "memory",    icon: "≡", label: "Memory Core" },
-
-  // ✅ ADDED ORA RESEARCH PAGE
-  { id: "research", icon: "⌬", label: "Research" },
-]
+  { id: "dashboard", icon: "📊", label: "Dashboard" },
+  { id: "chat", icon: "💬", label: "Chat" },
+  { id: "tasks", icon: "✓", label: "Tasks" },
+  { id: "alerts", icon: "⚠", label: "Alerts" },
+  { id: "knowledge", icon: "📚", label: "Knowledge" },
+  { id: "memory", icon: "🧠", label: "Memory" },
+  { id: "research", icon: "🔬", label: "Research" },
+];
 
 export default function Sidebar({ current, onNavigate }) {
-  const [time, setTime] = useState("")
-  const [date, setDate] = useState("")
-  const [online, setOnline] = useState(false)
-  const [latency, setLatency] = useState(null)
+  const [time, setTime] = useState("");
+  const [date, setDate] = useState("");
+  const [online, setOnline] = useState(false);
+  const [latency, setLatency] = useState(null);
 
-  const [unreadAlerts, setUnreadAlerts] = useState(0)
-  const [agentCtx, setAgentCtx] = useState(null)
-  const [cycleFlash, setCycleFlash] = useState(false)
+  const [unreadAlerts, setUnreadAlerts] = useState(0);
+  const [agentCtx, setAgentCtx] = useState(null);
+  const [cycleFlash, setCycleFlash] = useState(false);
 
-  const pollingRef = useRef(false)
+  const pollingRef = useRef(false);
 
   /* ───────── CLOCK ───────── */
   useEffect(() => {
     const tick = () => {
-      const now = new Date()
-      setTime(now.toLocaleTimeString("en-KE", { hour12: false }))
+      const now = new Date();
+      setTime(now.toLocaleTimeString("en-KE", { hour12: false }));
       setDate(
         now
           .toLocaleDateString("en-KE", {
@@ -38,163 +37,172 @@ export default function Sidebar({ current, onNavigate }) {
             month: "short",
           })
           .toUpperCase()
-      )
-    }
+      );
+    };
 
-    tick()
-    const t = setInterval(tick, 1000)
-    return () => clearInterval(t)
-  }, [])
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, []);
 
   /* ───────── HEALTH CHECK ───────── */
   useEffect(() => {
     const check = async () => {
-      const start = performance.now()
+      const start = performance.now();
 
       try {
-        const data = await health()
-        const end = performance.now()
+        const data = await health();
+        const end = performance.now();
 
-        setOnline(data?.status === "ok")
-        setLatency(Math.round(end - start))
+        setOnline(data?.status === "ok");
+        setLatency(Math.round(end - start));
       } catch {
-        setOnline(false)
-        setLatency(null)
+        setOnline(false);
+        setLatency(null);
       }
-    }
+    };
 
-    check()
-    const t = setInterval(check, 15000)
-    return () => clearInterval(t)
-  }, [])
+    check();
+    const t = setInterval(check, 15000);
+    return () => clearInterval(t);
+  }, []);
 
   /* ───────── ALERTS ───────── */
   useEffect(() => {
     const check = async () => {
-      if (pollingRef.current) return
-      pollingRef.current = true
+      if (pollingRef.current) return;
+      pollingRef.current = true;
 
       try {
-        const data = await getAlerts(20)
+        const data = await getAlerts(20);
 
         if (Array.isArray(data)) {
-          setUnreadAlerts(
-            data.filter(a => !a.acknowledged).length
-          )
+          setUnreadAlerts(data.filter((a) => !a.acknowledged).length);
         }
       } catch {}
 
-      pollingRef.current = false
-    }
+      pollingRef.current = false;
+    };
 
-    check()
-    const t = setInterval(check, 30000)
-    return () => clearInterval(t)
-  }, [])
+    check();
+    const t = setInterval(check, 30000);
+    return () => clearInterval(t);
+  }, []);
 
   /* ───────── AGENT STATUS ───────── */
   useEffect(() => {
     const fetch_ = async () => {
       try {
-        const data = await getAgentStatus()
-        setAgentCtx(data)
+        const data = await getAgentStatus();
+        setAgentCtx(data);
 
-        setCycleFlash(true)
-        setTimeout(() => setCycleFlash(false), 600)
+        setCycleFlash(true);
+        setTimeout(() => setCycleFlash(false), 600);
       } catch {}
-    }
+    };
 
-    fetch_()
-    const t = setInterval(fetch_, 20000)
-    return () => clearInterval(t)
-  }, [])
+    fetch_();
+    const t = setInterval(fetch_, 20000);
+    return () => clearInterval(t);
+  }, []);
 
-  /* ───────── STATUS TEXT ───────── */
-  const getStatusText = () => {
-    if (!online) return "OFFLINE"
-    if (latency > 1000) return "DEGRADED"
-    if (latency > 300) return "SLOW LINK"
-    return "SYSTEMS NOMINAL"
-  }
+  /* ───────── STATUS CONFIGURATION ───────── */
+  const getStatusConfig = () => {
+    if (!online) return { text: "Offline", color: "var(--error)", dot: "offline" };
+    if (latency > 1000) return { text: "Degraded", color: "var(--error)", dot: "warning" };
+    if (latency > 300) return { text: "Slow Link", color: "var(--warning)", dot: "warning" };
+    return { text: "Operational", color: "var(--success)", dot: "online" };
+  };
 
-  /* ───────── AGENT STATE ───────── */
-  const getAgentState = () => {
-    if (!agentCtx) return "IDLE"
-    if (agentCtx.overdue > 0) return "INTERVENING"
-    if (agentCtx.tasks > 0) return "PROCESSING"
-    return "MONITORING"
-  }
+  const getAgentConfig = () => {
+    if (!agentCtx) return { state: "Idle", icon: "💤", color: "var(--text-tertiary)" };
+    if (agentCtx.overdue > 0) return { state: "Intervening", icon: "⚡", color: "var(--error)" };
+    if (agentCtx.tasks > 0) return { state: "Processing", icon: "🔄", color: "var(--warning)" };
+    return { state: "Monitoring", icon: "👁", color: "var(--success)" };
+  };
+
+  const status = getStatusConfig();
+  const agent = getAgentConfig();
 
   return (
     <aside className="sidebar">
-
-      {/* LOGO */}
+      {/* LOGO AREA */}
       <div className="sidebar-logo">
-        <div className="ora-eye">
-          <div className="ora-eye-inner" />
+        <div className="logo-icon">
+          <span>⚡</span>
         </div>
         <div>
-          <div className="ora-name">ORA</div>
-          <div className="ora-sub">Oigara's Assistant</div>
+          <div className="logo-name">ORA</div>
+          <div className="logo-sub">Personal AI Assistant</div>
         </div>
       </div>
 
-      {/* CLOCK */}
-      <div className="sidebar-clock">
-        <div>{time}</div>
-        <div style={{ fontSize: ".55rem", color: "var(--text3)" }}>
-          {date} · EAT
-        </div>
+      {/* CLOCK DISPLAY */}
+      <div className="clock-display">
+        <div className="clock-time">{time}</div>
+        <div className="clock-date">{date} · EAT</div>
       </div>
 
-      {/* STATUS */}
-      <div className="sidebar-status">
-        <div className={`status-dot ${online ? "online" : "offline"}`} />
-        <span>{getStatusText()}</span>
-
-        {latency && (
-          <span style={{ marginLeft: "auto", fontSize: ".55rem" }}>
-            {latency}ms
+      {/* SYSTEM STATUS */}
+      <div className="status-panel">
+        <div className="status-header">
+          <span className="status-label">System</span>
+          <span className="status-value" style={{ color: status.color }}>
+            {status.text}
           </span>
-        )}
+        </div>
+        <div className="status-detail">
+          <div className={`status-indicator ${status.dot}`} />
+          {latency && <span className="status-latency">{latency}ms</span>}
+        </div>
       </div>
 
-      {/* AGENT STRIP */}
+      {/* AGENT STATUS */}
       {agentCtx && (
-        <div
-          className="agent-pulse"
-          style={{
-            opacity: cycleFlash ? 1 : 0.7,
-            transition: "all .25s ease"
-          }}
-        >
-          <div className="agent-dot" />
-
-          <span style={{ color: "var(--green)" }}>
-            {getAgentState()}
-          </span>
-
-          <span style={{ marginLeft: "auto", color: "var(--amber)" }}>
-            {agentCtx.tasks ?? 0}T · {agentCtx.overdue ?? 0}OD · {agentCtx.goals ?? 0}G
-          </span>
+        <div className={`agent-panel ${cycleFlash ? "flash" : ""}`}>
+          <div className="agent-header">
+            <span className="agent-icon">{agent.icon}</span>
+            <span className="agent-state" style={{ color: agent.color }}>
+              {agent.state}
+            </span>
+          </div>
+          <div className="agent-stats">
+            <div className="stat-item">
+              <span className="stat-label">Tasks</span>
+              <span className="stat-number">{agentCtx.tasks ?? 0}</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-label">Overdue</span>
+              <span
+                className="stat-number"
+                style={{
+                  color: agentCtx.overdue > 0 ? "var(--error)" : "var(--text-tertiary)",
+                }}
+              >
+                {agentCtx.overdue ?? 0}
+              </span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-label">Goals</span>
+              <span className="stat-number">{agentCtx.goals ?? 0}</span>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* NAV */}
+      {/* NAVIGATION */}
       <nav className="sidebar-nav">
-        {nav.map(item => (
+        {nav.map((item) => (
           <button
             key={item.id}
-            className={`nav-btn ${current === item.id ? "active" : ""}`}
+            className={`nav-item ${current === item.id ? "active" : ""}`}
             onClick={() => onNavigate(item.id)}
           >
             <span className="nav-icon">{item.icon}</span>
-            <span>{item.label}</span>
+            <span className="nav-label">{item.label}</span>
 
             {item.id === "alerts" && unreadAlerts > 0 && (
-              <span className="nav-badge">
-                {unreadAlerts}
-              </span>
+              <span className="nav-badge">{unreadAlerts > 9 ? "9+" : unreadAlerts}</span>
             )}
           </button>
         ))}
@@ -202,17 +210,12 @@ export default function Sidebar({ current, onNavigate }) {
 
       {/* FOOTER */}
       <div className="sidebar-footer">
-        <div>SYS v0.5 · ELI-NBO-KE</div>
-
-        <div style={{
-          marginTop: 3,
-          color: online ? "var(--green)" : "var(--red)",
-          opacity: 0.6
-        }}>
-          {online ? "● LINK STABLE" : "○ RECONNECTING"}
+        <div className="footer-version">v0.5 · Nairobi, KE</div>
+        <div className="footer-status">
+          <span className={`footer-dot ${online ? "active" : "inactive"}`} />
+          <span>{online ? "Connected" : "Reconnecting"}</span>
         </div>
       </div>
-
     </aside>
-  )
+  );
 }
