@@ -1,9 +1,11 @@
 ﻿import { useState, useEffect } from "react";
 import { health, getAlerts } from "../api";
+import BASE_URL from "../api";
 
 const navItems = [
   { id: "dashboard", icon: "◈", label: "DASHBOARD" },
   { id: "chat",      icon: "◉", label: "CHAT" },
+  { id: "inbox",     icon: "✉", label: "INBOX" },
   { id: "tasks",     icon: "◻", label: "TASKS" },
   { id: "alerts",    icon: "△", label: "ALERTS" },
   { id: "knowledge", icon: "◆", label: "KNOWLEDGE" },
@@ -24,6 +26,7 @@ export default function Sidebar({ current, onNavigate }) {
   const [online, setOnline] = useState(false);
   const [latency, setLatency] = useState(null);
   const [unreadAlerts, setUnreadAlerts] = useState(0);
+  const [unreadEmails, setUnreadEmails] = useState(0);
 
   useEffect(() => {
     const tick = () => { const n = new Date(); setTime(fmtTime(n)); setDate(fmtDate(n)); };
@@ -58,6 +61,21 @@ export default function Sidebar({ current, onNavigate }) {
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    const checkGmail = async () => {
+      try {
+        const res = await fetch(BASE_URL + "/api/gmail/summary");
+        if (res.ok) {
+          const data = await res.json();
+          setUnreadEmails(data?.unread_count || 0);
+        }
+      } catch {}
+    };
+    checkGmail();
+    const id = setInterval(checkGmail, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
@@ -82,6 +100,9 @@ export default function Sidebar({ current, onNavigate }) {
             <span>{item.label}</span>
             {item.id === "alerts" && unreadAlerts > 0 && (
               <span className="nav-badge">{unreadAlerts}</span>
+            )}
+            {item.id === "inbox" && unreadEmails > 0 && (
+              <span className="nav-badge" style={{ background: "#ff9900" }}>{unreadEmails}</span>
             )}
           </button>
         ))}

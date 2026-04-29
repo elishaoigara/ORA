@@ -8,6 +8,8 @@ import AlertsPage from "./pages/AlertsPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import MemoryPage from "./pages/MemoryPage";
 import ResearchPage from "./pages/ResearchPage";
+import InboxPage from "./pages/InboxPage";
+import ContentPage from "./pages/ContentPage";   // ← NEW
 
 const pages = {
   dashboard: DashboardPage,
@@ -17,6 +19,8 @@ const pages = {
   knowledge: KnowledgePage,
   memory:    MemoryPage,
   research:  ResearchPage,
+  inbox:     InboxPage,
+  content:   ContentPage,     // ← NEW
 };
 
 export default function App() {

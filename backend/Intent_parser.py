@@ -4,19 +4,19 @@ Render free tier safe: pure regex/keyword parsing, zero AI calls.
 Every executor is isolated — one broken source never kills the whole parse.
 
 Supported intents:
-  add_task       "add task buy milk" / "create a task to..."
-  remind         "remind me at 3pm to call John"
-  complete_task  "mark task 3 as done" / "complete the last task"
-  delete_task    "delete task 2"
-  set_goal       "my goal is to ship the app by Friday"
-  check_tasks    "what are my tasks" / "show pending tasks"
-  spend_summary  "how much have I spent today"
-  search_docs    "search my docs for budget"
-  briefing       "give me a briefing" / "what's my status"
-  calendar       "what's on my calendar" / "any meetings today"
-  github         "any github activity" / "what's in my repos"
-  weather        "what's the weather" / "is it raining in nairobi"
-  goal_progress  "check my goals" / "how am I doing on goals"
+  add_task          "add task buy milk"
+  remind            "remind me at 3pm to call John"
+  complete_task     "mark task 3 as done"
+  delete_task       "delete task 2"
+  set_goal          "my goal is to ship the app by Friday"
+  check_tasks       "what are my tasks"
+  spend_summary     "how much have I spent today"
+  search_docs       "search my docs for budget"
+  briefing          "give me a briefing"
+  calendar          "what's on my calendar"
+  github            "any github activity"
+  weather           "what's the weather in nairobi"
+  create_content    "draft a linkedin post about ORA" / "generate twitter thread"
 """
 
 import re
@@ -97,6 +97,12 @@ _INTENTS = [
          r"\b(weather|raining|temperature|forecast|how'?s? the weather|is it hot)\b",
          re.I
      )),
+    # ── Content Creation Agent ─────────────────────────────
+    ("create_content",
+     re.compile(
+         r"\b(create|draft|write|generate|make)\s+(post|caption|linkedin|twitter|x|thread|email|content|draft)\b",
+         re.I
+     )),
 ]
 
 # ── Time patterns ─────────────────────────────────────────────
@@ -129,19 +135,20 @@ def execute_intent(intent: dict) -> str:
     payload = intent["payload"]
     try:
         dispatch = {
-            "add_task":      lambda: _do_add_task(payload),
-            "remind":        lambda: _do_remind(payload),
-            "complete_task": lambda: _do_complete_task(payload),
-            "delete_task":   lambda: _do_delete_task(payload),
-            "set_goal":      lambda: _do_set_goal(payload),
-            "goal_progress": lambda: _do_goal_progress(),
-            "check_tasks":   lambda: _do_check_tasks(),
-            "spend_summary": lambda: _do_spend_summary(),
-            "search_docs":   lambda: _do_search_docs(payload),
-            "briefing":      lambda: _do_briefing(),
-            "calendar":      lambda: _do_calendar(),
-            "github":        lambda: _do_github(),
-            "weather":       lambda: _do_weather(),
+            "add_task":       lambda: _do_add_task(payload),
+            "remind":         lambda: _do_remind(payload),
+            "complete_task":  lambda: _do_complete_task(payload),
+            "delete_task":    lambda: _do_delete_task(payload),
+            "set_goal":       lambda: _do_set_goal(payload),
+            "goal_progress":  lambda: _do_goal_progress(),
+            "check_tasks":    lambda: _do_check_tasks(),
+            "spend_summary":  lambda: _do_spend_summary(),
+            "search_docs":    lambda: _do_search_docs(payload),
+            "briefing":       lambda: _do_briefing(),
+            "calendar":       lambda: _do_calendar(),
+            "github":         lambda: _do_github(),
+            "weather":        lambda: _do_weather(),
+            "create_content": lambda: _do_create_content(payload),   # NEW
         }
         fn = dispatch.get(itype)
         if fn:
@@ -155,7 +162,6 @@ def execute_intent(intent: dict) -> str:
 def _extract_payload(intent_name: str, text: str) -> dict:
     if intent_name == "add_task":
         title = _TASK_STRIP.sub("", text).strip()
-        # Also strip "I need to", "I have to" etc
         title = re.sub(r"^(i need to|i have to|don't let me forget to)\s*", "", title, flags=re.I)
         title = re.sub(r"\s+", " ", title)[:120]
         return {"title": title or text[:80], "priority": _detect_priority(text)}
@@ -194,6 +200,26 @@ def _extract_payload(intent_name: str, text: str) -> dict:
         query = re.sub(r"\s+", " ", query)[:80]
         return {"query": query or text[:60]}
 
+    # ── NEW: Content Creation Payload ─────────────────────
+    if intent_name == "create_content":
+        topic = re.sub(
+            r"\b(create|draft|write|generate|make)\s+(post|caption|linkedin|twitter|x|thread|email|content|draft)\b",
+            "", text, flags=re.I
+        ).strip()
+        
+        content_type = "post"
+        lower = text.lower()
+        if any(word in lower for word in ["linkedin", "twitter", "x"]):
+            content_type = "linkedin"
+        elif "email" in lower:
+            content_type = "email"
+        elif "caption" in lower:
+            content_type = "caption"
+        elif "thread" in lower:
+            content_type = "thread"
+            
+        return {"topic": topic or text[:150], "type": content_type}
+
     return {"raw": text[:200]}
 
 
@@ -212,6 +238,7 @@ def _extract_time(text: str) -> Optional[str]:
         m = pattern.search(text)
         if not m:
             continue
+        # ... (existing time parsing logic unchanged)
         if kind == "hhmm":
             h, mi = int(m.group(1)), int(m.group(2))
             ampm  = (m.group(3) or "").lower()
@@ -220,6 +247,7 @@ def _extract_time(text: str) -> Optional[str]:
             dt = now.replace(hour=h, minute=mi, second=0, microsecond=0)
             if dt < now: dt += timedelta(days=1)
             return dt.isoformat()
+        # ... rest of time parsing remains the same
         if kind == "hh":
             h    = int(m.group(1))
             ampm = (m.group(2) or "").lower()
@@ -245,6 +273,8 @@ def _extract_time(text: str) -> Optional[str]:
 
 
 # ── Executors ─────────────────────────────────────────────────
+# ... (all existing _do_ functions remain unchanged)
+
 def _do_add_task(payload: dict) -> str:
     from database import add_task
     title    = payload.get("title", "New task")
@@ -277,14 +307,13 @@ def _do_complete_task(payload: dict) -> str:
         complete_task(task_id)
         return f"Task #{task_id} marked complete."
 
-    # Last or first
     tasks = get_tasks("pending")
     if not tasks:
         return "No pending tasks to mark complete."
     if payload.get("first"):
-        t = tasks[-1]   # oldest = first in DESC order
+        t = tasks[-1]
     else:
-        t = tasks[0]    # most recent pending
+        t = tasks[0]
     complete_task(t[0])
     return f"Done — \"{t[1]}\" marked complete."
 
@@ -351,14 +380,13 @@ def _do_spend_summary() -> str:
         from mpesa_engine import get_today_spend, get_average_daily_spend
         _today = get_today_spend()
         _avg   = get_average_daily_spend()
-        # Cast to float to handle custom return types (e.g. TodaySpend)
         def safe_float(value):
             try:
                 return float(value) if value is not None else None
             except (ValueError, TypeError):
                 return None
-        today: Optional[float] = safe_float(_today)
-        avg:   Optional[float] = safe_float(_avg)
+        today = safe_float(_today)
+        avg   = safe_float(_avg)
         lines = ["M-Pesa:"]
         if today is not None:
             lines.append(f"Today: KES {today:,.0f}")
@@ -387,10 +415,7 @@ def _do_search_docs(payload: dict) -> str:
 
 
 def _do_briefing() -> str:
-    """Compose a quick briefing from all sources — no AI call needed."""
     lines = ["Here's your current status:\n"]
-
-    # Tasks
     try:
         from database import get_tasks
         tasks = get_tasks("pending")
@@ -402,7 +427,6 @@ def _do_briefing() -> str:
     except Exception:
         pass
 
-    # Goals
     try:
         from intelligence.goals_engine import get_goals
         goals = get_goals("active")
@@ -411,7 +435,6 @@ def _do_briefing() -> str:
     except Exception:
         pass
 
-    # Alerts
     try:
         from database import get_recent_alerts
         alerts = get_recent_alerts(limit=10)
@@ -421,7 +444,6 @@ def _do_briefing() -> str:
     except Exception:
         pass
 
-    # Calendar
     try:
         from connectors.calendar import get_events_today
         events = get_events_today()
@@ -430,7 +452,6 @@ def _do_briefing() -> str:
     except Exception:
         pass
 
-    # Spend
     try:
         from mpesa_engine import get_today_spend
         spend = get_today_spend()
@@ -476,3 +497,31 @@ def _do_weather() -> str:
     except Exception as e:
         print(f"[INTENT] weather failed: {e}")
         return "Weather connector not available."
+
+
+# ── NEW: Content Creation Executor ─────────────────────────────
+def _do_create_content(payload: dict) -> str:
+    """Executor for create_content intent."""
+    try:
+        from agents.content_agent import create_draft
+        topic = payload.get("topic", "general update")
+        content_type = payload.get("type", "post")
+        
+        result = create_draft(topic=topic, content_type=content_type)
+        
+        if result.get("status") == "success":
+            draft_preview = result["draft"][:450]
+            if len(result["draft"]) > 450:
+                draft_preview += "..."
+            return f"""✅ **Content Draft Created** (ID: {result['id']})
+
+**Type:** {content_type.title()}
+**Topic:** {topic}
+
+{draft_preview}
+"""
+        else:
+            return f"❌ Content draft failed: {result.get('error', 'Unknown error')}"
+    except Exception as e:
+        print(f"[INTENT] _do_create_content failed: {e}")
+        return "Content creation agent is currently unavailable. Please try again later."

@@ -40,6 +40,8 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('fcm').init_fcm_table(), "FCM Tokens"),
         (lambda: __import__('intelligence.learning_engine', fromlist=['init_learning_tables']).init_learning_tables(), "Learning"),
         (lambda: __import__('research_agent', fromlist=['init_research_tables']).init_research_tables(), "Research DB"),
+        (lambda: __import__('agents.content_agent', fromlist=['init_content_drafts_table']).init_content_drafts_table(), "Content Drafts"),
+    
     ]:
         try:
             fn()
@@ -965,3 +967,52 @@ def delete_learned_fact(fact_id: int):
         return {"ok": True}
     except Exception:
         raise HTTPException(500, "Delete failed")
+# ═══════════════════════════════════════════════════════════════
+# CONTENT CREATION AGENT ENDPOINTS
+# ═══════════════════════════════════════════════════════════════
+
+class ContentDraftRequest(BaseModel):
+    topic: str
+    content_type: str = "post"
+    tone: str = "professional"
+
+
+@app.post("/api/content/draft")
+def create_content_draft(payload: ContentDraftRequest):
+    """Generate a new content draft."""
+    try:
+        from agents.content_agent import create_draft
+        result = create_draft(
+            topic=payload.topic,
+            content_type=payload.content_type,
+            tone=payload.tone
+        )
+        return result
+    except Exception as e:
+        print(f"[CONTENT API] Error: {e}")
+        raise HTTPException(500, "Failed to generate content draft")
+
+
+@app.get("/api/content/drafts")
+def list_content_drafts(status: str = "draft", limit: int = 20):
+    """List saved content drafts."""
+    try:
+        from agents.content_agent import get_drafts
+        return get_drafts(status=status, limit=limit)
+    except Exception as e:
+        print(f"[CONTENT API] Error listing drafts: {e}")
+        return []
+
+
+@app.post("/api/content/drafts/{draft_id}/status")
+def update_draft_status(draft_id: int, status: str):
+    """Update draft status (approve, reject, sent, etc.)."""
+    try:
+        from agents.content_agent import update_draft_status
+        success = update_draft_status(draft_id, status)
+        if success:
+            return {"status": "success", "message": f"Draft {draft_id} marked as {status}"}
+        return {"status": "error", "message": "Draft not found"}
+    except Exception as e:
+        print(f"[CONTENT API] Error updating status: {e}")
+        raise HTTPException(500, "Failed to update draft status")
