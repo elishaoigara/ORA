@@ -266,7 +266,7 @@ export default function MemoryPage() {
                   {!googleAuth?.authorized ? (
                     <a href={BASE_URL + "/api/auth/google"} target="_blank" rel="noreferrer" className="btn btn-sm" style={{ textDecoration: "none" }}>CONNECT →</a>
                   ) : (
-                    <span className="mono text-xs text-green">✓ ACTIVE</span>
+                    <span className="mono text-xs text-green">✓ ACTIVE1</span>
                   )}
                 </div>
               </div>
