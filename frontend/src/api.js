@@ -212,6 +212,19 @@ export const triggerGoalCheckin = () =>
   request("/goals/checkin", { method: "POST" });
 
 /* =========================
+   CONTENT STUDIO (NEW)
+   ========================= */
+
+export const createContentDraft = (payload) =>
+  request("/content/draft", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const getContentDrafts = (status = "draft", limit = 20) =>
+  request(`/content/drafts?status=${status}&limit=${limit}`);
+
+/* =========================
    BASE URL EXPORT
    ========================= */
 
