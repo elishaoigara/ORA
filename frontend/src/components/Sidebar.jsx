@@ -11,6 +11,7 @@ const navItems = [
   { id: "knowledge", icon: "◆", label: "KNOWLEDGE" },
   { id: "memory",    icon: "◌", label: "MEMORY" },
   { id: "research",  icon: "⊕", label: "RESEARCH" },
+  { id: "content",   icon: "✍️", label: "CONTENT" },     // ← NEW: Content Studio
 ];
 
 function fmtTime(d) {
@@ -29,7 +30,11 @@ export default function Sidebar({ current, onNavigate }) {
   const [unreadEmails, setUnreadEmails] = useState(0);
 
   useEffect(() => {
-    const tick = () => { const n = new Date(); setTime(fmtTime(n)); setDate(fmtDate(n)); };
+    const tick = () => { 
+      const n = new Date(); 
+      setTime(fmtTime(n)); 
+      setDate(fmtDate(n)); 
+    };
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
@@ -42,7 +47,10 @@ export default function Sidebar({ current, onNavigate }) {
         const d = await health();
         setOnline(d?.status === "ok");
         setLatency(Math.round(performance.now() - t0));
-      } catch { setOnline(false); setLatency(null); }
+      } catch { 
+        setOnline(false); 
+        setLatency(null); 
+      }
     };
     check();
     const id = setInterval(check, 15000);
@@ -98,6 +106,7 @@ export default function Sidebar({ current, onNavigate }) {
           >
             <span className="nav-item-icon">{item.icon}</span>
             <span>{item.label}</span>
+            
             {item.id === "alerts" && unreadAlerts > 0 && (
               <span className="nav-badge">{unreadAlerts}</span>
             )}
