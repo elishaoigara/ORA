@@ -323,7 +323,14 @@ async def chat(payload: ChatRequest):
                 task_lines = "\n".join(f"- [{t[2]}] {t[1]}" for t in tasks[:10])
                 system_prompt += f"\n\n## ACTUAL PENDING TASKS ({len(tasks)} total)\n{task_lines}"
             if spend_data and spend_data.get("today"):
-                system_prompt += f"\n\n## ACTUAL SPEND TODAY\nKES {spend_data['today']:.0f}"
+                today_val = spend_data["today"]
+                # get_today_spend() returns a dict {total, transactions, date}
+                if isinstance(today_val, dict):
+                    today_amount = float(today_val.get("total", 0))
+                else:
+                    today_amount = float(today_val)
+                if today_amount > 0:
+                    system_prompt += f"\n\n## ACTUAL SPEND TODAY\nKES {today_amount:.0f}"
 
         # ── 9. Build message history ──────────────────────────
         history = get_conversation_history(limit=6)
@@ -491,7 +498,13 @@ def mpesa_summary():
         from mpesa_engine import (get_today_spend, get_average_daily_spend,
                                    get_daily_summary, get_recent_transactions,
                                    get_recurring_patterns)
-        return {"today": get_today_spend(),
+        today_raw = get_today_spend()
+        # get_today_spend() returns dict {total, transactions, date} — flatten for frontend
+        if isinstance(today_raw, dict):
+            today_num = float(today_raw.get("total", 0))
+        else:
+            today_num = float(today_raw or 0)
+        return {"today": today_num,
                 "average_daily": get_average_daily_spend(),
                 "last_7_days": get_daily_summary(days=7),
                 "recent_transactions": get_recent_transactions(limit=10),
@@ -889,7 +902,11 @@ def get_briefing():
         try:
             from mpesa_engine import get_today_spend
             today_spend = get_today_spend()
-            spend = float(today_spend) if today_spend else 0.0 # type: ignore
+            # get_today_spend() returns dict {total, transactions, date}
+            if isinstance(today_spend, dict):
+                spend = float(today_spend.get("total", 0))
+            else:
+                spend = float(today_spend) if today_spend else 0.0
         except Exception:
             pass
 

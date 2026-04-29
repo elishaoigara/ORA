@@ -2,9 +2,11 @@
 ORA Google routes — Calendar, Gmail status, OAuth flow.
 """
 
+import os
+import traceback
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
-import traceback
 
 router = APIRouter()
 
@@ -29,18 +31,27 @@ def google_auth_start():
 
 @router.get("/api/auth/google/callback")
 def google_auth_callback(code: str = "", error: str = ""):
+    # Determine where to send the user back after auth
+    frontend_url = (
+        os.getenv("FRONTEND_URL", "").rstrip("/")
+        or os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+        or "http://localhost:5173"
+    )
+
     if error:
-        return {"status": "error", "detail": error}
+        return RedirectResponse(f"{frontend_url}?google_auth=error&detail={error}")
+
     if not code:
         raise HTTPException(400, "Missing code")
+
     try:
         from connectors.google_auth import exchange_code
         exchange_code(code)
-        # Redirect to frontend after auth
-        return {"status": "success", "message": "Google connected ✓"}
+        # ✅ Redirect back to the frontend app (memory page shows auth status)
+        return RedirectResponse(f"{frontend_url}?google_auth=success")
     except Exception:
         print(traceback.format_exc())
-        raise HTTPException(500, "Token exchange failed")
+        return RedirectResponse(f"{frontend_url}?google_auth=error&detail=token_exchange_failed")
 
 
 @router.get("/api/auth/google/status")
