@@ -76,12 +76,12 @@ async def lifespan(app: FastAPI):
             {"trigger": "interval", "minutes": 10, "fn": run_proactive_checks,         "name": "proactive_checks"},
             {"trigger": "interval", "minutes": 5,  "fn": run_autonomous_notifications, "name": "auto_notify"},
             # ── Phase 4: Data connectors ───────────────────────
-            {"trigger": "interval", "minutes": 30, "fn": sync_drive,  "name": "drive_sync"},
-            {"trigger": "interval", "minutes": 15, "fn": sync_gmail,  "name": "gmail_sync"},
-            {"trigger": "interval", "hours": 2,    "fn": sync_rss,    "name": "rss_sync"},
-            {"trigger": "interval", "hours": 1,    "fn": github_sync, "name": "github_sync"},
+            {"trigger": "interval", "minutes": 30, "fn": sync_drive,     "name": "drive_sync"},
+            {"trigger": "interval", "minutes": 15, "fn": sync_gmail,     "name": "gmail_sync"},
+            {"trigger": "interval", "hours": 2,    "fn": sync_rss,       "name": "rss_sync"},
+            {"trigger": "interval", "hours": 1,    "fn": github_sync,    "name": "github_sync"},
             # ── Code Agent ─────────────────────────────────────
-            {"trigger": "interval", "hours": 6,    "fn": code_scan_all, "name": "code_scan"},
+            {"trigger": "interval", "hours": 6,    "fn": code_scan_all,  "name": "code_scan"},
         ])
         print("[ORA] Scheduler started")
     except Exception:
@@ -115,6 +115,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ORA Backend", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
+
 try:
     from api_calendar_routes import router as calendar_router
     app.include_router(calendar_router)
@@ -172,6 +173,7 @@ def cache_stats():
 
 
 # ── Agent ─────────────────────────────────────────────────────
+
 @app.get("/api/agent/status")
 def agent_status():
     try:
@@ -206,6 +208,7 @@ def agent_run_now():
 
 
 # ── Chat ──────────────────────────────────────────────────────
+
 class ChatRequest(BaseModel):
     message: str
 
@@ -214,36 +217,36 @@ async def chat(payload: ChatRequest):
     try:
         if not client:
             return {"reply": "ORA: Missing API key"}
+
         text = payload.message.strip()
         if not text:
             return {"reply": "Empty message."}
 
-        from database import save_conversation, get_conversation_history, get_tasks
-        from context import build_system_prompt
-        from brain.router import classify, model_for
-        import cache
-
-        # ── 1. Intent parsing (fast path — no AI cost) ────────
+        # ── 1. Fast-path: pure-regex intent actions (zero LLM cost) ──────────
         try:
-            from intent_parser import parse_intent, execute_intent
-            intent = parse_intent(text)
-            if intent:
-                result = execute_intent(intent)
+            from Intent_parser import parse_intent, execute_intent
+            intent_obj = parse_intent(text)
+            if intent_obj:
+                result = execute_intent(intent_obj)
                 if result:
-                    save_conversation("user", text)
+                    from database import save_conversation
+                    save_conversation("user",      text)
                     save_conversation("assistant", result)
                     try:
                         from intelligence.learning_engine import extract_explicit_facts
                         extract_explicit_facts(text)
                     except Exception:
                         pass
-                    return {"reply": result, "intent": intent["type"], "query_type": "action"}
+                    return {"reply": result,
+                            "intent":     intent_obj["type"],
+                            "query_type": "action"}
         except Exception as e:
             print(f"[INTENT] {e}")
 
-        # ── 2. Correction detection ───────────────────────────
+        # ── 2. Correction detection ───────────────────────────────────────────
         try:
             from intelligence.learning_engine import detect_correction, log_correction
+            from database import get_conversation_history
             history_check = get_conversation_history(limit=2)
             if history_check and detect_correction(text):
                 last_ora = history_check[-1][1] if history_check else ""
@@ -251,157 +254,46 @@ async def chat(payload: ChatRequest):
         except Exception:
             pass
 
-        # ── 3. Classify & knowledge lookup ────────────────────
-        q_type = classify(text)
-        knowledge_ctx = ""
+        # ── 3. Multi-agent Coordinator ────────────────────────────────────────
+        from brain.router import Coordinator
+        result = Coordinator.run(text, save_history=False)
+        reply  = result["reply"]
+        q_type = result["query_type"]
+
+        # ── 4. Cache (skip document/research results) ─────────────────────────
         try:
-            from knowledge.pipeline import search_and_format
-            knowledge_ctx = search_and_format(text, n_results=3 if q_type == "document" else 2) or ""
+            import cache
+            if q_type not in ("document", "complex"):
+                cache.set(text, reply, "")
         except Exception:
             pass
 
-        # ── 4. Cache check (skip for document queries) ────────
-        if q_type != "document":
-            cached = cache.get(text, knowledge_ctx)
-            if cached:
-                save_conversation("user", text)
-                save_conversation("assistant", cached)
-                return {"reply": cached, "cached": True, "query_type": q_type}
-
-        # ── 5. Build system prompt ────────────────────────────
-        system_prompt = build_system_prompt(query=text)
-        if knowledge_ctx:
-            system_prompt += f"\n\n## KNOWLEDGE BASE\n{knowledge_ctx[:700]}"
-
-        # ── 6. Inject learned facts ───────────────────────────
-        try:
-            from intelligence.learning_engine import get_facts_as_context
-            learned = get_facts_as_context(limit=15)
-            if learned:
-                system_prompt += f"\n\n## WHAT I'VE LEARNED ABOUT YOU\n{learned}"
-        except Exception:
-            pass
-
-        # ── 7. Inject active goals ────────────────────────────
-        goals = []
-        try:
-            from intelligence.goals_engine import get_goals
-            goals = get_goals("active")
-            if goals:
-                glines = "\n".join(f"- {g['goal'][:60]} ({g['progress']}%)" for g in goals[:3])
-                system_prompt += f"\n\n## ACTIVE GOALS\n{glines}"
-        except Exception:
-            pass
-
-        # ── 8. Hallucination guard ────────────────────────────
-        from intelligence.hallucination_guard import (
-            is_factual_query, build_grounding_instruction,
-            context_has_tasks, context_has_goals, context_has_spend
-        )
-        tasks = []
-        spend_data = None
-        if is_factual_query(text):
-            try:
-                tasks = get_tasks("pending")
-            except Exception:
-                pass
-            try:
-                from mpesa_engine import get_today_spend, get_recent_transactions
-                spend_data = {
-                    "today": get_today_spend(),
-                    "recent_transactions": get_recent_transactions(limit=3)
-                }
-            except Exception:
-                pass
-
-            # Fetch calendar events for grounding check
-            calendar_events = []
-            try:
-                from connectors.calendar import get_events_today
-                calendar_events = get_events_today()
-            except Exception:
-                pass
-
-            grounding = build_grounding_instruction(
-                has_tasks=context_has_tasks(tasks),
-                has_goals=context_has_goals(goals),
-                has_calendar=bool(calendar_events),
-                has_spend=context_has_spend(spend_data),
-            )
-            system_prompt += f"\n\n{grounding}"
-
-            # Inject real data so model doesn't guess
-            if tasks:
-                task_lines = "\n".join(f"- [{t[2]}] {t[1]}" for t in tasks[:10])
-                system_prompt += f"\n\n## ACTUAL PENDING TASKS ({len(tasks)} total)\n{task_lines}"
-            if spend_data and spend_data.get("today"):
-                today_val = spend_data["today"]
-                # get_today_spend() returns a dict {total, transactions, date}
-                if isinstance(today_val, dict):
-                    today_amount = float(today_val.get("total", 0))
-                else:
-                    today_amount = float(today_val)
-                if today_amount > 0:
-                    system_prompt += f"\n\n## ACTUAL SPEND TODAY\nKES {today_amount:.0f}"
-
-        # ── 9. Build message history ──────────────────────────
-        history = get_conversation_history(limit=6)
-        messages: list[Any] = [{"role": "system", "content": system_prompt}]
-        for role, content, _ in history[-6:]:
-            messages.append({
-                "role": "user" if role == "user" else "assistant",
-                "content": content[:300]
-            })
-        messages.append({"role": "user", "content": text})
-
-        # ── 10. Call Groq ─────────────────────────────────────
-        model, max_tok = model_for(q_type)
-        try:
-            response = client.chat.completions.create(
-                model=model, messages=messages, max_tokens=max_tok, temperature=0.35
-            )
-        except Exception:
-            response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=messages, max_tokens=220, temperature=0.35
-            )
-
-        reply = response.choices[0].message.content or "No response"
-
-        # ── 11. Hallucination post-check ──────────────────────
-        try:
-            from intelligence.hallucination_guard import check_response_for_hallucinations
-            reply, warnings = check_response_for_hallucinations(
-                reply, text,
-                actual_task_count=len(tasks),
-                actual_goal_count=len(goals)
-            )
-            if warnings:
-                print(f"[HALLUCINATION GUARD] {warnings}")
-        except Exception:
-            pass
-
-        # ── 12. Cache & persist ───────────────────────────────
-        if q_type != "document":
-            cache.set(text, reply, knowledge_ctx)
-
-        save_conversation("user", text)
+        # ── 5. Persist conversation ───────────────────────────────────────────
+        from database import save_conversation
+        save_conversation("user",      text)
         save_conversation("assistant", reply)
 
-        # ── 13. Background learning ───────────────────────────
+        # ── 6. Background learning ────────────────────────────────────────────
         try:
-            from intelligence.learning_engine import extract_facts_from_exchange, extract_explicit_facts
-            import threading
+            from intelligence.learning_engine import (
+                extract_facts_from_exchange, extract_explicit_facts,
+            )
             extract_explicit_facts(text)
             threading.Thread(
                 target=extract_facts_from_exchange,
                 args=(text, reply),
-                daemon=True
+                daemon=True,
             ).start()
         except Exception:
             pass
 
-        return {"reply": reply, "query_type": q_type, "model": model}
+        return {
+            "reply":      reply,
+            "query_type": q_type,
+            "model":      "coordinator",
+            "intent":     result.get("intent"),
+            "pipeline":   result.get("pipeline"),
+        }
 
     except Exception:
         print("[CHAT ERROR]")
@@ -410,6 +302,7 @@ async def chat(payload: ChatRequest):
 
 
 # ── Conversations ─────────────────────────────────────────────
+
 @app.get("/api/conversations")
 def get_conversations(limit: int = 40):
     try:
@@ -421,6 +314,7 @@ def get_conversations(limit: int = 40):
 
 
 # ── Tasks ─────────────────────────────────────────────────────
+
 class TaskCreate(BaseModel):
     title: str
     priority: str = "medium"
@@ -431,7 +325,8 @@ def get_tasks_ep(status: str = "pending"):
     try:
         from database import get_tasks
         rows = get_tasks(status)
-        return [{"id": r[0], "title": r[1], "priority": r[2], "created_at": r[3], "due_at": r[4]} for r in rows]
+        return [{"id": r[0], "title": r[1], "priority": r[2],
+                 "created_at": r[3], "due_at": r[4]} for r in rows]
     except Exception:
         return []
 
@@ -464,6 +359,7 @@ def delete_task(task_id: int):
 
 
 # ── Alerts ────────────────────────────────────────────────────
+
 @app.get("/api/alerts")
 def get_alerts(limit: int = 50):
     try:
@@ -496,6 +392,7 @@ def ack_alert(alert_id: int):
 
 
 # ── M-Pesa ────────────────────────────────────────────────────
+
 @app.get("/api/mpesa/transactions")
 def mpesa_transactions(limit: int = 20):
     try:
@@ -511,22 +408,24 @@ def mpesa_summary():
                                    get_daily_summary, get_recent_transactions,
                                    get_recurring_patterns)
         today_raw = get_today_spend()
-        # get_today_spend() returns dict {total, transactions, date} — flatten for frontend
         if isinstance(today_raw, dict):
             today_num = float(today_raw.get("total", 0))
         else:
             today_num = float(today_raw or 0)
-        return {"today": today_num,
-                "average_daily": get_average_daily_spend(),
-                "last_7_days": get_daily_summary(days=7),
-                "recent_transactions": get_recent_transactions(limit=10),
-                "recurring": get_recurring_patterns()}
+        return {
+            "today":               today_num,
+            "average_daily":       get_average_daily_spend(),
+            "last_7_days":         get_daily_summary(days=7),
+            "recent_transactions": get_recent_transactions(limit=10),
+            "recurring":           get_recurring_patterns(),
+        }
     except Exception:
         print(traceback.format_exc())
         return {"status": "error"}
 
 
 # ── Goals ─────────────────────────────────────────────────────
+
 class GoalCreate(BaseModel):
     goal: str
     due_at: Optional[str] = None
@@ -568,6 +467,7 @@ def complete_goal_ep(goal_id: int):
 
 
 # ── Predictions ───────────────────────────────────────────────
+
 @app.get("/api/predictions")
 def get_predictions():
     try:
@@ -578,6 +478,7 @@ def get_predictions():
 
 
 # ── Memory ────────────────────────────────────────────────────
+
 @app.get("/api/memory/profile")
 def memory_profile():
     try:
@@ -621,6 +522,7 @@ def memory_events(limit: int = 30):
 
 
 # ── Knowledge ─────────────────────────────────────────────────
+
 @app.get("/api/knowledge/documents")
 def knowledge_documents():
     try:
@@ -709,7 +611,7 @@ def knowledge_summary(filename: str):
         resp = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content":
-                f"Summarize in 3 bullet points starting with •:\n\nDoc: {filename}\n\n{chunks[:2000]}"}],
+                f"Summarize in 3 bullet points starting with:\n\nDoc: {filename}\n\n{chunks[:2000]}"}],
             max_tokens=250, temperature=0.3)
         summary = (resp.choices[0].message.content or "").strip()
         cache.set(ck, summary)
@@ -722,10 +624,11 @@ def knowledge_summary(filename: str):
 
 
 # ── Helpers ───────────────────────────────────────────────────
+
 def _safe_filename(name: str) -> str:
     import re
     name = os.path.basename(name)
-    name = re.sub(r'[^\w.\-]', '_', name)
+    name = re.sub(r"[^\w.\-]", "_", name)
     return name[:120]
 
 
@@ -737,12 +640,10 @@ class PushTokenPayload(BaseModel):
     token: str
     platform: Optional[str] = "expo"
 
-
 class PushTestPayload(BaseModel):
     token: Optional[str] = None
     title: Optional[str] = "ORA Test"
     body:  Optional[str] = "Push notifications are working ✓"
-
 
 @app.post("/api/push/register")
 async def push_register(payload: PushTokenPayload):
@@ -759,7 +660,6 @@ async def push_register(payload: PushTokenPayload):
         print(traceback.format_exc())
         raise HTTPException(500, "Token registration failed")
 
-
 @app.delete("/api/push/register")
 async def push_unregister(payload: PushTokenPayload):
     try:
@@ -770,7 +670,6 @@ async def push_unregister(payload: PushTokenPayload):
         print(traceback.format_exc())
         raise HTTPException(500, "Token removal failed")
 
-
 @app.get("/api/push/tokens")
 async def push_tokens_count():
     try:
@@ -778,7 +677,6 @@ async def push_tokens_count():
         return {"count": len(get_tokens())}
     except Exception:
         return {"count": 0}
-
 
 @app.post("/api/push/test")
 async def push_test(payload: PushTestPayload):
@@ -873,10 +771,12 @@ def the_number():
                 except Exception:
                     pass
 
-        high_priority = sum(1 for t in pending if t[2] == "high")
+        high_priority     = sum(1 for t in pending if t[2] == "high")
         avg_goal_progress = 0
         if goals:
-            avg_goal_progress = int(sum(g.get("progress", 0) for g in goals) / len(goals))
+            avg_goal_progress = int(
+                sum(g.get("progress", 0) for g in goals) / len(goals)
+            )
 
         context_parts = []
         if overdue:
@@ -914,7 +814,6 @@ def get_briefing():
         try:
             from mpesa_engine import get_today_spend
             today_spend = get_today_spend()
-            # get_today_spend() returns dict {total, transactions, date}
             if isinstance(today_spend, dict):
                 spend = float(today_spend.get("total", 0))
             else:
@@ -926,8 +825,8 @@ def get_briefing():
         if pending:
             high = [t for t in pending if t[2] == "high"]
             parts.append(
-                f"{len(pending)} tasks pending" +
-                (f" ({len(high)} high priority)" if high else "")
+                f"{len(pending)} tasks pending"
+                + (f" ({len(high)} high priority)" if high else "")
             )
         else:
             parts.append("No pending tasks")
@@ -977,6 +876,8 @@ def delete_learned_fact(fact_id: int):
         return {"ok": True}
     except Exception:
         raise HTTPException(500, "Delete failed")
+
+
 # ═══════════════════════════════════════════════════════════════
 # CONTENT CREATION AGENT ENDPOINTS
 # ═══════════════════════════════════════════════════════════════
@@ -1002,12 +903,12 @@ def create_content_draft(payload: ContentDraftRequest):
     try:
         from agents.content_agent import create_draft
         result = create_draft(
-            topic=payload.topic,
-            content_type=payload.content_type,
-            tone=payload.tone,
-            length=payload.length,
-            platform=payload.platform,
-            extra_context=payload.extra_context,
+            topic        = payload.topic,
+            content_type = payload.content_type,
+            tone         = payload.tone,
+            length       = payload.length,
+            platform     = payload.platform,
+            extra_context= payload.extra_context,
         )
         return result
     except Exception as e:
@@ -1049,7 +950,7 @@ def update_content_draft_status(draft_id: int, status: str):
         from agents.content_agent import update_draft_status
         success = update_draft_status(draft_id, status)
         if success:
-            return {"ok": True, "message": f"Draft {draft_id} → {status}"}
+            return {"ok": True, "message": f"Draft {draft_id} -> {status}"}
         raise HTTPException(404, "Draft not found")
     except HTTPException:
         raise
