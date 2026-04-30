@@ -11,6 +11,7 @@ import MemoryPage from "./pages/MemoryPage";
 import ResearchPage from "./pages/ResearchPage";
 import InboxPage from "./pages/InboxPage";
 import ContentPage from "./pages/ContentPage";
+import CodePage from "./pages/CodePage";
 
 const pages = {
   dashboard: DashboardPage,
@@ -21,7 +22,8 @@ const pages = {
   memory:    MemoryPage,
   research:  ResearchPage,
   inbox:     InboxPage,
-  content:   ContentPage,        // Content Studio
+  content:   ContentPage,
+  code:      CodePage,
 };
 
 export default function App() {

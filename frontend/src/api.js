@@ -240,6 +240,23 @@ export const getContentStats = () =>
   request("/content/stats");
 
 /* =========================
+   CODE AGENT
+   ========================= */
+
+export const getCodeStats        = ()           => request("/code/stats");
+export const getCodeRepos        = ()           => request("/code/repos");
+export const getCodeRuns         = ()           => request("/code/runs");
+export const getRepoRun          = (repo)       => request(`/code/runs/${repo}`);
+export const getCodeScans        = (repo = "", status = "open", limit = 40) =>
+  request(`/code/scans?repo=${repo}&status=${status}&limit=${limit}`);
+export const resolveCodeScan     = (id)         => request(`/code/scans/${id}/resolve`, { method: "POST" });
+export const openCodeIssue       = (id)         => request(`/code/scans/${id}/issue`,   { method: "POST" });
+export const scanRepo            = (repo)       => request(`/code/scan/${repo}/sync`,   { method: "POST" });
+export const scanAllRepos        = ()           => request("/code/scan",                { method: "POST" });
+export const askCodeAgent        = (question, repo = "") =>
+  request("/code/ask", { method: "POST", body: JSON.stringify({ question, repo }) });
+
+/* =========================
    BASE URL EXPORT
    ========================= */
 

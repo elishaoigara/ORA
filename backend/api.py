@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('intelligence.learning_engine', fromlist=['init_learning_tables']).init_learning_tables(), "Learning"),
         (lambda: __import__('research_agent', fromlist=['init_research_tables']).init_research_tables(), "Research DB"),
         (lambda: __import__('agents.content_agent', fromlist=['init_content_drafts_table']).init_content_drafts_table(), "Content Drafts"),
-    
+        (lambda: __import__('agents.code_agent', fromlist=['init_code_agent_tables']).init_code_agent_tables(), "Code Agent DB"),
     ]:
         try:
             fn()
@@ -63,6 +63,7 @@ async def lifespan(app: FastAPI):
         from connectors.gmail import run_gmail_reply_checks as sync_gmail
         from connectors.rss import sync_rss
         from connectors.github import get_github_summary as github_sync
+        from agents.code_agent import scan_all_repos as code_scan_all
 
         start_scheduler([
             {"trigger": "interval", "minutes": 5,   "fn": run_agent_cycle,             "name": "agent_loop"},
@@ -79,6 +80,8 @@ async def lifespan(app: FastAPI):
             {"trigger": "interval", "minutes": 15, "fn": sync_gmail,  "name": "gmail_sync"},
             {"trigger": "interval", "hours": 2,    "fn": sync_rss,    "name": "rss_sync"},
             {"trigger": "interval", "hours": 1,    "fn": github_sync, "name": "github_sync"},
+            # ── Code Agent ─────────────────────────────────────
+            {"trigger": "interval", "hours": 6,    "fn": code_scan_all, "name": "code_scan"},
         ])
         print("[ORA] Scheduler started")
     except Exception:
@@ -125,6 +128,13 @@ try:
     print("[ORA] Research routes loaded")
 except Exception as e:
     print("[ORA] Research routes NOT loaded:", e)
+
+try:
+    from api_code_routes import router as code_router
+    app.include_router(code_router)
+    print("[ORA] Code Agent routes loaded")
+except Exception as e:
+    print("[ORA] Code Agent routes NOT loaded:", e)
 
 
 # ── Health ────────────────────────────────────────────────────

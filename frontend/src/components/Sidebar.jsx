@@ -11,7 +11,8 @@ const navItems = [
   { id: "knowledge", icon: "◆", label: "KNOWLEDGE" },
   { id: "memory",    icon: "◌", label: "MEMORY" },
   { id: "research",  icon: "⊕", label: "RESEARCH" },
-  { id: "content",   icon: "✍️", label: "CONTENT" },     // ← NEW: Content Studio
+  { id: "content",   icon: "✍️", label: "CONTENT" },     // ← Content Studio
+  { id: "code",      icon: "⌥",  label: "CODE" },          // ← Code Agent
 ];
 
 function fmtTime(d) {
