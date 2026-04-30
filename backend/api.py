@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
         from intelligence.planner_engine import generate_daily_brief
         from intelligence.notifier import run_autonomous_notifications
         from connectors.drive import sync_drive
-        from connectors.gmail import sync_gmail
+        from connectors.gmail import run_gmail_reply_checks as sync_gmail
         from connectors.rss import sync_rss
         from connectors.github import get_github_summary as github_sync
 
@@ -975,6 +975,15 @@ class ContentDraftRequest(BaseModel):
     topic: str
     content_type: str = "post"
     tone: str = "professional"
+    length: str = "medium"
+    platform: Optional[str] = None
+    extra_context: str = ""
+
+class ContentEditRequest(BaseModel):
+    draft_text: str
+
+class RegenerateRequest(BaseModel):
+    feedback: str = ""
 
 
 @app.post("/api/content/draft")
@@ -985,34 +994,106 @@ def create_content_draft(payload: ContentDraftRequest):
         result = create_draft(
             topic=payload.topic,
             content_type=payload.content_type,
-            tone=payload.tone
+            tone=payload.tone,
+            length=payload.length,
+            platform=payload.platform,
+            extra_context=payload.extra_context,
         )
         return result
     except Exception as e:
         print(f"[CONTENT API] Error: {e}")
+        print(traceback.format_exc())
         raise HTTPException(500, "Failed to generate content draft")
 
 
 @app.get("/api/content/drafts")
-def list_content_drafts(status: str = "draft", limit: int = 20):
+def list_content_drafts(status: str = "all", limit: int = 20, search: str = ""):
     """List saved content drafts."""
     try:
         from agents.content_agent import get_drafts
-        return get_drafts(status=status, limit=limit)
+        return get_drafts(status=status, limit=limit, search=search)
     except Exception as e:
         print(f"[CONTENT API] Error listing drafts: {e}")
         return []
 
 
+@app.get("/api/content/drafts/{draft_id}")
+def get_single_draft(draft_id: int):
+    """Get a single draft by ID."""
+    try:
+        from agents.content_agent import get_draft_by_id
+        draft = get_draft_by_id(draft_id)
+        if not draft:
+            raise HTTPException(404, "Draft not found")
+        return draft
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @app.post("/api/content/drafts/{draft_id}/status")
-def update_draft_status(draft_id: int, status: str):
-    """Update draft status (approve, reject, sent, etc.)."""
+def update_content_draft_status(draft_id: int, status: str):
+    """Update draft status: draft | approved | sent | rejected | archived"""
     try:
         from agents.content_agent import update_draft_status
         success = update_draft_status(draft_id, status)
         if success:
-            return {"status": "success", "message": f"Draft {draft_id} marked as {status}"}
-        return {"status": "error", "message": "Draft not found"}
+            return {"ok": True, "message": f"Draft {draft_id} → {status}"}
+        raise HTTPException(404, "Draft not found")
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"[CONTENT API] Error updating status: {e}")
-        raise HTTPException(500, "Failed to update draft status")
+        raise HTTPException(500, str(e))
+
+
+@app.put("/api/content/drafts/{draft_id}/text")
+def edit_draft_text(draft_id: int, payload: ContentEditRequest):
+    """Save manual edits to a draft."""
+    try:
+        from agents.content_agent import update_draft_text
+        ok = update_draft_text(draft_id, payload.draft_text)
+        if not ok:
+            raise HTTPException(404, "Draft not found")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/content/drafts/{draft_id}/regenerate")
+def regenerate_content_draft(draft_id: int, payload: RegenerateRequest):
+    """Re-generate a draft with optional feedback."""
+    try:
+        from agents.content_agent import regenerate_draft
+        result = regenerate_draft(draft_id, feedback=payload.feedback)
+        return result
+    except Exception as e:
+        print(f"[CONTENT API] Regenerate failed: {e}")
+        raise HTTPException(500, "Regeneration failed")
+
+
+@app.delete("/api/content/drafts/{draft_id}")
+def delete_content_draft(draft_id: int):
+    """Permanently delete a draft."""
+    try:
+        from agents.content_agent import delete_draft
+        ok = delete_draft(draft_id)
+        if not ok:
+            raise HTTPException(404, "Draft not found")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/content/stats")
+def content_stats():
+    """Content studio analytics."""
+    try:
+        from agents.content_agent import get_content_stats
+        return get_content_stats()
+    except Exception as e:
+        return {"total": 0, "by_status": {}, "top_types": []}

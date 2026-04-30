@@ -212,17 +212,32 @@ export const triggerGoalCheckin = () =>
   request("/goals/checkin", { method: "POST" });
 
 /* =========================
-   CONTENT STUDIO (NEW)
+   CONTENT STUDIO
    ========================= */
 
 export const createContentDraft = (payload) =>
-  request("/content/draft", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  request("/content/draft", { method: "POST", body: JSON.stringify(payload) });
 
-export const getContentDrafts = (status = "draft", limit = 20) =>
-  request(`/content/drafts?status=${status}&limit=${limit}`);
+export const getContentDrafts = (status = "all", limit = 20, search = "") =>
+  request(`/content/drafts?status=${status}&limit=${limit}&search=${encodeURIComponent(search)}`);
+
+export const getContentDraft = (id) =>
+  request(`/content/drafts/${id}`);
+
+export const updateDraftStatus = (id, status) =>
+  request(`/content/drafts/${id}/status?status=${status}`, { method: "POST" });
+
+export const editDraftText = (id, draft_text) =>
+  request(`/content/drafts/${id}/text`, { method: "PUT", body: JSON.stringify({ draft_text }) });
+
+export const regenerateDraft = (id, feedback = "") =>
+  request(`/content/drafts/${id}/regenerate`, { method: "POST", body: JSON.stringify({ feedback }) });
+
+export const deleteDraft = (id) =>
+  request(`/content/drafts/${id}`, { method: "DELETE" });
+
+export const getContentStats = () =>
+  request("/content/stats");
 
 /* =========================
    BASE URL EXPORT

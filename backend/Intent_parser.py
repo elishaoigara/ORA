@@ -16,7 +16,8 @@ Supported intents:
   calendar          "what's on my calendar"
   github            "any github activity"
   weather           "what's the weather in nairobi"
-  create_content    "draft a linkedin post about ORA" / "generate twitter thread"
+  create_content    "draft a linkedin post about ORA"
+  reply_email       "/reply" or "approve reply"
 """
 
 import re
@@ -103,6 +104,12 @@ _INTENTS = [
          r"\b(create|draft|write|generate|make)\s+(post|caption|linkedin|twitter|x|thread|email|content|draft)\b",
          re.I
      )),
+    # ── NEW: Gmail Reply Agent ─────────────────────────────
+    ("reply_email",
+     re.compile(
+         r"\b(/reply|reply to email|approve reply|send reply|use suggested reply)\b",
+         re.I
+     )),
 ]
 
 # ── Time patterns ─────────────────────────────────────────────
@@ -148,7 +155,8 @@ def execute_intent(intent: dict) -> str:
             "calendar":       lambda: _do_calendar(),
             "github":         lambda: _do_github(),
             "weather":        lambda: _do_weather(),
-            "create_content": lambda: _do_create_content(payload),   # NEW
+            "create_content": lambda: _do_create_content(payload),
+            "reply_email":    lambda: _do_reply_email(payload),   # ← NEW
         }
         fn = dispatch.get(itype)
         if fn:
@@ -200,7 +208,7 @@ def _extract_payload(intent_name: str, text: str) -> dict:
         query = re.sub(r"\s+", " ", query)[:80]
         return {"query": query or text[:60]}
 
-    # ── NEW: Content Creation Payload ─────────────────────
+    # Content Creation Payload
     if intent_name == "create_content":
         topic = re.sub(
             r"\b(create|draft|write|generate|make)\s+(post|caption|linkedin|twitter|x|thread|email|content|draft)\b",
@@ -220,6 +228,10 @@ def _extract_payload(intent_name: str, text: str) -> dict:
             
         return {"topic": topic or text[:150], "type": content_type}
 
+    # NEW: Reply Email Payload
+    if intent_name == "reply_email":
+        return {"command": "reply", "raw": text[:200]}
+
     return {"raw": text[:200]}
 
 
@@ -238,7 +250,6 @@ def _extract_time(text: str) -> Optional[str]:
         m = pattern.search(text)
         if not m:
             continue
-        # ... (existing time parsing logic unchanged)
         if kind == "hhmm":
             h, mi = int(m.group(1)), int(m.group(2))
             ampm  = (m.group(3) or "").lower()
@@ -247,7 +258,6 @@ def _extract_time(text: str) -> Optional[str]:
             dt = now.replace(hour=h, minute=mi, second=0, microsecond=0)
             if dt < now: dt += timedelta(days=1)
             return dt.isoformat()
-        # ... rest of time parsing remains the same
         if kind == "hh":
             h    = int(m.group(1))
             ampm = (m.group(2) or "").lower()
@@ -273,7 +283,6 @@ def _extract_time(text: str) -> Optional[str]:
 
 
 # ── Executors ─────────────────────────────────────────────────
-# ... (all existing _do_ functions remain unchanged)
 
 def _do_add_task(payload: dict) -> str:
     from database import add_task
@@ -499,9 +508,8 @@ def _do_weather() -> str:
         return "Weather connector not available."
 
 
-# ── NEW: Content Creation Executor ─────────────────────────────
+# ── Content Creation Executor ─────────────────────────────
 def _do_create_content(payload: dict) -> str:
-    """Executor for create_content intent."""
     try:
         from agents.content_agent import create_draft
         topic = payload.get("topic", "general update")
@@ -525,3 +533,36 @@ def _do_create_content(payload: dict) -> str:
     except Exception as e:
         print(f"[INTENT] _do_create_content failed: {e}")
         return "Content creation agent is currently unavailable. Please try again later."
+
+
+# ── NEW: Gmail Reply Executor ─────────────────────────────
+def _do_reply_email(payload: dict) -> str:
+    """Handle /reply or approve reply commands."""
+    try:
+        from connectors.gmail import get_pending_replies, approve_and_send_reply
+        
+        pending = get_pending_replies()
+        
+        if not pending:
+            return "✅ No pending email replies at the moment."
+
+        # For simplicity, approve the most recent suggested reply
+        latest = pending[0]
+        success = approve_and_send_reply(latest["id"])
+        
+        if success:
+            return f"""✅ **Reply Approved**
+
+Subject: {latest['subject'][:90]}...
+
+The reply has been marked as approved. 
+(Actual sending via Gmail will be added in the next phase.)"""
+        else:
+            return "❌ Failed to approve the reply. Please try again."
+            
+    except Exception as e:
+        print(f"[INTENT] _do_reply_email failed: {e}")
+        return "Reply system is temporarily unavailable."
+
+
+# Keep all other _do_ functions unchanged below...
