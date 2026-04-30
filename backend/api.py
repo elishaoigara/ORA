@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('research_agent', fromlist=['init_research_tables']).init_research_tables(), "Research DB"),
         (lambda: __import__('agents.content_agent', fromlist=['init_content_drafts_table']).init_content_drafts_table(), "Content Drafts"),
         (lambda: __import__('agents.code_agent', fromlist=['init_code_agent_tables']).init_code_agent_tables(), "Code Agent DB"),
+        (lambda: __import__('agents.agent_bus', fromlist=['init_agent_bus_table']).init_agent_bus_table(), "Agent Bus"),
     ]:
         try:
             fn()
@@ -64,6 +65,7 @@ async def lifespan(app: FastAPI):
         from connectors.rss import sync_rss
         from connectors.github import get_github_summary as github_sync
         from agents.code_agent import scan_all_repos as code_scan_all
+        from agents.agent_bus import process_pending_messages as bus_process
 
         start_scheduler([
             {"trigger": "interval", "minutes": 5,   "fn": run_agent_cycle,             "name": "agent_loop"},
@@ -75,6 +77,8 @@ async def lifespan(app: FastAPI):
             {"trigger": "interval", "hours": 3,    "fn": run_pattern_analysis,         "name": "pattern_analysis"},
             {"trigger": "interval", "minutes": 10, "fn": run_proactive_checks,         "name": "proactive_checks"},
             {"trigger": "interval", "minutes": 5,  "fn": run_autonomous_notifications, "name": "auto_notify"},
+            # ── Agent Message Bus ──────────────────────────────
+            {"trigger": "interval", "minutes": 5,  "fn": bus_process,                  "name": "agent_bus"},
             # ── Phase 4: Data connectors ───────────────────────
             {"trigger": "interval", "minutes": 30, "fn": sync_drive,     "name": "drive_sync"},
             {"trigger": "interval", "minutes": 15, "fn": sync_gmail,     "name": "gmail_sync"},
@@ -1008,3 +1012,87 @@ def content_stats():
         return get_content_stats()
     except Exception as e:
         return {"total": 0, "by_status": {}, "top_types": []}
+
+# ═══════════════════════════════════════════════════════════════
+# AGENT MESSAGE BUS ENDPOINTS
+# ═══════════════════════════════════════════════════════════════
+
+class BusMessageRequest(BaseModel):
+    from_agent: str
+    to_agent:   str
+    intent:     str
+    payload:    dict = {}
+    priority:   int  = 5
+
+
+@app.post("/api/bus/message")
+def bus_post_message(payload: BusMessageRequest):
+    """Post a message on the agent bus. Returns message ID."""
+    try:
+        from agents.agent_bus import post_message
+        msg_id = post_message(
+            from_agent=payload.from_agent,
+            to_agent=payload.to_agent,
+            intent=payload.intent,
+            payload=payload.payload,
+            priority=payload.priority,
+        )
+        return {"ok": True, "id": msg_id}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/bus/message/{msg_id}")
+def bus_get_result(msg_id: int):
+    """Poll for the result of a specific message."""
+    try:
+        from agents.agent_bus import get_message_result
+        result = get_message_result(msg_id)
+        if not result:
+            raise HTTPException(404, "Message not found")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/bus/process")
+def bus_process_now():
+    """Manually trigger bus processing (useful for testing / immediate dispatch)."""
+    try:
+        from agents.agent_bus import process_pending_messages
+        results = process_pending_messages(max_per_run=10)
+        return {"processed": len(results), "results": results}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/bus/activity")
+def bus_activity(limit: int = 20):
+    """Recent bus activity for the dashboard."""
+    try:
+        from agents.agent_bus import get_recent_activity
+        return get_recent_activity(limit=limit)
+    except Exception:
+        return []
+
+
+@app.get("/api/bus/stats")
+def bus_stats():
+    """Agent bus statistics."""
+    try:
+        from agents.agent_bus import get_bus_stats
+        return get_bus_stats()
+    except Exception:
+        return {"total": 0, "pending": 0, "done": 0, "failed": 0}
+
+
+@app.get("/api/bus/pending/{agent}")
+def bus_pending_for_agent(agent: str):
+    """Get pending messages for a specific agent."""
+    try:
+        from agents.agent_bus import get_pending
+        return get_pending(agent)
+    except Exception:
+        return []

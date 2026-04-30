@@ -252,28 +252,153 @@ export default function MemoryPage() {
           )}
 
           {tab === "settings" && (
-            <div className="card">
-              <div className="card-header"><span className="card-title">INTEGRATIONS</span></div>
-              <div className="card-body">
-                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0" }}>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: googleAuth?.authorized ? "var(--green)" : "var(--red)" }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, color: "var(--text-2)", fontWeight: 500 }}>Google Calendar</div>
-                    <div className="mono text-xs" style={{ color: "var(--text-4)", marginTop: 2 }}>
-                      {googleAuth?.authorized ? "CONNECTED — syncing automatically" : "NOT CONNECTED"}
+            <>
+              <div className="card">
+                <div className="card-header"><span className="card-title">INTEGRATIONS</span></div>
+                <div className="card-body">
+                  {/* Google row */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: "1px solid var(--border)" }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: googleAuth?.authorized ? "var(--green)" : "var(--red)" }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, color: "var(--text-2)", fontWeight: 500 }}>Google (Calendar · Gmail · Drive)</div>
+                      <div className="mono text-xs" style={{ color: "var(--text-4)", marginTop: 2 }}>
+                        {googleAuth?.authorized ? "CONNECTED — Calendar, Gmail and Drive syncing" : "NOT CONNECTED — click to authorise"}
+                      </div>
+                      {!googleAuth?.client_configured && (
+                        <div className="mono text-xs" style={{ color: "var(--red)", marginTop: 2 }}>
+                          ⚠ GOOGLE_CLIENT_ID missing in Render env vars
+                        </div>
+                      )}
                     </div>
+                    {!googleAuth?.authorized ? (
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => { window.location.href = BASE_URL + "/api/auth/google"; }}
+                      >
+                        CONNECT →
+                      </button>
+                    ) : (
+                      <span className="mono text-xs" style={{ color: "var(--green)" }}>✓ ACTIVE</span>
+                    )}
                   </div>
-                  {!googleAuth?.authorized ? (
-                    <a href={BASE_URL + "/api/auth/google"} target="_blank" rel="noreferrer" className="btn btn-sm" style={{ textDecoration: "none" }}>CONNECT →</a>
-                  ) : (
-                    <span className="mono text-xs text-green">✓ ACTIVE1</span>
-                  )}
+
+                  {/* GitHub row */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0" }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: "var(--green)" }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, color: "var(--text-2)", fontWeight: 500 }}>GitHub</div>
+                      <div className="mono text-xs" style={{ color: "var(--text-4)", marginTop: 2 }}>
+                        GITHUB_TOKEN env var — no OAuth needed
+                      </div>
+                    </div>
+                    <span className="mono text-xs" style={{ color: "var(--green)" }}>✓ ACTIVE</span>
+                  </div>
                 </div>
               </div>
-            </div>
+
+              {/* Agent Bus status card */}
+              <AgentBusCard />
+            </>
           )}
         </>
       )}
+    </div>
+  )
+}
+
+function AgentBusCard() {
+  const [stats, setStats] = useState(null)
+  const [activity, setActivity] = useState([])
+  const [processing, setProcessing] = useState(false)
+  const [toast, setToast] = useState(null)
+
+  useEffect(() => {
+    loadBus()
+    const id = setInterval(loadBus, 15000)
+    return () => clearInterval(id)
+  }, [])
+
+  async function loadBus() {
+    try {
+      const [s, a] = await Promise.all([
+        fetch(BASE_URL + "/api/bus/stats").then(r => r.json()),
+        fetch(BASE_URL + "/api/bus/activity?limit=8").then(r => r.json()),
+      ])
+      setStats(s)
+      setActivity(Array.isArray(a) ? a : [])
+    } catch {}
+  }
+
+  async function runNow() {
+    setProcessing(true)
+    try {
+      const r = await fetch(BASE_URL + "/api/bus/process", { method: "POST" })
+      const d = await r.json()
+      showToast(`Processed ${d.processed} messages`, "success")
+      await loadBus()
+    } catch { 
+      showToast("Process failed", "error") 
+    }
+    finally { setProcessing(false) }
+  }
+
+  function showToast(msg, type) {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), 3000)
+  }
+
+  const statusColor = { pending: "var(--amber)", done: "var(--green)", failed: "var(--red)" }
+  const statusDot   = { pending: "🟡", done: "🟢", failed: "🔴" }
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <span className="card-title">AGENT MESSAGE BUS</span>
+        <button className="btn btn-sm" disabled={processing} onClick={runNow}>
+          {processing ? "RUNNING..." : "▶ RUN NOW"}
+        </button>
+      </div>
+      <div className="card-body">
+        {stats && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 12 }}>
+            {[
+              { label: "TOTAL", value: stats.total },
+              { label: "PENDING", value: stats.pending, color: stats.pending > 0 ? "var(--amber)" : undefined },
+              { label: "DONE", value: stats.done, color: "var(--green)" },
+              { label: "FAILED", value: stats.failed, color: stats.failed > 0 ? "var(--red)" : undefined },
+            ].map(s => (
+              <div key={s.label} style={{ background: "var(--bg-2)", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px", textAlign: "center" }}>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 18, fontWeight: 700, color: s.color || "var(--text-3)" }}>{s.value}</div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 8, color: "var(--text-5)", letterSpacing: 2, marginTop: 2 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {activity.length === 0 ? (
+          <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-5)", textAlign: "center", padding: "12px 0" }}>
+            No messages yet — bus is ready
+          </div>
+        ) : (
+          activity.map(m => (
+            <div key={m.id} style={{ display: "flex", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
+              <span style={{ fontSize: 10 }}>{statusDot[m.status] || "⚪"}</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-4)", width: 60, flexShrink: 0 }}>{m.from_agent}</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--text-5)" }}>→</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-4)", width: 60, flexShrink: 0 }}>{m.to_agent}</span>
+              <span style={{ fontSize: 11, color: "var(--text-2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.intent}</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: statusColor[m.status] || "var(--text-5)" }}>{m.status?.toUpperCase()}</span>
+            </div>
+          ))
+        )}
+        {toast && (
+          <div style={{
+            marginTop: 10, padding: "8px 12px", borderRadius: 6, fontFamily: "var(--mono)", fontSize: 11,
+            background: toast.type === "success" ? "rgba(0,255,157,0.08)" : "rgba(255,68,68,0.08)",
+            border: `1px solid ${toast.type === "success" ? "rgba(0,255,157,0.3)" : "rgba(255,68,68,0.3)"}`,
+            color: toast.type === "success" ? "var(--green)" : "var(--red)",
+          }}>{toast.msg}</div>
+        )}
+      </div>
     </div>
   )
 }

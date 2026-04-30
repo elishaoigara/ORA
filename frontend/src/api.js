@@ -134,6 +134,14 @@ export const getMemoryEvents = (limit = 30) =>
 export const getGoogleAuthStatus = () =>
   request("/auth/google/status");
 
+export const connectGoogle = () => {
+  // Navigate the whole window so the OAuth redirect comes back to this app
+  window.location.href = `${BASE_URL}/api/auth/google`;
+};
+
+export const disconnectGoogle = () =>
+  request("/auth/google", { method: "DELETE" });
+
 /* =========================
    KNOWLEDGE
    ========================= */

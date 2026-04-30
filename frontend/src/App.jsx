@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+﻿import { useState, useEffect } from "react";
 import "./App.css";
 import Sidebar from "./components/Sidebar";
 
@@ -28,6 +28,25 @@ const pages = {
 
 export default function App() {
   const [page, setPage] = useState("dashboard");
+  const [authBanner, setAuthBanner] = useState(null); // "success" | "error" | null
+
+  // ── Handle Google OAuth redirect (?google_auth=success/error) ──
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("google_auth");
+    if (status === "success") {
+      setAuthBanner("success");
+      setPage("memory"); // take them to memory page where the status card lives
+    } else if (status === "error") {
+      setAuthBanner("error");
+    }
+    // Clean the URL so a refresh doesn't re-trigger
+    if (status) {
+      const clean = window.location.pathname;
+      window.history.replaceState({}, "", clean);
+      setTimeout(() => setAuthBanner(null), 6000);
+    }
+  }, []);
 
   const navigate = (next) => {
     if (!next || next === page) return;
@@ -40,6 +59,29 @@ export default function App() {
     <div className="app-shell">
       <Sidebar current={page} onNavigate={navigate} />
       <main className="app-main">
+        {/* OAuth result banner */}
+        {authBanner && (
+          <div style={{
+            padding: "10px 20px",
+            background: authBanner === "success" ? "rgba(0,255,157,0.08)" : "rgba(255,68,68,0.08)",
+            borderBottom: `1px solid ${authBanner === "success" ? "rgba(0,255,157,0.3)" : "rgba(255,68,68,0.3)"}`,
+            fontFamily: "var(--mono)",
+            fontSize: "12px",
+            color: authBanner === "success" ? "var(--green)" : "var(--red)",
+            letterSpacing: "0.06em",
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+          }}>
+            {authBanner === "success"
+              ? "✓ Google connected — Calendar, Gmail and Drive are now active"
+              : "✕ Google auth failed — check your GOOGLE_CLIENT_ID and GOOGLE_REDIRECT_URI env vars"}
+            <button onClick={() => setAuthBanner(null)} style={{
+              marginLeft: "auto", background: "none", border: "none",
+              color: "inherit", cursor: "pointer", fontSize: "14px",
+            }}>×</button>
+          </div>
+        )}
         <Page />
       </main>
     </div>
