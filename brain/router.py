@@ -8,44 +8,23 @@ The flow:
   1. classify_intent()     — 14 intent types, cached, zero AI cost
   2. build_pipeline()      — maps intent → ordered agent list
   3. MessageBus            — shared state that flows through the whole chain
-  4. Coordinator.run()     — executes agents left-to-right, each builds on the last
-  5. api.py /api/chat      — calls Coordinator.run() for agent-worthy queries
+  4. Coordinator.run()     — executes agents left-to-right, each builds on last
+  5. api.py /api/chat      — calls Coordinator.run() for every chat message
 
-Agent registry (every ORA subsystem wired in):
+Agent registry:
   IntentAgent     — Intent_parser.py fast path, zero LLM cost
-  MemoryAgent     — learning_engine + memory/profile + memory/preferences + events
+  MemoryAgent     — learning_engine + profile + preferences + events
   KnowledgeAgent  — knowledge/pipeline RAG search
-  ResearchAgent   — research_agent.py deep_research (Tavily + Groq)
+  ResearchAgent   — research_agent.py deep_research
   ContentAgent    — agents/content_agent.py create_draft
   CodeAgent       — agents/code_agent.py scan / ask
-  BriefingAgent   — tasks + goals + calendar + gmail + spend + weather + code health
-  ChatAgent       — Groq with full context.py system prompt + all bus context
+  BriefingAgent   — tasks + goals + calendar + gmail + spend + weather + code
+  ChatAgent       — Groq with full context + all bus context
   NotifierAgent   — intelligence/notifier dual_notify (Telegram + FCM)
-
-Pipeline examples:
-  "research AI agents and write a LinkedIn post"
-      → [memory, research, content, notify]
-  "scan my repos"
-      → [code, notify]
-  "what are my tasks today"
-      → [intent]        ← instant, zero LLM
-  "brief me"
-      → [briefing]
-  "remember I prefer Python"
-      → [memory]
-  "write a blog post about ORA"
-      → [memory, knowledge, content]
 
 Backward compatibility:
   classify(query)   — still returns 'simple' | 'document' | 'complex'
   model_for(type)   — still returns (model_name, max_tokens)
-  Both are imported by api.py for its simple Groq path.
-
-Free-tier hardening:
-  - Every agent wrapped in _run_with_timeout() (12s ceiling)
-  - TTLCache prevents re-classifying identical queries
-  - All context strings truncated to stay under RAM limits
-  - Background learning is daemon-threaded and fire-and-forget
 """
 
 from __future__ import annotations
@@ -65,11 +44,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 _CFG = {
     "agent_timeout":  12,   # seconds per agent call
-    "max_ctx_chars":  900,  # context string ceiling
-    "max_mem_chars":  500,  # memory string ceiling
-    "max_kb_chars":   500,  # KB string ceiling
-    "max_history":    4,    # conversation turns to inject
-    "cache_ttl":      300,  # 5-min TTL cache
+    "max_ctx_chars":  900,
+    "max_mem_chars":  500,
+    "max_kb_chars":   500,
+    "max_history":    4,
+    "cache_ttl":      300,  # 5-min TTL
 }
 
 
@@ -99,15 +78,15 @@ _pcache = _TTLCache(_CFG["cache_ttl"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TIMEOUT HELPER (cross-platform — works on Windows + Linux/Render)
+# TIMEOUT HELPER
 # ─────────────────────────────────────────────────────────────────────────────
 
 class AgentTimeoutError(Exception):
     pass
 
 
-def _run_with_timeout(fn: Any, *args: Any, timeout: int = _CFG["agent_timeout"],
-                      **kwargs: Any) -> Any:
+def _run_with_timeout(fn: Any, *args: Any,
+                      timeout: int = _CFG["agent_timeout"], **kwargs: Any) -> Any:
     with ThreadPoolExecutor(max_workers=1) as ex:
         fut = ex.submit(fn, *args, **kwargs)
         try:
@@ -121,12 +100,10 @@ def _run_with_timeout(fn: Any, *args: Any, timeout: int = _CFG["agent_timeout"],
 # ─────────────────────────────────────────────────────────────────────────────
 
 _INTENT_PATTERNS: List[Tuple[str, re.Pattern[str]]] = [
-    # Compound pipelines (most specific first)
     ("research_then_content", re.compile(
         r"\b(research.{1,40}(and|then).{1,20}(write|draft|create|post)"
         r"|find.{1,30}(and|then).{1,20}(write|draft))\b", re.I,
     )),
-    # Single-step intents
     ("briefing", re.compile(
         r"\b(briefing|brief me|full brief|status update|what'?s? my status"
         r"|catch me up|morning brief|evening brief|what'?s? going on)\b", re.I,
@@ -189,26 +166,23 @@ _INTENT_PATTERNS: List[Tuple[str, re.Pattern[str]]] = [
 
 
 def classify_intent(query: str) -> str:
-    """Return one of 14 intent types. Cached."""
+    """Return one of 14 intent types. Cached for 5 min."""
     key    = query.lower().strip()
     cached = _icache.get(key)
     if cached:
         return cached
-
     for intent, pat in _INTENT_PATTERNS:
         if pat.search(query):
             _icache.set(key, intent)
             return intent
-
     result = "simple" if len(query.split()) <= 5 else "complex"
     _icache.set(key, result)
     return result
 
 
-# ── Backward-compat aliases ────────────────────────────────────────────────────
+# ── Backward-compat aliases (imported by api.py) ──────────────────────────────
 
 def classify(query: str) -> str:
-    """Maps new intents → 'simple' | 'document' | 'complex' for api.py."""
     intent = classify_intent(query)
     if intent in {"research", "research_then_content", "content", "code",
                   "goal", "complex", "briefing"}:
@@ -219,7 +193,6 @@ def classify(query: str) -> str:
 
 
 def model_for(query_type: str) -> Tuple[str, int]:
-    """Returns (model_name, max_tokens). Free-tier optimised."""
     if query_type == "simple":
         return "llama-3.1-8b-instant", 160
     if query_type == "document":
@@ -232,11 +205,9 @@ def model_for(query_type: str) -> Tuple[str, int]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_pipeline(intent: str) -> List[str]:
-    """Maps intent → ordered list of agent names."""
     cached = _pcache.get(intent)
     if cached:
         return cached
-
     _MAP: Dict[str, List[str]] = {
         "research_then_content": ["memory", "research", "content", "notify"],
         "research":              ["memory", "research",             "notify"],
@@ -245,7 +216,6 @@ def build_pipeline(intent: str) -> List[str]:
         "memory_write":          ["memory"],
         "memory_read":           ["memory", "chat"],
         "knowledge":             ["knowledge", "chat"],
-        # Fast-path intents handled entirely by Intent_parser.py (zero LLM)
         "task":                  ["intent"],
         "goal":                  ["intent"],
         "calendar":              ["intent"],
@@ -265,11 +235,7 @@ def build_pipeline(intent: str) -> List[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MessageBus:
-    """
-    Shared mutable state that flows through the agent pipeline in one run.
-    Each agent reads what it needs and posts its output back.
-    Thread-safe via a single lock.
-    """
+    """Shared mutable state that flows through the agent pipeline in one run."""
     __slots__ = (
         "_lock", "query", "intent", "started_at",
         "context", "reply", "chain_log",
@@ -279,21 +245,21 @@ class MessageBus:
     )
 
     def __init__(self, query: str, intent: str):
-        self._lock           = threading.Lock()
-        self.query           = query
-        self.intent          = intent
-        self.started_at      = datetime.now().isoformat()
-        self.context:  List[Dict[str, str]] = []
-        self.reply:    str           = ""
+        self._lock              = threading.Lock()
+        self.query              = query
+        self.intent             = intent
+        self.started_at         = datetime.now().isoformat()
+        self.context:  List[Dict[str, str]]  = []
+        self.reply:    str                   = ""
         self.chain_log: List[Dict[str, Any]] = []
-        self.memory_ctx: str         = ""
-        self.kb_ctx:     str         = ""
-        self.research_result: Optional[Dict[str, Any]] = None
-        self.content_draft:   Optional[Dict[str, Any]] = None
-        self.code_result:     Optional[Dict[str, Any]] = None
-        self.task_result:     Optional[Dict[str, Any]] = None
-        self.goal_result:     Optional[Dict[str, Any]] = None
-        self.memory_result:   Optional[Dict[str, Any]] = None
+        self.memory_ctx: str                 = ""
+        self.kb_ctx:     str                 = ""
+        self.research_result: Optional[Dict] = None
+        self.content_draft:   Optional[Dict] = None
+        self.code_result:     Optional[Dict] = None
+        self.task_result:     Optional[Dict] = None
+        self.goal_result:     Optional[Dict] = None
+        self.memory_result:   Optional[Dict] = None
 
     def post(self, agent: str, key: str, value: Any, ms: int = 0) -> None:
         with self._lock:
@@ -319,10 +285,6 @@ class MessageBus:
             for c in self.context[-4:]
         )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TIMING HELPER
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _ms() -> int:
     return int(time.time() * 1000)
@@ -425,7 +387,8 @@ def _run_research_agent(bus: MessageBus) -> None:
     try:
         from research_agent import deep_research
         result    = _run_with_timeout(deep_research, bus.query, timeout=10)
-        synthesis = result.get("content") or result.get("synthesis", "")
+        # deep_research returns {"content": ..., "result": ..., "sources": ...}
+        synthesis = result.get("content") or result.get("result", "")
         bus.post("ResearchAgent", "research_result", result, _ms() - t0)
         if synthesis:
             bus.add_context("ResearchAgent", synthesis[:_CFG["max_ctx_chars"]])
@@ -446,17 +409,19 @@ def _run_content_agent(bus: MessageBus) -> None:
         extra = ""
         if bus.research_result:
             extra = (bus.research_result.get("content")
-                     or bus.research_result.get("synthesis", ""))[:800]
+                     or bus.research_result.get("result", ""))[:800]
         elif bus.kb_ctx:
             extra = bus.kb_ctx[:500]
+
         draft = create_draft(
-            topic        = bus.query,
-            content_type = _detect_content_type(bus.query),
-            tone         = _detect_tone(bus.query),
-            length       = "medium",
-            extra_context= extra,
+            topic         = bus.query,
+            content_type  = _detect_content_type(bus.query),
+            tone          = _detect_tone(bus.query),
+            length        = "medium",
+            extra_context = extra,
         )
-        draft_text = draft.get("draft_text", "")
+        # create_draft returns {"draft": ..., "id": ..., "title": ...}
+        draft_text = draft.get("draft") or draft.get("draft_text", "")
         bus.post("ContentAgent", "content_draft", draft, _ms() - t0)
         bus.reply = draft_text
         bus.add_context("ContentAgent",
@@ -470,10 +435,11 @@ def _run_content_agent(bus: MessageBus) -> None:
 def _detect_content_type(q: str) -> str:
     ql = q.lower()
     for kw, ct in [
-        ("linkedin", "linkedin"), ("twitter", "twitter"),  ("tweet",   "twitter"),
-        ("thread",   "twitter"),  ("instagram","instagram"),("email",   "email"),
-        ("blog",     "blog"),     ("newsletter","newsletter"),("script", "script"),
-        ("caption",  "caption"),
+        ("linkedin", "linkedin"), ("twitter",   "twitter"),
+        ("tweet",    "twitter"),  ("thread",    "twitter"),
+        ("instagram","instagram"),("email",     "email"),
+        ("blog",     "blog"),     ("newsletter","newsletter"),
+        ("script",   "script"),   ("caption",  "caption"),
     ]:
         if kw in ql:
             return ct
@@ -495,13 +461,16 @@ def _run_code_agent(bus: MessageBus) -> None:
     try:
         from agents.code_agent import scan_all_repos, scan_repo, ask_code_agent
         ql = bus.query.lower()
-        def _work():
+
+        def _work() -> Any:
             if re.search(r"\b(scan all|all repos)\b", ql):
                 return scan_all_repos()
-            m = re.search(r"\b(scan|check|review)\s+([a-zA-Z0-9_\-\.]+)\b", bus.query, re.I)
+            m = re.search(r"\b(scan|check|review)\s+([a-zA-Z0-9_\-\.]+)\b",
+                          bus.query, re.I)
             if m:
                 return scan_repo(m.group(2))
             return {"answer": ask_code_agent(bus.query)}
+
         result  = _run_with_timeout(_work, timeout=10)
         summary = _build_code_summary(result)
         bus.post("CodeAgent", "code_result", result, _ms() - t0)
@@ -519,12 +488,14 @@ def _build_code_summary(result: Dict[str, Any]) -> str:
     if "answer" in result:
         return str(result["answer"])[:500]
     if "repos" in result:
-        lines = [f"{r['repo']}: {r['health']}/100 ({r.get('findings',0)} findings)"
-                 for r in result.get("repos", [])[:4]]
-        return f"Scanned {result.get('scanned',0)} repos:\n" + "\n".join(lines)
+        lines = [
+            f"{r['repo']}: {r['health']}/100 ({r.get('findings', 0)} findings)"
+            for r in result.get("repos", [])[:4]
+        ]
+        return f"Scanned {result.get('scanned', 0)} repos:\n" + "\n".join(lines)
     if "health" in result:
         return (f"{result.get('repo')}: health {result.get('health')}/100. "
-                f"{result.get('summary','')[:200]}")
+                f"{result.get('summary', '')[:200]}")
     return str(result)[:300]
 
 
@@ -540,7 +511,7 @@ def _run_briefing_agent(bus: MessageBus) -> None:
             overdue = [t for t in tasks if t[4] and _parse_dt(t[4]) < now]
             high    = [t for t in tasks if t[2] == "high"]
             lines   = [
-                f"  {'🔴' if t[2]=='high' else '🟡'} [{t[0]}] {t[1][:55]}"
+                f"  {'🔴' if t[2] == 'high' else '🟡'} [{t[0]}] {t[1][:55]}"
                 + (" ⚠ OVERDUE" if t[4] and _parse_dt(t[4]) < now else "")
                 for t in tasks[:6]
             ]
@@ -582,8 +553,8 @@ def _run_briefing_agent(bus: MessageBus) -> None:
         pass
 
     try:
-        from connectors.gmail import get_gmail_summary
         from connectors.google_auth import is_authorized
+        from connectors.gmail import get_gmail_summary
         if is_authorized():
             gmail = get_gmail_summary()
             if gmail and gmail.get("unread_count", 0) > 0:
@@ -593,11 +564,13 @@ def _run_briefing_agent(bus: MessageBus) -> None:
 
     try:
         from mpesa_engine import get_today_spend, get_average_daily_spend
+
         def _f(v: Any) -> float:
             try:
                 return float(v) if v is not None else 0.0
             except Exception:
                 return 0.0
+
         today = _f(get_today_spend())
         avg   = _f(get_average_daily_spend())
         if today > 0:
@@ -619,8 +592,8 @@ def _run_briefing_agent(bus: MessageBus) -> None:
         stats = get_code_stats()
         if stats.get("total_runs", 0) > 0:
             parts.append(
-                f"⌥ **Code** — {stats.get('open',0)} open findings, "
-                f"avg health {stats.get('avg_health',0)}/100"
+                f"⌥ **Code** — {stats.get('open', 0)} open findings, "
+                f"avg health {stats.get('avg_health', 0)}/100"
                 + (f", ⚠ {stats['critical']} critical" if stats.get("critical") else "")
             )
     except Exception:
@@ -711,7 +684,7 @@ def _build_notification(bus: MessageBus) -> Tuple[str, str]:
         return "ORA Code Agent", _build_code_summary(bus.code_result)[:200]
     if bus.intent in ("research", "research_then_content") and bus.research_result:
         title_text = bus.research_result.get("title", bus.query[:60])
-        body = f"Research complete: {title_text}"
+        body       = f"Research complete: {title_text}"
         if bus.content_draft:
             body += f" → Draft created ({_detect_content_type(bus.query)})"
         return "ORA Research", body
@@ -803,6 +776,7 @@ class Coordinator:
 
 # Module-level convenience
 coordinator = Coordinator()
+
 
 def run(query: str) -> Dict[str, Any]:
     return Coordinator.run(query)
