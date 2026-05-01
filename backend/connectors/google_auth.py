@@ -36,6 +36,8 @@ REDIRECT_URI  = GOOGLE_REDIRECT_URI
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",       # Phase 2: send smart replies
+    "https://www.googleapis.com/auth/gmail.modify",     # Phase 2: mark as read after reply
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 

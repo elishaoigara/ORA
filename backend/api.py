@@ -43,6 +43,7 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('agents.content_agent', fromlist=['init_content_drafts_table']).init_content_drafts_table(), "Content Drafts"),
         (lambda: __import__('agents.code_agent', fromlist=['init_code_agent_tables']).init_code_agent_tables(), "Code Agent DB"),
         (lambda: __import__('agents.agent_bus', fromlist=['init_agent_bus_table']).init_agent_bus_table(), "Agent Bus"),
+        (lambda: __import__('connectors.gmail', fromlist=['init_gmail_tables']).init_gmail_tables(), "Gmail Replies"),
     ]:
         try:
             fn()
@@ -1096,3 +1097,270 @@ def bus_pending_for_agent(agent: str):
         return get_pending(agent)
     except Exception:
         return []
+
+# ═══════════════════════════════════════════════════════════════
+# PHASE 2 — GMAIL COMMUNICATION AGENT ENDPOINTS
+# ═══════════════════════════════════════════════════════════════
+
+# gmail tables are initialised in lifespan below — no duplicate startup needed
+
+
+@app.get("/api/gmail/summary")
+def gmail_summary():
+    try:
+        from connectors.gmail import get_gmail_summary
+        return get_gmail_summary()
+    except Exception as e:
+        return {"authorized": False, "unread_count": 0, "error": str(e)}
+
+
+@app.get("/api/gmail/emails")
+def gmail_emails(limit: int = 15):
+    try:
+        from connectors.gmail import get_recent_emails
+        return get_recent_emails(max_results=limit)
+    except Exception as e:
+        print(f"[API] gmail/emails error: {e}")
+        return []
+
+
+@app.get("/api/gmail/replies/pending")
+def gmail_replies_pending(limit: int = 15):
+    try:
+        from connectors.gmail import get_pending_replies
+        return get_pending_replies(limit=limit)
+    except Exception as e:
+        return []
+
+
+@app.get("/api/gmail/replies/history")
+def gmail_replies_history(limit: int = 20):
+    try:
+        from connectors.gmail import get_reply_history
+        return get_reply_history(limit=limit)
+    except Exception as e:
+        return []
+
+
+@app.get("/api/gmail/replies/stats")
+def gmail_reply_stats():
+    try:
+        from connectors.gmail import get_reply_stats
+        return get_reply_stats()
+    except Exception as e:
+        return {"total": 0, "pending": 0, "sent": 0, "approved": 0, "rejected": 0}
+
+
+class ReplyTextRequest(BaseModel):
+    text: str
+
+
+@app.put("/api/gmail/replies/{reply_id}/text")
+def gmail_update_reply_text(reply_id: int, payload: ReplyTextRequest):
+    try:
+        from connectors.gmail import update_reply_text
+        ok = update_reply_text(reply_id, payload.text)
+        return {"ok": ok}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+class RegenerateReplyRequest(BaseModel):
+    tone: str = "professional"
+
+
+@app.post("/api/gmail/replies/{reply_id}/regenerate")
+def gmail_regenerate_reply(reply_id: int, payload: RegenerateReplyRequest):
+    try:
+        from connectors.gmail import regenerate_reply
+        return regenerate_reply(reply_id, tone=payload.tone)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/gmail/replies/{reply_id}/approve")
+def gmail_approve_reply(reply_id: int):
+    try:
+        from connectors.gmail import approve_and_send_reply
+        return approve_and_send_reply(reply_id)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/gmail/replies/{reply_id}/reject")
+def gmail_reject_reply(reply_id: int):
+    try:
+        from connectors.gmail import reject_reply
+        ok = reject_reply(reply_id)
+        return {"ok": ok}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/gmail/replies/generate")
+def gmail_generate_replies_now():
+    """Manually trigger reply generation for all eligible emails."""
+    try:
+        from connectors.gmail import get_emails_needing_reply, suggest_reply, save_suggested_reply
+        emails = get_emails_needing_reply(limit=5)
+        added = 0
+        for email in emails:
+            text = suggest_reply(email)
+            if len(text) > 20:
+                saved = save_suggested_reply(
+                    email_id=email.get("id", "unknown"),
+                    thread_id=email.get("thread_id"),
+                    subject=email.get("subject", ""),
+                    sender=email.get("sender", ""),
+                    email_body=email.get("body", ""),
+                    suggested_text=text,
+                )
+                if saved:
+                    added += 1
+        return {"ok": True, "generated": added}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ═══════════════════════════════════════════════════════════════
+# PHASE 2 — VOICE INTERFACE ENDPOINT
+# ═══════════════════════════════════════════════════════════════
+
+@app.post("/api/voice/transcribe")
+async def voice_transcribe(file: UploadFile = File(...)):
+    """
+    Accept a web audio blob (webm/mp4/wav/ogg) from the browser,
+    transcribe via Groq Whisper, return transcript + ORA's response.
+    """
+    import tempfile
+    import os
+
+    tmp_path = None
+    try:
+        from config import GROQ_API_KEY, DATA_DIR
+        from groq import Groq
+
+        # Write upload to temp file — Whisper needs a real file
+        suffix = ".webm"
+        filename = (file.filename or "").lower()
+        for ext in [".wav", ".mp4", ".ogg", ".m4a", ".webm"]:
+            if filename.endswith(ext):
+                suffix = ext
+                break
+
+        tmp_path = os.path.join(DATA_DIR, f"voice_{int(time.time())}{suffix}")
+        content = await file.read()
+        if len(content) > 25 * 1024 * 1024:
+            raise HTTPException(413, "Audio too large (max 25MB)")
+
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+
+        # Transcribe
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        with open(tmp_path, "rb") as f:
+            result = groq_client.audio.transcriptions.create(
+                model="whisper-large-v3-turbo",
+                file=f,
+                response_format="text",
+            )
+
+        transcript = result.strip() if isinstance(result, str) else getattr(result, "text", "").strip()
+
+        if not transcript:
+            return {"transcript": "", "reply": "", "error": "Could not understand audio"}
+
+        # Route through ORA brain for a response
+        from ai_brain import ask_groq
+        from database import save_conversation
+        save_conversation("user", f"[Voice] {transcript}")
+        brain_result = ask_groq(transcript)
+        reply = ""
+        if isinstance(brain_result, dict):
+            reply = brain_result.get("reply") or brain_result.get("raw") or ""
+        else:
+            reply = str(brain_result)
+
+        if reply:
+            save_conversation("assistant", reply)
+
+        return {"transcript": transcript, "reply": reply.strip()}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[VOICE API] Error: {e}")
+        raise HTTPException(500, f"Transcription failed: {str(e)}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+
+# ═══════════════════════════════════════════════════════════════
+# PHASE 2 — PROACTIVE INTELLIGENCE: MANUAL TRIGGER
+# ═══════════════════════════════════════════════════════════════
+
+@app.post("/api/proactive/run")
+def proactive_run_now():
+    """Manually fire a proactive check cycle (useful for testing)."""
+    try:
+        from intelligence.proactive_engine import run_proactive_checks
+        from agent_guard import reset_all
+        reset_all()  # bypass cooldowns for manual trigger
+        run_proactive_checks()
+        return {"ok": True, "message": "Proactive checks fired"}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/proactive/status")
+def proactive_status():
+    """Return what the proactive engine would fire right now."""
+    try:
+        from datetime import datetime
+        from database import get_tasks, get_conn, close_conn
+
+        now    = datetime.now()
+        hour   = now.hour
+        today  = now.date().isoformat()
+
+        pending = get_tasks("pending")
+        overdue = [t for t in pending if t[4] and datetime.fromisoformat(t[4]) < now]
+        high    = [t for t in pending if t[2] == "high"]
+
+        # Pending replies older than 24h
+        conn = get_conn()
+        old_replies = conn.execute("""
+            SELECT COUNT(*) FROM suggested_replies
+            WHERE status='pending' AND created_at < datetime('now', '-24 hours')
+        """).fetchone()[0]
+        pending_replies = conn.execute("""
+            SELECT COUNT(*) FROM suggested_replies WHERE status='pending'
+        """).fetchone()[0]
+        close_conn()
+
+        signals = []
+        if overdue:
+            signals.append({"type": "overdue_tasks", "count": len(overdue), "severity": "high"})
+        if len(high) >= 2:
+            signals.append({"type": "high_priority_backlog", "count": len(high), "severity": "medium"})
+        if old_replies > 0:
+            signals.append({"type": "unanswered_emails", "count": old_replies, "severity": "medium"})
+        if pending_replies > 0:
+            signals.append({"type": "pending_replies", "count": pending_replies, "severity": "low"})
+
+        return {
+            "hour":            hour,
+            "today":           today,
+            "pending_tasks":   len(pending),
+            "overdue_tasks":   len(overdue),
+            "high_priority":   len(high),
+            "pending_replies": pending_replies,
+            "old_replies":     old_replies,
+            "active_signals":  signals,
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))

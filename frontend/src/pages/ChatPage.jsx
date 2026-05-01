@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { sendMessage, getConversations } from "../api";
+import BASE_URL from "../api";
 
 let _id = 0;
 const uid = () => String(++_id);
@@ -184,7 +185,11 @@ export default function ChatPage() {
   const [loading,  setLoading]  = useState(false);
   const [chipSet,  setChipSet]  = useState("default");
   const [toast,    setToast]    = useState(null);
+  const [voiceActive,  setVoiceActive]  = useState(false);
+  const [voiceStatus,  setVoiceStatus]  = useState(""); // "recording" | "transcribing" | ""
 
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef   = useRef([]);
   const listRef    = useRef(null);
   const inputRef   = useRef("");
   const thinkId    = useRef(null);
@@ -283,6 +288,55 @@ export default function ChatPage() {
   const chips = CHIP_SETS[chipSet] || CHIP_SETS.default;
   const greeting = getGreeting();
 
+  // ── Voice recording ───────────────────────────────────────
+  const startVoice = useCallback(async () => {
+    if (voiceActive) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      recorder.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        setVoiceStatus("transcribing");
+        try {
+          const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+          const form = new FormData();
+          form.append("file", blob, "voice.webm");
+          const res = await fetch(`${BASE_URL}/api/voice/transcribe`, { method: "POST", body: form });
+          if (!res.ok) throw new Error("Transcription failed");
+          const data = await res.json();
+          if (data.transcript) {
+            // Show transcript as user message + ORA reply
+            const userMsg  = { id: uid(), role: "user",      content: `🎙️ ${data.transcript}`, ts: ts() };
+            const oraMsg   = { id: uid(), role: "assistant", content: data.reply || "Got it.", ts: ts() };
+            setMessages(prev => [...prev, userMsg, oraMsg]);
+            scrollBottom();
+          } else {
+            showToast("Couldn't understand audio — try again", "error");
+          }
+        } catch (err) {
+          showToast("Voice transcription failed", "error");
+        } finally {
+          setVoiceActive(false);
+          setVoiceStatus("");
+        }
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setVoiceActive(true);
+      setVoiceStatus("recording");
+    } catch (err) {
+      showToast("Microphone access denied", "error");
+    }
+  }, [voiceActive, scrollBottom]);
+
+  const stopVoice = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+  }, []);
+
   return (
     <div className="chat-page">
       {/* Messages */}
@@ -323,12 +377,29 @@ export default function ChatPage() {
         <input
           ref={inputEl}
           className="chat-input-field"
-          placeholder="Message ORA..."
+          placeholder={voiceStatus === "recording" ? "🔴 Recording — click mic to stop..." : voiceStatus === "transcribing" ? "Transcribing..." : "Message ORA..."}
           value={input}
           onChange={e => { setInput(e.target.value); inputRef.current = e.target.value; }}
           onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-          disabled={loading}
+          disabled={loading || voiceActive}
         />
+        <button
+          className="chat-send-btn"
+          title={voiceActive ? "Stop recording" : "Voice input"}
+          onClick={voiceActive ? stopVoice : startVoice}
+          disabled={loading || voiceStatus === "transcribing"}
+          style={{
+            background: voiceActive ? "rgba(255,68,68,0.15)" : "transparent",
+            border: voiceActive ? "1px solid rgba(255,68,68,0.4)" : "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            color: voiceActive ? "#ff4444" : "var(--text-3)",
+            width: 36, height: 36, display: "flex", alignItems: "center",
+            justifyContent: "center", cursor: "pointer", flexShrink: 0,
+            animation: voiceActive ? "pulse 1.2s ease-in-out infinite" : "none",
+          }}
+        >
+          {voiceStatus === "transcribing" ? "⋯" : "🎙"}
+        </button>
         <button
           className="chat-send-btn"
           onClick={() => send()}

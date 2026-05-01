@@ -7,6 +7,26 @@ async function api(path) {
   return res.json()
 }
 
+async function apiPost(path, body) {
+  const res = await fetch(BASE_URL + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  })
+  if (!res.ok) throw new Error("HTTP " + res.status)
+  return res.json()
+}
+
+async function apiPut(path, body) {
+  const res = await fetch(BASE_URL + path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  })
+  if (!res.ok) throw new Error("HTTP " + res.status)
+  return res.json()
+}
+
 function fmtTime(str) {
   if (!str) return "—"
   try {
@@ -58,16 +78,29 @@ function avatarColor(str) {
 }
 
 export default function InboxPage() {
-  const [tab,          setTab]          = useState("inbox")
-  const [emails,       setEmails]       = useState([])
-  const [today,        setToday]        = useState([])
-  const [week,         setWeek]         = useState([])
-  const [summary,      setSummary]      = useState(null)
-  const [loading,      setLoading]      = useState(true)
-  const [selected,     setSelected]     = useState(null)
-  const [calView,      setCalView]      = useState("today")
-  const [lastRefresh,  setLastRefresh]  = useState(null)
-  const [error,        setError]        = useState(null)
+  const [tab,            setTab]            = useState("inbox")
+  const [emails,         setEmails]         = useState([])
+  const [today,          setToday]          = useState([])
+  const [week,           setWeek]           = useState([])
+  const [summary,        setSummary]        = useState(null)
+  const [loading,        setLoading]        = useState(true)
+  const [selected,       setSelected]       = useState(null)
+  const [calView,        setCalView]        = useState("today")
+  const [lastRefresh,    setLastRefresh]    = useState(null)
+  const [error,          setError]          = useState(null)
+  // Smart replies
+  const [pendingReplies, setPendingReplies] = useState([])
+  const [replyStats,     setReplyStats]     = useState(null)
+  const [editingId,      setEditingId]      = useState(null)
+  const [editText,       setEditText]       = useState("")
+  const [replyLoading,   setReplyLoading]   = useState(false)
+  const [replyToast,     setReplyToast]     = useState(null)
+  const [generating,     setGenerating]     = useState(false)
+
+  const showReplyToast = (msg, type = "success") => {
+    setReplyToast({ msg, type })
+    setTimeout(() => setReplyToast(null), 3000)
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -95,12 +128,24 @@ export default function InboxPage() {
     } catch { setEmails([]) }
   }, [])
 
+  const loadReplies = useCallback(async () => {
+    try {
+      const [pending, stats] = await Promise.allSettled([
+        api("/api/gmail/replies/pending"),
+        api("/api/gmail/replies/stats"),
+      ])
+      if (pending.status === "fulfilled") setPendingReplies(Array.isArray(pending.value) ? pending.value : [])
+      if (stats.status === "fulfilled")   setReplyStats(stats.value)
+    } catch { setPendingReplies([]) }
+  }, [])
+
   useEffect(() => {
     load()
     loadEmails()
-    const id = setInterval(() => { load(); loadEmails() }, 5 * 60 * 1000)
+    loadReplies()
+    const id = setInterval(() => { load(); loadEmails(); loadReplies() }, 5 * 60 * 1000)
     return () => clearInterval(id)
-  }, [load, loadEmails])
+  }, [load, loadEmails, loadReplies])
 
   const unread   = summary?.unread_count || 0
   const imminent = today.filter(e => e.minutes_until != null && e.minutes_until >= 0 && e.minutes_until <= 60)
@@ -169,7 +214,8 @@ export default function InboxPage() {
       {/* Tabs */}
       <div className="filter-tabs" style={{ marginBottom: 14 }}>
         {[
-          { id: "inbox",    label: "GMAIL" + (unread > 0 ? " (" + unread + ")" : "") },
+          { id: "inbox",   label: "GMAIL" + (unread > 0 ? " (" + unread + ")" : "") },
+          { id: "replies", label: "SMART REPLIES" + (pendingReplies.length > 0 ? " (" + pendingReplies.length + ")" : "") },
           { id: "calendar", label: "CALENDAR" },
         ].map(t => (
           <button key={t.id} className={"filter-tab" + (tab === t.id ? " active" : "")} onClick={() => setTab(t.id)}>
@@ -298,6 +344,223 @@ export default function InboxPage() {
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── SMART REPLIES TAB ── */}
+      {tab === "replies" && (
+        <div>
+          {/* Stats row */}
+          {replyStats && (
+            <div className="metrics-row" style={{ marginBottom: 14 }}>
+              {[
+                { label: "PENDING",  value: replyStats.pending,  color: replyStats.pending > 0 ? "#ff9900" : "#00ff9d" },
+                { label: "SENT",     value: replyStats.sent,     color: "#00ff9d" },
+                { label: "APPROVED", value: replyStats.approved, color: "#4488ff" },
+                { label: "REJECTED", value: replyStats.rejected, color: "var(--text-4)" },
+              ].map(s => (
+                <div className="metric-card" key={s.label}>
+                  <div className="metric-label">{s.label}</div>
+                  <div className="metric-value" style={{ color: s.color }}>{s.value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Generate button */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <button
+              className="btn"
+              disabled={generating}
+              onClick={async () => {
+                setGenerating(true)
+                try {
+                  const r = await apiPost("/api/gmail/replies/generate")
+                  showReplyToast(`Generated ${r.generated} new suggestion(s)`)
+                  loadReplies()
+                } catch { showReplyToast("Generation failed", "error") }
+                finally { setGenerating(false) }
+              }}
+            >
+              {generating
+                ? <><span className="spinner" style={{ width: 12, height: 12 }} /> GENERATING...</>
+                : "⚡ GENERATE REPLIES"}
+            </button>
+          </div>
+
+          {replyToast && (
+            <div style={{
+              padding: "10px 14px", borderRadius: "var(--radius)", marginBottom: 12,
+              background: replyToast.type === "error" ? "rgba(255,68,68,0.1)" : "rgba(0,255,157,0.08)",
+              border: `1px solid ${replyToast.type === "error" ? "rgba(255,68,68,0.3)" : "rgba(0,255,157,0.3)"}`,
+              color: replyToast.type === "error" ? "#ff4444" : "#00ff9d",
+              fontSize: 12, fontFamily: "var(--mono)",
+            }}>
+              {replyToast.msg}
+            </div>
+          )}
+
+          <div className="card">
+            <div className="card-header">
+              <span className="card-title">PENDING SMART REPLIES</span>
+              <span className="card-badge">{pendingReplies.length}</span>
+            </div>
+
+            {pendingReplies.length === 0 ? (
+              <div className="card-body">
+                <div className="empty-state">
+                  <div className="empty-icon">✉</div>
+                  <div className="empty-title">No pending replies</div>
+                  <div className="empty-body">Click Generate Replies to scan your inbox</div>
+                </div>
+              </div>
+            ) : (
+              <div>
+                {pendingReplies.map(reply => {
+                  const isEditing = editingId === reply.id
+                  return (
+                    <div key={reply.id} style={{
+                      borderBottom: "1px solid var(--border)",
+                      padding: "14px 16px",
+                    }}>
+                      {/* Header */}
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)", marginBottom: 2 }}>
+                          {reply.subject || "(no subject)"}
+                        </div>
+                        <div className="mono text-xs" style={{ color: "var(--text-4)" }}>
+                          FROM: {reply.sender || "unknown"}
+                        </div>
+                      </div>
+
+                      {/* Original email body */}
+                      {reply.email_body && (
+                        <div style={{
+                          fontSize: 11, color: "var(--text-4)", lineHeight: 1.5,
+                          background: "var(--bg-2)", border: "1px solid var(--border)",
+                          borderRadius: "var(--radius)", padding: "8px 10px",
+                          marginBottom: 10, maxHeight: 80, overflowY: "auto",
+                          fontStyle: "italic",
+                        }}>
+                          {reply.email_body.slice(0, 280)}{reply.email_body.length > 280 ? "…" : ""}
+                        </div>
+                      )}
+
+                      {/* Suggested reply */}
+                      <div className="mono text-xs" style={{ color: "var(--text-4)", marginBottom: 4, letterSpacing: 1 }}>
+                        ORA SUGGESTS ({(reply.tone || "professional").toUpperCase()}):
+                      </div>
+                      {isEditing ? (
+                        <textarea
+                          value={editText}
+                          onChange={e => setEditText(e.target.value)}
+                          rows={5}
+                          style={{
+                            width: "100%", background: "var(--bg-2)",
+                            border: "1px solid rgba(0,255,157,0.3)",
+                            borderRadius: "var(--radius)", padding: "10px 12px",
+                            color: "var(--text-1)", fontSize: 12, lineHeight: 1.6,
+                            resize: "vertical", fontFamily: "inherit", boxSizing: "border-box",
+                          }}
+                        />
+                      ) : (
+                        <div style={{
+                          fontSize: 13, color: "var(--text-2)", lineHeight: 1.7,
+                          whiteSpace: "pre-wrap", background: "var(--bg-2)",
+                          border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                          padding: "10px 12px", marginBottom: 10,
+                        }}>
+                          {reply.suggested_text}
+                        </div>
+                      )}
+
+                      {/* Actions */}
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                        {!isEditing ? (
+                          <>
+                            <button
+                              className="btn btn-sm"
+                              style={{ background: "rgba(0,255,157,0.1)", borderColor: "rgba(0,255,157,0.3)", color: "#00ff9d" }}
+                              disabled={replyLoading}
+                              onClick={async () => {
+                                setReplyLoading(true)
+                                try {
+                                  const r = await apiPost(`/api/gmail/replies/${reply.id}/approve`)
+                                  showReplyToast(r.sent ? "Reply sent ✓" : "Approved — copy to send manually")
+                                  loadReplies()
+                                } catch { showReplyToast("Failed", "error") }
+                                finally { setReplyLoading(false) }
+                              }}
+                            >
+                              {replyLoading ? "⋯" : "✓ APPROVE & SEND"}
+                            </button>
+                            <button
+                              className="btn btn-sm"
+                              onClick={() => { setEditingId(reply.id); setEditText(reply.suggested_text) }}
+                            >
+                              ✎ EDIT
+                            </button>
+                            {["professional", "brief", "friendly", "formal"].map(tone => (
+                              <button
+                                key={tone}
+                                className="btn btn-sm"
+                                style={{ opacity: 0.7, fontSize: 10 }}
+                                disabled={replyLoading}
+                                onClick={async () => {
+                                  setReplyLoading(true)
+                                  try {
+                                    await apiPost(`/api/gmail/replies/${reply.id}/regenerate`, { tone })
+                                    showReplyToast(`Regenerated (${tone})`)
+                                    loadReplies()
+                                  } catch { showReplyToast("Regen failed", "error") }
+                                  finally { setReplyLoading(false) }
+                                }}
+                              >
+                                ↺ {tone.toUpperCase()}
+                              </button>
+                            ))}
+                            <button
+                              className="btn btn-sm"
+                              style={{ borderColor: "rgba(255,68,68,0.3)", color: "#ff4444" }}
+                              onClick={async () => {
+                                try {
+                                  await apiPost(`/api/gmail/replies/${reply.id}/reject`)
+                                  showReplyToast("Dismissed")
+                                  loadReplies()
+                                } catch {}
+                              }}
+                            >
+                              ✕ DISMISS
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              className="btn btn-sm"
+                              style={{ background: "rgba(0,255,157,0.1)", borderColor: "rgba(0,255,157,0.3)", color: "#00ff9d" }}
+                              onClick={async () => {
+                                try {
+                                  await apiPut(`/api/gmail/replies/${reply.id}/text`, { text: editText })
+                                  setEditingId(null)
+                                  showReplyToast("Saved")
+                                  loadReplies()
+                                } catch { showReplyToast("Save failed", "error") }
+                              }}
+                            >
+                              ✓ SAVE
+                            </button>
+                            <button className="btn btn-sm" onClick={() => setEditingId(null)}>
+                              ✕ CANCEL
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

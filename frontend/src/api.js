@@ -269,3 +269,40 @@ export const askCodeAgent        = (question, repo = "") =>
    ========================= */
 
 export default BASE_URL;
+/* =========================
+   PHASE 2 — COMMUNICATION AGENT
+   ========================= */
+
+export const getGmailSummary      = ()      => request("/gmail/summary");
+export const getGmailEmails       = (n=15)  => request(`/gmail/emails?limit=${n}`);
+export const getPendingReplies    = (n=15)  => request(`/gmail/replies/pending?limit=${n}`);
+export const getReplyHistory      = (n=20)  => request(`/gmail/replies/history?limit=${n}`);
+export const getReplyStats        = ()      => request("/gmail/replies/stats");
+
+export const generateReplies      = ()      =>
+  request("/gmail/replies/generate", { method: "POST" });
+
+export const approveReply         = (id)    =>
+  request(`/gmail/replies/${id}/approve`, { method: "POST" });
+
+export const rejectReply          = (id)    =>
+  request(`/gmail/replies/${id}/reject`, { method: "POST" });
+
+export const updateReplyText      = (id, text) =>
+  request(`/gmail/replies/${id}/text`, { method: "PUT",  body: JSON.stringify({ text }) });
+
+export const regenerateReply      = (id, tone = "professional") =>
+  request(`/gmail/replies/${id}/regenerate`, { method: "POST", body: JSON.stringify({ tone }) });
+
+/* =========================
+   PHASE 2 — PROACTIVE INTELLIGENCE
+   ========================= */
+
+export const getProactiveStatus   = ()      => request("/proactive/status");
+export const runProactiveChecks   = ()      => request("/proactive/run", { method: "POST" });
+
+/* =========================
+   PHASE 2 — VOICE
+   ========================= */
+
+// Voice transcription is called with raw FormData (not JSON) — done inline in ChatPage.
