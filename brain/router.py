@@ -332,13 +332,7 @@ def _ms() -> int:
 # AGENT IMPLEMENTATIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── Intent Agent  (zero LLM — delegates to Intent_parser.py) ─────────────────
 def _run_intent_agent(bus: MessageBus) -> None:
-    """
-    Pure-regex fast path for tasks, goals, calendar, weather, spend, github.
-    Average latency < 50 ms, zero Groq cost.
-    Falls through to ChatAgent if Intent_parser returns nothing.
-    """
     t0 = _ms()
     try:
         from Intent_parser import parse_intent, execute_intent
@@ -348,30 +342,17 @@ def _run_intent_agent(bus: MessageBus) -> None:
             if result:
                 bus.reply = result
                 bus.post("IntentAgent", "task_result",
-                         {"type": intent_obj["type"], "reply": result},
-                         _ms() - t0)
+                         {"type": intent_obj["type"], "reply": result}, _ms() - t0)
                 return
     except Exception as e:
         print(f"[INTENT_AGENT] {e}")
-
-    # Fallback — Intent_parser didn't handle it
     _run_chat_agent(bus)
 
 
-# ── Memory Agent ──────────────────────────────────────────────────────────────
 def _run_memory_agent(bus: MessageBus) -> None:
-    """
-    Loads all long-term knowledge about the user into bus.memory_ctx:
-      • Learned facts (learning_engine)
-      • User profile (memory/profile)
-      • Preferences (memory/preferences)
-      • Important memory events (memory/events)
-    Also handles memory_write intent by persisting the new fact.
-    """
     t0    = _ms()
     parts: List[str] = []
 
-    # 1. Learned facts
     try:
         from intelligence.learning_engine import get_facts_as_context, extract_explicit_facts
         facts = get_facts_as_context(limit=15)
@@ -388,7 +369,6 @@ def _run_memory_agent(bus: MessageBus) -> None:
     except Exception as e:
         print(f"[MEMORY_AGENT] facts: {e}")
 
-    # 2. Profile
     try:
         from memory.profile import get_all_profile
         profile = get_all_profile()
@@ -398,7 +378,6 @@ def _run_memory_agent(bus: MessageBus) -> None:
     except Exception as e:
         print(f"[MEMORY_AGENT] profile: {e}")
 
-    # 3. Preferences
     try:
         from memory.preferences import get_preferences
         prefs = get_preferences()
@@ -408,7 +387,6 @@ def _run_memory_agent(bus: MessageBus) -> None:
     except Exception as e:
         print(f"[MEMORY_AGENT] prefs: {e}")
 
-    # 4. Important memory events
     try:
         from memory.events import get_important_events
         events = get_important_events(min_importance=7, limit=4)
@@ -426,9 +404,7 @@ def _run_memory_agent(bus: MessageBus) -> None:
     })
 
 
-# ── Knowledge Agent ───────────────────────────────────────────────────────────
 def _run_knowledge_agent(bus: MessageBus) -> None:
-    """RAG search over uploaded documents via knowledge/pipeline.py."""
     t0 = _ms()
     try:
         from knowledge.pipeline import search_and_format
@@ -444,22 +420,17 @@ def _run_knowledge_agent(bus: MessageBus) -> None:
     })
 
 
-# ── Research Agent ────────────────────────────────────────────────────────────
 def _run_research_agent(bus: MessageBus) -> None:
-    """Tavily web search + Groq synthesis via research_agent.py."""
     t0 = _ms()
     try:
         from research_agent import deep_research
-
         result    = _run_with_timeout(deep_research, bus.query, timeout=10)
         synthesis = result.get("content") or result.get("synthesis", "")
-
         bus.post("ResearchAgent", "research_result", result, _ms() - t0)
         if synthesis:
             bus.add_context("ResearchAgent", synthesis[:_CFG["max_ctx_chars"]])
         if bus.intent == "research":
             bus.reply = synthesis[:600] or "Research complete — no synthesis generated."
-
     except AgentTimeoutError:
         bus.reply = "Research timed out. Try a more focused query."
         bus.add_context("ResearchAgent", "Research timed out.")
@@ -468,24 +439,16 @@ def _run_research_agent(bus: MessageBus) -> None:
         bus.add_context("ResearchAgent", f"Research failed: {str(e)[:100]}")
 
 
-# ── Content Agent ─────────────────────────────────────────────────────────────
 def _run_content_agent(bus: MessageBus) -> None:
-    """
-    Generates a content draft via agents/content_agent.py.
-    Automatically enriches the topic with research or KB context
-    if upstream agents produced any.
-    """
     t0 = _ms()
     try:
         from agents.content_agent import create_draft
-
         extra = ""
         if bus.research_result:
             extra = (bus.research_result.get("content")
                      or bus.research_result.get("synthesis", ""))[:800]
         elif bus.kb_ctx:
             extra = bus.kb_ctx[:500]
-
         draft = create_draft(
             topic        = bus.query,
             content_type = _detect_content_type(bus.query),
@@ -498,7 +461,6 @@ def _run_content_agent(bus: MessageBus) -> None:
         bus.reply = draft_text
         bus.add_context("ContentAgent",
                         f"Draft ({_detect_content_type(bus.query)}): {draft_text[:150]}…")
-
     except Exception as e:
         print(f"[CONTENT_AGENT] {e}")
         traceback.print_exc()
@@ -520,41 +482,31 @@ def _detect_content_type(q: str) -> str:
 
 def _detect_tone(q: str) -> str:
     ql = q.lower()
-    if any(w in ql for w in ("professional", "formal", "business")):   return "professional"
-    if any(w in ql for w in ("casual", "friendly", "conversational")): return "casual"
-    if any(w in ql for w in ("inspiring", "motivational")):            return "inspirational"
+    if any(w in ql for w in ("professional", "formal", "business")):    return "professional"
+    if any(w in ql for w in ("casual", "friendly", "conversational")):  return "casual"
+    if any(w in ql for w in ("inspiring", "motivational")):             return "inspirational"
     if any(w in ql for w in ("technical", "developer", "engineering")): return "technical"
-    if any(w in ql for w in ("funny", "humor", "witty")):              return "humorous"
+    if any(w in ql for w in ("funny", "humor", "witty")):               return "humorous"
     return "professional"
 
 
-# ── Code Agent ────────────────────────────────────────────────────────────────
 def _run_code_agent(bus: MessageBus) -> None:
-    """
-    Delegates to agents/code_agent.py.
-    Detects: scan-all, scan-specific-repo, or Q&A mode.
-    """
     t0 = _ms()
     try:
         from agents.code_agent import scan_all_repos, scan_repo, ask_code_agent
-
         ql = bus.query.lower()
-
         def _work():
             if re.search(r"\b(scan all|all repos)\b", ql):
                 return scan_all_repos()
-            m = re.search(r"\b(scan|check|review)\s+([a-zA-Z0-9_\-\.]+)\b",
-                          bus.query, re.I)
+            m = re.search(r"\b(scan|check|review)\s+([a-zA-Z0-9_\-\.]+)\b", bus.query, re.I)
             if m:
                 return scan_repo(m.group(2))
             return {"answer": ask_code_agent(bus.query)}
-
         result  = _run_with_timeout(_work, timeout=10)
         summary = _build_code_summary(result)
         bus.post("CodeAgent", "code_result", result, _ms() - t0)
         bus.reply = summary
         bus.add_context("CodeAgent", summary[:400])
-
     except AgentTimeoutError:
         bus.reply = "Code scan timed out. Target a specific repo."
     except Exception as e:
@@ -576,17 +528,10 @@ def _build_code_summary(result: Dict[str, Any]) -> str:
     return str(result)[:300]
 
 
-# ── Briefing Agent ────────────────────────────────────────────────────────────
 def _run_briefing_agent(bus: MessageBus) -> None:
-    """
-    Full status brief — pulls every live ORA data source.
-    Only injects data that actually exists; never invents.
-    Sources: tasks, goals, calendar, gmail, mpesa, weather, code health.
-    """
     t0    = _ms()
     parts: List[str] = ["Here's your status:\n"]
 
-    # Tasks
     try:
         from database import get_tasks
         tasks = get_tasks("pending")
@@ -610,7 +555,6 @@ def _run_briefing_agent(bus: MessageBus) -> None:
     except Exception as e:
         print(f"[BRIEFING] tasks: {e}")
 
-    # Goals
     try:
         from intelligence.goals_engine import get_goals
         goals = get_goals("active")
@@ -626,7 +570,6 @@ def _run_briefing_agent(bus: MessageBus) -> None:
     except Exception as e:
         print(f"[BRIEFING] goals: {e}")
 
-    # Calendar
     try:
         from connectors.calendar import get_events_today, format_events_for_context
         events = get_events_today()
@@ -638,20 +581,16 @@ def _run_briefing_agent(bus: MessageBus) -> None:
     except Exception:
         pass
 
-    # Gmail
     try:
         from connectors.gmail import get_gmail_summary
         from connectors.google_auth import is_authorized
         if is_authorized():
             gmail = get_gmail_summary()
             if gmail and gmail.get("unread_count", 0) > 0:
-                count   = gmail["unread_count"]
-                senders = ", ".join(gmail.get("senders", [])[:3])
-                parts.append(f"📧 **Email** — {count} unread (from {senders})")
+                parts.append(f"📧 **Email** — {gmail['unread_count']} unread")
     except Exception:
         pass
 
-    # M-Pesa
     try:
         from mpesa_engine import get_today_spend, get_average_daily_spend
         def _f(v: Any) -> float:
@@ -667,7 +606,6 @@ def _run_briefing_agent(bus: MessageBus) -> None:
     except Exception:
         pass
 
-    # Weather
     try:
         from connectors.weather import get_weather_summary
         w = get_weather_summary()
@@ -676,7 +614,6 @@ def _run_briefing_agent(bus: MessageBus) -> None:
     except Exception:
         pass
 
-    # Code health (only if scans have run)
     try:
         from agents.code_agent import get_code_stats
         stats = get_code_stats()
@@ -684,8 +621,7 @@ def _run_briefing_agent(bus: MessageBus) -> None:
             parts.append(
                 f"⌥ **Code** — {stats.get('open',0)} open findings, "
                 f"avg health {stats.get('avg_health',0)}/100"
-                + (f", ⚠ {stats['critical']} critical"
-                   if stats.get("critical") else "")
+                + (f", ⚠ {stats['critical']} critical" if stats.get("critical") else "")
             )
     except Exception:
         pass
@@ -694,18 +630,9 @@ def _run_briefing_agent(bus: MessageBus) -> None:
     bus.post("BriefingAgent", "task_result", {"briefing": bus.reply}, _ms() - t0)
 
 
-# ── Chat Agent ────────────────────────────────────────────────────────────────
 def _run_chat_agent(bus: MessageBus) -> None:
-    """
-    Terminal synthesiser.
-    Uses ORA's full context.py system prompt (which already pulls profile,
-    calendar, gmail, tasks, goals, weather, learned facts, KB, alerts)
-    and layers on whatever extra context the bus has accumulated.
-    Skipped entirely if any upstream agent already produced bus.reply.
-    """
     if bus.reply:
         return
-
     t0 = _ms()
     try:
         from config import GROQ_API_KEY, GROQ_MODEL_PRIMARY, GROQ_MODEL_FALLBACK
@@ -714,9 +641,8 @@ def _run_chat_agent(bus: MessageBus) -> None:
         from database import get_conversation_history
 
         client = Groq(api_key=GROQ_API_KEY)
-        system = build_system_prompt(query=bus.query)   # full ORA context
+        system = build_system_prompt(query=bus.query)
 
-        # Layer bus context on top
         ctx_text = bus.full_context()
         if ctx_text:
             system += f"\n\n## AGENT CONTEXT\n{ctx_text[:_CFG['max_ctx_chars']]}"
@@ -762,12 +688,7 @@ def _run_chat_agent(bus: MessageBus) -> None:
         bus.reply = "ORA error. Please try again."
 
 
-# ── Notifier Agent ────────────────────────────────────────────────────────────
 def _run_notifier_agent(bus: MessageBus) -> None:
-    """
-    Fires Telegram + FCM push after research, research_then_content, or code runs.
-    No-op for all other intents to keep notification noise low.
-    """
     _notify_intents = {"research", "research_then_content", "code"}
     if bus.intent not in _notify_intents:
         return
@@ -821,18 +742,8 @@ _AGENT_FN: Dict[str, Any] = {
 class Coordinator:
     """
     The single entry point for all ORA messages.
-
-    Usage from api.py /api/chat (replace the 13-step monolith):
-
-        from brain.router import Coordinator
+    Called by api.py /api/chat:
         result = Coordinator.run(text, save_history=False)
-        # result["reply"]      → send to frontend
-        # result["query_type"] → legacy field, already set
-        # history saving is then done in api.py as before
-
-    Or keep api.py untouched and just upgrade classify/model_for:
-    the Coordinator.run() path is also exposed as a separate endpoint
-    at /api/chat/agent for experimentation.
     """
 
     @staticmethod
@@ -857,9 +768,7 @@ class Coordinator:
             except Exception as e:
                 print(f"[COORDINATOR] '{agent_name}' error: {e}")
                 traceback.print_exc()
-                # Don't abort — downstream agents may still recover
 
-        # Post-run: persist conversation + background learning
         if save_history and bus.reply:
             try:
                 from database import save_conversation
@@ -867,7 +776,6 @@ class Coordinator:
                 save_conversation("assistant", bus.reply[:300])
             except Exception:
                 pass
-
             try:
                 from intelligence.learning_engine import (
                     extract_facts_from_exchange, extract_explicit_facts,
@@ -882,14 +790,11 @@ class Coordinator:
                 pass
 
         return {
-            # What api.py returns to the frontend (unchanged shape)
             "reply":      bus.reply or "No response generated.",
-            "query_type": classify(query),   # legacy field api.py reads
-            # Extra metadata (frontend ignores if not needed)
+            "query_type": classify(query),
             "intent":     intent,
             "pipeline":   pipeline,
             "chain_log":  bus.chain_log,
-            # Structured outputs from specialist agents
             "research":   bus.research_result,
             "draft":      bus.content_draft,
             "code":       bus.code_result,
@@ -899,14 +804,12 @@ class Coordinator:
 # Module-level convenience
 coordinator = Coordinator()
 
-
 def run(query: str) -> Dict[str, Any]:
-    """One-liner: from brain.router import run; result = run(query)"""
     return Coordinator.run(query)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HELPERSs
+# HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_dt(s: str) -> datetime:
