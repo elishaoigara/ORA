@@ -69,24 +69,27 @@ async def lifespan(app: FastAPI):
         from agents.agent_bus import process_pending_messages as bus_process
 
         start_scheduler([
-            {"trigger": "interval", "minutes": 5,   "fn": run_agent_cycle,             "name": "agent_loop"},
-            {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": run_predictions,   "name": "morning_preds"},
-            {"trigger": "cron",     "hour": 18, "minute": 0,  "fn": run_predictions,   "name": "evening_preds"},
-            {"trigger": "cron",     "hour": 2,  "minute": 30, "fn": run_pattern_analysis, "name": "daily_patterns"},
-            {"trigger": "cron",     "hour": 8,  "minute": 30, "fn": run_goal_checkin,  "name": "weekly_goals"},
-            {"trigger": "cron",     "hour": 7,  "minute": 0,  "fn": generate_daily_brief, "name": "daily_brief"},
-            {"trigger": "interval", "hours": 3,    "fn": run_pattern_analysis,         "name": "pattern_analysis"},
-            {"trigger": "interval", "minutes": 10, "fn": run_proactive_checks,         "name": "proactive_checks"},
-            {"trigger": "interval", "minutes": 5,  "fn": run_autonomous_notifications, "name": "auto_notify"},
-            # ── Agent Message Bus ──────────────────────────────
-            {"trigger": "interval", "minutes": 5,  "fn": bus_process,                  "name": "agent_bus"},
-            # ── Phase 4: Data connectors ───────────────────────
-            {"trigger": "interval", "minutes": 30, "fn": sync_drive,     "name": "drive_sync"},
-            {"trigger": "interval", "minutes": 15, "fn": sync_gmail,     "name": "gmail_sync"},
-            {"trigger": "interval", "hours": 2,    "fn": sync_rss,       "name": "rss_sync"},
-            {"trigger": "interval", "hours": 1,    "fn": github_sync,    "name": "github_sync"},
-            # ── Code Agent ─────────────────────────────────────
-            {"trigger": "interval", "hours": 6,    "fn": code_scan_all,  "name": "code_scan"},
+            # ── Core agent loop — every 10min (saves CPU/RAM on Render free tier) ────
+            {"trigger": "interval", "minutes": 10,  "fn": run_agent_cycle,              "name": "agent_loop"},
+            # ── Intelligence cron jobs (once per day, not spammy) ────────────────────
+            {"trigger": "cron",    "hour": 7,  "minute": 0,  "fn": run_predictions,    "name": "morning_preds"},
+            {"trigger": "cron",    "hour": 18, "minute": 0,  "fn": run_predictions,    "name": "evening_preds"},
+            {"trigger": "cron",    "hour": 2,  "minute": 30, "fn": run_pattern_analysis,"name": "daily_patterns"},
+            {"trigger": "cron",    "hour": 8,  "minute": 30, "fn": run_goal_checkin,   "name": "weekly_goals"},
+            {"trigger": "cron",    "hour": 7,  "minute": 0,  "fn": generate_daily_brief,"name": "daily_brief"},
+            # ── Proactive checks every 15min (reduced from 10) ────────────────────────
+            {"trigger": "interval", "minutes": 15, "fn": run_proactive_checks,          "name": "proactive_checks"},
+            # ── Notifications every 15min ─────────────────────────────────────────────
+            {"trigger": "interval", "minutes": 15, "fn": run_autonomous_notifications,  "name": "auto_notify"},
+            # ── Agent Message Bus ─────────────────────────────────────────────────────
+            {"trigger": "interval", "minutes": 5,  "fn": bus_process,                   "name": "agent_bus"},
+            # ── Data connectors ───────────────────────────────────────────────────────
+            {"trigger": "interval", "minutes": 30, "fn": sync_drive,                    "name": "drive_sync"},
+            {"trigger": "interval", "minutes": 15, "fn": sync_gmail,                    "name": "gmail_sync"},
+            {"trigger": "interval", "hours": 2,    "fn": sync_rss,                      "name": "rss_sync"},
+            {"trigger": "interval", "hours": 2,    "fn": github_sync,                   "name": "github_sync"},
+            # ── Code Agent — every 8h (CPU-intensive, reduced from 6) ─────────────────
+            {"trigger": "interval", "hours": 8,    "fn": code_scan_all,                 "name": "code_scan"},
         ])
         print("[ORA] Scheduler started")
     except Exception:

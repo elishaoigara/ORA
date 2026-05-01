@@ -156,7 +156,10 @@ def add_task(title, priority="medium", due_at=None):
 def get_tasks(status="pending"):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT id, title, priority, created_at, due_at FROM tasks WHERE status=? ORDER BY id DESC",
+    if status == "all":
+        c.execute("SELECT id, title, priority, created_at, due_at FROM tasks ORDER BY id DESC")
+    else:
+        c.execute("SELECT id, title, priority, created_at, due_at FROM tasks WHERE status=? ORDER BY id DESC",
               (status,))
     rows = c.fetchall()
     close_conn()
