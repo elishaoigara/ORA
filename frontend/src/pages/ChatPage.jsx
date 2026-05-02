@@ -4,17 +4,12 @@ import BASE_URL from "../api";
 
 let _id = 0;
 const uid = () => String(++_id);
-
-function ts() {
-  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
+const ts  = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 function fmtTs(raw) {
   if (!raw) return ts();
   try { return new Date(raw).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return ""; }
 }
 
-// ── Chip sets ─────────────────────────────────────────────
 const CHIP_SETS = {
   morning: [
     { label: "☀️ Brief",    msg: "give me my morning briefing" },
@@ -43,29 +38,15 @@ const CHIP_SETS = {
 };
 
 const THINKING_STATES = [
-  "Querying memory...",
-  "Checking context...",
-  "Scanning knowledge base...",
-  "Cross-referencing data...",
-  "Formulating response...",
-  "Pulling your profile...",
-  "Running inference...",
+  "Querying memory...", "Checking context...", "Scanning knowledge base...",
+  "Cross-referencing data...", "Formulating response...", "Pulling your profile...", "Running inference...",
 ];
 
 const INTENT_LABELS = {
-  add_task: "TASK ADDED",
-  remind: "REMINDER SET",
-  complete_task: "TASK COMPLETE",
-  delete_task: "TASK DELETED",
-  search_docs: "FROM DOCS",
-  spend_summary: "SPEND DATA",
-  set_goal: "GOAL SET",
-  goal_progress: "GOAL STATUS",
-  check_tasks: "TASK LIST",
-  briefing: "BRIEFING",
-  calendar: "CALENDAR",
-  github: "GITHUB",
-  weather: "WEATHER",
+  add_task: "TASK ADDED", remind: "REMINDER SET", complete_task: "TASK COMPLETE",
+  delete_task: "TASK DELETED", search_docs: "FROM DOCS", spend_summary: "SPEND DATA",
+  set_goal: "GOAL SET", goal_progress: "GOAL STATUS", check_tasks: "TASK LIST",
+  briefing: "BRIEFING", calendar: "CALENDAR", github: "GITHUB", weather: "WEATHER",
 };
 
 function getGreeting() {
@@ -77,7 +58,6 @@ function getGreeting() {
   return           { title: "Late night session.",      sub: "Noted." };
 }
 
-// ── Markdown renderer ─────────────────────────────────────
 function RenderMd({ text, isUser }) {
   if (!text) return null;
   const lines = text.split("\n");
@@ -85,18 +65,15 @@ function RenderMd({ text, isUser }) {
     <div>
       {lines.map((line, i) => {
         if (line.trim() === "") return <div key={i} style={{ height: 6 }} />;
-
-        if (line.match(/^[-•*]\s/)) {
+        if (line.match(/^[-•*]\s/))
           return (
             <div key={i} className="md-bullet-row">
               <span className={`md-bullet-dot ${isUser ? "user-text" : ""}`}>•</span>
               <span className={`md-text ${isUser ? "user-text" : ""}`}>{renderInline(line.slice(2), isUser)}</span>
             </div>
           );
-        }
-
         if (line.match(/^\d+\.\s/)) {
-          const num = line.match(/^(\d+)/)[1];
+          const num  = line.match(/^(\d+)/)[1];
           const rest = line.replace(/^\d+\.\s/, "");
           return (
             <div key={i} className="md-bullet-row">
@@ -105,27 +82,16 @@ function RenderMd({ text, isUser }) {
             </div>
           );
         }
-
         if (line.startsWith("```")) return null;
-
-        if (line.startsWith("    ")) {
-          const code = line.replace(/^    /, "");
-          return <code key={i} className="md-code-block">{code}</code>;
-        }
-
-        return (
-          <div key={i} className={`md-text ${isUser ? "user-text" : ""}`}>
-            {renderInline(line, isUser)}
-          </div>
-        );
+        if (line.startsWith("    ")) return <code key={i} className="md-code-block">{line.slice(4)}</code>;
+        return <div key={i} className={`md-text ${isUser ? "user-text" : ""}`}>{renderInline(line, isUser)}</div>;
       })}
     </div>
   );
 }
 
 function renderInline(text, isUser) {
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-  return parts.map((p, i) => {
+  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((p, i) => {
     if (p.startsWith("**") && p.endsWith("**"))
       return <strong key={i} className={`md-bold ${isUser ? "user-text" : ""}`}>{p.slice(2, -2)}</strong>;
     if (p.startsWith("`") && p.endsWith("`"))
@@ -134,16 +100,12 @@ function renderInline(text, isUser) {
   });
 }
 
-// ── Message bubble ────────────────────────────────────────
 function Message({ item, onCopy }) {
-  const isUser = item.role === "user";
+  const isUser     = item.role === "user";
   const intentLabel = item.intent ? INTENT_LABELS[item.intent] : null;
-
   return (
     <div className={`msg-row ${isUser ? "user" : ""}`}>
-      {!isUser && (
-        <div className="msg-avatar">◉</div>
-      )}
+      {!isUser && <div className="msg-avatar">◉</div>}
       <div className={`msg-bubble ${isUser ? "user-msg" : item.isError ? "error" : "ora"}`}>
         {!isUser && (
           <div className={`msg-label ${item.isError ? "error-lbl" : ""}`}>
@@ -151,9 +113,7 @@ function Message({ item, onCopy }) {
           </div>
         )}
         {intentLabel && !isUser && (
-          <div className="action-badge">
-            <span className="action-badge-text">⚡ ACTION EXECUTED</span>
-          </div>
+          <div className="action-badge"><span className="action-badge-text">⚡ ACTION EXECUTED</span></div>
         )}
         {item.thinking ? (
           <div className="thinking-row">
@@ -166,49 +126,41 @@ function Message({ item, onCopy }) {
         <div className={`msg-ts ${isUser ? "user-ts" : ""}`}>{item.ts}</div>
       </div>
       {!isUser && !item.thinking && (
-        <button
-          className="btn btn-sm"
-          style={{ marginTop: 4 }}
-          onClick={() => onCopy(item.content)}
-          title="Copy"
-        >
-          ⎘
-        </button>
+        <button className="btn btn-sm" style={{ marginTop: 4 }} onClick={() => onCopy(item.content)} title="Copy">⎘</button>
       )}
     </div>
   );
 }
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState([]);
-  const [input,    setInput]    = useState("");
-  const [loading,  setLoading]  = useState(false);
-  const [chipSet,  setChipSet]  = useState("default");
-  const [toast,    setToast]    = useState(null);
+  const [messages,     setMessages]     = useState([]);
+  const [input,        setInput]        = useState("");
+  const [loading,      setLoading]      = useState(false);
+  const [chipSet,      setChipSet]      = useState("default");
+  const [toast,        setToast]        = useState(null);
   const [voiceActive,  setVoiceActive]  = useState(false);
-  const [voiceStatus,  setVoiceStatus]  = useState(""); // "recording" | "transcribing" | ""
+  const [voiceStatus,  setVoiceStatus]  = useState("");
+  const [rows,         setRows]         = useState(1); // textarea auto-grow
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef   = useRef([]);
-  const listRef    = useRef(null);
-  const inputRef   = useRef("");
-  const thinkId    = useRef(null);
-  const thinkTimer = useRef(null);
-  const thinkIdx   = useRef(0);
-  const inputEl    = useRef(null);
+  const listRef          = useRef(null);
+  const inputRef         = useRef("");
+  const textareaRef      = useRef(null);
+  const thinkId          = useRef(null);
+  const thinkTimer       = useRef(null);
+  const thinkIdx         = useRef(0);
 
   const showToast = (msg, type = "info") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 2500);
   };
 
-  // Morning chips
   useEffect(() => {
     const h = new Date().getHours();
     if (h >= 6 && h < 10) setChipSet("morning");
   }, []);
 
-  // Load history
   useEffect(() => {
     getConversations(40)
       .then(data => {
@@ -237,8 +189,18 @@ export default function ChatPage() {
   }, []);
 
   const handleCopy = useCallback((text) => {
-    navigator.clipboard.writeText(text).then(() => showToast("Copied to clipboard", "success"));
+    navigator.clipboard.writeText(text).then(() => showToast("Copied", "success"));
   }, []);
+
+  // Auto-grow textarea
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    setInput(val);
+    inputRef.current = val;
+    // Compute rows: max 6
+    const lineCount = (val.match(/\n/g) || []).length + 1;
+    setRows(Math.min(lineCount, 6));
+  };
 
   const send = useCallback(async (textOverride) => {
     const text = (textOverride ?? inputRef.current).trim();
@@ -247,25 +209,23 @@ export default function ChatPage() {
     const tId = uid();
     thinkId.current = tId;
 
-    const userMsg = { id: uid(), role: "user", content: text, ts: ts() };
-    const thinkMsg = { id: tId, role: "assistant", content: "", ts: "", thinking: true, thinkingText: THINKING_STATES[0] };
+    const userMsg  = { id: uid(), role: "user",      content: text, ts: ts() };
+    const thinkMsg = { id: tId,   role: "assistant", content: "", ts: "", thinking: true, thinkingText: THINKING_STATES[0] };
 
     setMessages(prev => [...prev, userMsg, thinkMsg]);
-    setInput(""); inputRef.current = "";
+    setInput(""); inputRef.current = ""; setRows(1);
     setLoading(true);
     scrollBottom();
     startThinking(tId);
 
     try {
-      const res = await sendMessage(text);
+      const res   = await sendMessage(text);
       const reply = res?.reply || "No response";
       const intent = res?.intent || null;
-
       stopThinking();
       setMessages(prev => prev.map(m =>
         m.id === tId ? { ...m, content: reply, ts: ts(), thinking: false, intent } : m
       ));
-
       if (intent?.includes("task") || intent?.includes("remind")) {
         setChipSet("task");
         setTimeout(() => setChipSet("default"), 30000);
@@ -275,7 +235,7 @@ export default function ChatPage() {
       setMessages(prev => prev.map(m =>
         m.id === tId ? {
           ...m,
-          content: "ORA unreachable — backend may be spinning up on free tier. Wait 30s and retry.",
+          content: "ORA unreachable — backend may be spinning up. Wait 30s and retry.",
           ts: ts(), thinking: false, isError: true,
         } : m
       ));
@@ -285,10 +245,6 @@ export default function ChatPage() {
     }
   }, [loading, scrollBottom, startThinking, stopThinking]);
 
-  const chips = CHIP_SETS[chipSet] || CHIP_SETS.default;
-  const greeting = getGreeting();
-
-  // ── Voice recording ───────────────────────────────────────
   const startVoice = useCallback(async () => {
     if (voiceActive) return;
     try {
@@ -304,38 +260,38 @@ export default function ChatPage() {
           const form = new FormData();
           form.append("file", blob, "voice.webm");
           const res = await fetch(`${BASE_URL}/api/voice/transcribe`, { method: "POST", body: form });
-          if (!res.ok) throw new Error("Transcription failed");
+          if (!res.ok) throw new Error("fail");
           const data = await res.json();
           if (data.transcript) {
-            // Show transcript as user message + ORA reply
-            const userMsg  = { id: uid(), role: "user",      content: `🎙️ ${data.transcript}`, ts: ts() };
-            const oraMsg   = { id: uid(), role: "assistant", content: data.reply || "Got it.", ts: ts() };
-            setMessages(prev => [...prev, userMsg, oraMsg]);
+            setMessages(prev => [...prev,
+              { id: uid(), role: "user",      content: `🎙️ ${data.transcript}`, ts: ts() },
+              { id: uid(), role: "assistant", content: data.reply || "Got it.", ts: ts() },
+            ]);
             scrollBottom();
           } else {
-            showToast("Couldn't understand audio — try again", "error");
+            showToast("Couldn't understand audio", "error");
           }
-        } catch (err) {
-          showToast("Voice transcription failed", "error");
-        } finally {
-          setVoiceActive(false);
-          setVoiceStatus("");
-        }
+        } catch { showToast("Voice transcription failed", "error"); }
+        finally { setVoiceActive(false); setVoiceStatus(""); }
       };
       recorder.start();
       mediaRecorderRef.current = recorder;
       setVoiceActive(true);
       setVoiceStatus("recording");
-    } catch (err) {
-      showToast("Microphone access denied", "error");
-    }
+    } catch { showToast("Microphone access denied", "error"); }
   }, [voiceActive, scrollBottom]);
 
   const stopVoice = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop();
-    }
+    if (mediaRecorderRef.current?.state !== "inactive") mediaRecorderRef.current.stop();
   }, []);
+
+  const chips    = CHIP_SETS[chipSet] || CHIP_SETS.default;
+  const greeting = getGreeting();
+
+  const voicePlaceholder =
+    voiceStatus === "recording"    ? "🔴 Recording — tap mic to stop..." :
+    voiceStatus === "transcribing" ? "Transcribing..." :
+    "Message ORA...";
 
   return (
     <div className="chat-page">
@@ -356,15 +312,10 @@ export default function ChatPage() {
         ))}
       </div>
 
-      {/* Chips */}
+      {/* Quick chips */}
       <div className="chips-bar">
         {chips.map(c => (
-          <button
-            key={c.label}
-            className="chip"
-            onClick={() => send(c.msg)}
-            disabled={loading}
-          >
+          <button key={c.label} className="chip" onClick={() => send(c.msg)} disabled={loading}>
             {c.label}
           </button>
         ))}
@@ -372,38 +323,51 @@ export default function ChatPage() {
 
       <div className="chat-note">FREE TIER · COLD START MAY TAKE ~30s</div>
 
-      {/* Input */}
+      {/* ── Input bar — works on both mobile and desktop ── */}
       <div className="chat-input-bar">
-        <input
-          ref={inputEl}
-          className="chat-input-field"
-          placeholder={voiceStatus === "recording" ? "🔴 Recording — click mic to stop..." : voiceStatus === "transcribing" ? "Transcribing..." : "Message ORA..."}
-          value={input}
-          onChange={e => { setInput(e.target.value); inputRef.current = e.target.value; }}
-          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-          disabled={loading || voiceActive}
-        />
+        {/* Voice button */}
         <button
-          className="chat-send-btn"
+          className="chat-voice-btn"
           title={voiceActive ? "Stop recording" : "Voice input"}
           onClick={voiceActive ? stopVoice : startVoice}
           disabled={loading || voiceStatus === "transcribing"}
           style={{
-            background: voiceActive ? "rgba(255,68,68,0.15)" : "transparent",
-            border: voiceActive ? "1px solid rgba(255,68,68,0.4)" : "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            color: voiceActive ? "#ff4444" : "var(--text-3)",
-            width: 36, height: 36, display: "flex", alignItems: "center",
-            justifyContent: "center", cursor: "pointer", flexShrink: 0,
-            animation: voiceActive ? "pulse 1.2s ease-in-out infinite" : "none",
+            background:   voiceActive ? "rgba(255,68,68,0.15)" : "transparent",
+            border:       voiceActive ? "1px solid rgba(255,68,68,0.5)" : "1px solid var(--border-2)",
+            color:        voiceActive ? "#ff4444" : "var(--text-3)",
+            animation:    voiceActive ? "pulse 1.2s ease-in-out infinite" : "none",
           }}
+          aria-label="Voice input"
         >
           {voiceStatus === "transcribing" ? "⋯" : "🎙"}
         </button>
+
+        {/* Auto-growing textarea */}
+        <textarea
+          ref={textareaRef}
+          className="chat-textarea"
+          placeholder={voicePlaceholder}
+          value={input}
+          rows={rows}
+          onChange={handleInputChange}
+          onKeyDown={e => {
+            // Desktop: Enter sends, Shift+Enter newline
+            // Mobile: always newline (virtual keyboard Enter)
+            if (e.key === "Enter" && !e.shiftKey && window.innerWidth >= 768) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          disabled={loading || voiceActive}
+          aria-label="Message input"
+        />
+
+        {/* Send button */}
         <button
           className="chat-send-btn"
           onClick={() => send()}
           disabled={!input.trim() || loading}
+          aria-label="Send message"
         >
           {loading ? "⋯" : "▶"}
         </button>
