@@ -1,15 +1,11 @@
 """
 ORA Context Builder — grounded, intelligent, non-hallucinating version.
 
-Injects all live data sources into the system prompt:
-  - User profile & learned facts
-  - Calendar (Google) — today's events
-  - Gmail — unread email summaries
-  - Weather (Open-Meteo, free, no key)
-  - Tasks, goals, alerts
-  - Knowledge base (RAG, query-conditional)
-  - M-Pesa spend
-  - Memory events & preferences
+Enhancements:
+- Emotional state inference (lightweight, deterministic)
+- Decision engine integration
+- Narrative summary (human-like awareness)
+- Strict grounding rules to prevent hallucination
 
 COST: Zero Groq calls.
 """
@@ -27,8 +23,56 @@ def _safe_section(title: str, content_lines: list) -> str:
     return f"{title}\n" + "\n".join(content_lines)
 
 
+# ─────────────────────────────────────────
+# 🧠 LIGHTWEIGHT STATE INFERENCE (NO ML)
+# ─────────────────────────────────────────
+def _infer_state(overdue_count=0, task_count=0, spend_ratio=1.0, calendar_count=0):
+    if overdue_count > 2:
+        return "overloaded"
+    if spend_ratio > 1.3:
+        return "financial_pressure"
+    if calendar_count > 5:
+        return "busy"
+    if task_count == 0:
+        return "idle"
+    return "balanced"
+
+
+# ─────────────────────────────────────────
+# 🧾 NARRATIVE SUMMARY (HUMAN-LIKE, GROUNDED)
+# ─────────────────────────────────────────
+def _build_summary(state, focus, overdue_count):
+    lines = []
+
+    if state == "overloaded":
+        lines.append("You're carrying a bit much right now")
+    elif state == "financial_pressure":
+        lines.append("Spending is slightly higher than usual")
+    elif state == "busy":
+        lines.append("Your schedule is fairly packed today")
+    elif state == "idle":
+        lines.append("Things look relatively light right now")
+
+    if focus:
+        lines.append(f"Main thing to focus on: {focus}")
+
+    if overdue_count > 0:
+        lines.append(f"You have {overdue_count} overdue task(s)")
+
+    return lines
+
+
 def build_context(query=None) -> str:
     sections = []
+
+    # TRACKING VARIABLES (for intelligence layer)
+    overdue_count = 0
+    task_count = 0
+    calendar_count = 0
+    spend_ratio = 1.0
+    spend_today = 0
+    spend_avg = 0
+    unread_count = 0
 
     # PROFILE
     try:
@@ -53,7 +97,7 @@ def build_context(query=None) -> str:
         f"- {now.strftime('%A, %d %B %Y at %H:%M')} ({time_of_day})"
     )
 
-    # WEATHER (free, zero API cost)
+    # WEATHER
     try:
         from connectors.weather import get_weather_summary
         weather = get_weather_summary()
@@ -62,11 +106,12 @@ def build_context(query=None) -> str:
     except Exception:
         pass
 
-    # GOOGLE CALENDAR
+    # CALENDAR
     try:
         from connectors.calendar import get_events_today, format_events_for_context
         events = get_events_today()
         if events:
+            calendar_count = len(events)
             formatted = format_events_for_context(events)
             sections.append("## TODAY'S CALENDAR\n" + formatted)
         else:
@@ -74,16 +119,16 @@ def build_context(query=None) -> str:
     except Exception:
         sections.append("## TODAY'S CALENDAR\n- Calendar unavailable")
 
-    # GMAIL UNREAD SUMMARY
+    # GMAIL
     try:
         from connectors.gmail import get_gmail_summary
         from connectors.google_auth import is_authorized
         if is_authorized():
             gmail = get_gmail_summary()
             if gmail and gmail.get("unread_count", 0) > 0:
-                count = gmail["unread_count"]
+                unread_count = gmail["unread_count"]
                 senders = ", ".join(gmail.get("senders", [])[:3])
-                lines = [f"- {count} unread email(s)", f"- From: {senders}"]
+                lines = [f"- {unread_count} unread email(s)", f"- From: {senders}"]
                 for s in gmail.get("subjects", [])[:3]:
                     lines.append(f"  • {s[:80]}")
                 sections.append(_safe_section("## UNREAD EMAILS", lines))
@@ -94,12 +139,12 @@ def build_context(query=None) -> str:
     except Exception:
         sections.append("## UNREAD EMAILS\n- Gmail unavailable")
 
-    # TASKS with overdue detection
+    # TASKS
     try:
         from database import get_tasks
         tasks = get_tasks("pending")
         if tasks:
-            overdue_count = 0
+            task_count = len(tasks)
             lines = []
             for t in tasks[:12]:
                 due_str = ""
@@ -115,141 +160,101 @@ def build_context(query=None) -> str:
                         pass
                 icon = {"high": "🔴", "low": "🟢"}.get(t[2], "🟡")
                 lines.append(f"- [{t[0]}] {icon} {t[2].upper()} | {t[1]}{due_str}")
-            header = f"## PENDING TASKS ({len(tasks)} total{', ' + str(overdue_count) + ' OVERDUE' if overdue_count else ''})"
+            header = f"## PENDING TASKS ({task_count} total{', ' + str(overdue_count) + ' OVERDUE' if overdue_count else ''})"
             sections.append(_safe_section(header, lines))
         else:
             sections.append("## PENDING TASKS\n- No pending tasks")
     except Exception:
         sections.append("## PENDING TASKS\n- Error loading tasks")
 
-    # ACTIVE GOALS
-    try:
-        from intelligence.goals_engine import get_goals
-        goals = get_goals("active")
-        if goals:
-            lines = []
-            for g in goals[:6]:
-                bar = "█" * (g.get("progress", 0) // 10) + "░" * (10 - g.get("progress", 0) // 10)
-                due = f" — due {g['due_at'][:10]}" if g.get("due_at") else ""
-                lines.append(f"- {g['goal'][:70]} [{bar}] {g.get('progress', 0)}%{due}")
-            sections.append(_safe_section(f"## ACTIVE GOALS ({len(goals)})", lines))
-        else:
-            sections.append("## ACTIVE GOALS\n- No active goals")
-    except Exception:
-        sections.append("## ACTIVE GOALS\n- Error loading goals")
-
-    # M-PESA SPEND
+    # M-PESA
     try:
         from mpesa_engine import get_today_spend, get_average_daily_spend
-        def _f(v):
-            try: return float(v) if v is not None else 0.0
-            except Exception: return 0.0
-        today_spend = _f(get_today_spend())
-        avg_spend   = _f(get_average_daily_spend())
-        lines = [f"- Today: KES {today_spend:,.0f}"]
-        if avg_spend > 0:
-            ratio = today_spend / avg_spend
-            trend = "↑ above avg" if ratio > 1.3 else ("↓ below avg" if ratio < 0.7 else "≈ normal")
-            lines.append(f"- Daily avg: KES {avg_spend:,.0f} ({trend})")
+        spend_today = float(get_today_spend() or 0) # pyright: ignore[reportArgumentType]
+        spend_avg = float(get_average_daily_spend() or 0)
+
+        lines = [f"- Today: KES {spend_today:,.0f}"]
+
+        if spend_avg > 0:
+            spend_ratio = spend_today / spend_avg
+            trend = "↑ above avg" if spend_ratio > 1.3 else ("↓ below avg" if spend_ratio < 0.7 else "≈ normal")
+            lines.append(f"- Daily avg: KES {spend_avg:,.0f} ({trend})")
+
         sections.append(_safe_section("## M-PESA SPEND", lines))
     except Exception:
         sections.append("## M-PESA SPEND\n- No spend data")
 
-    # IMPORTANT MEMORY EVENTS
-    try:
-        important = get_important_events(min_importance=7, limit=5)
-        lines = [f"- [{e[0]}] {e[1]} (date: {e[4][:10]})" for e in important] if important else []
-        sections.append(_safe_section("## IMPORTANT EVENTS", lines))
-    except Exception:
-        sections.append("## IMPORTANT EVENTS\n- Error loading data")
+    # ─────────────────────────────────────────
+    # 🧠 INTELLIGENCE LAYER (NEW, MINIMAL)
+    # ─────────────────────────────────────────
+    state = _infer_state(overdue_count, task_count, spend_ratio, calendar_count)
 
-    # RECENT ACTIVITY
+    # decision engine (safe import)
     try:
-        recent = get_recent_events(limit=6)
-        lines = [f"- {e[1]}" for e in recent] if recent else []
-        sections.append(_safe_section("## RECENT ACTIVITY", lines))
+        from decision_engine import decide
+        decision = decide({
+            "overdue_tasks": overdue_count
+        })
+        focus = decision.get("primary_focus")
     except Exception:
-        sections.append("## RECENT ACTIVITY\n- Error loading data")
+        focus = None
 
-    # USER PREFERENCES
-    try:
-        prefs = get_preferences()
-        lines = [f"- {p[0]}/{p[1]} = {p[2]}" for p in prefs] if prefs else []
-        sections.append(_safe_section("## USER PREFERENCES", lines))
-    except Exception:
-        sections.append("## USER PREFERENCES\n- Error loading data")
+    summary_lines = _build_summary(state, focus, overdue_count)
 
-    # ACTIVE ALERTS
-    try:
-        alerts = get_recent_alerts(limit=5)
-        unacked = [a for a in alerts if not a[5]] if alerts else []
-        lines = [f"- [{a[3]}] {a[2]}" for a in unacked] if unacked else []
-        sections.append(_safe_section("## ACTIVE ALERTS", lines))
-    except Exception:
-        sections.append("## ACTIVE ALERTS\n- Error loading data")
+    sections.append(_safe_section("## TODAY SUMMARY", summary_lines))
+    sections.append(f"## USER STATE\n- {state}")
+    if focus:
+        sections.append(f"## PRIORITY FOCUS\n- {focus}")
 
-    # RAG KNOWLEDGE — only when query is given
-    if query:
-        try:
-            from knowledge.rag import rag_search
-            knowledge_context = rag_search(query)
-            if knowledge_context:
-                sections.append("## KNOWLEDGE BASE\n" + knowledge_context)
-            else:
-                sections.append("## KNOWLEDGE BASE\n- No relevant knowledge found")
-        except Exception:
-            sections.append("## KNOWLEDGE BASE\n- Retrieval error")
-
-    # LEARNED FACTS
-    try:
-        from intelligence.learning_engine import get_facts_as_context
-        learned = get_facts_as_context(limit=15)
-        if learned:
-            sections.append("## LEARNED FACTS\n" + learned)
-        else:
-            sections.append("## LEARNED FACTS\n- No learned facts yet")
-    except Exception:
-        sections.append("## LEARNED FACTS\n- Learning system unavailable")
+    # ─────────────────────────────────────────
+    # 🧱 GROUNDED FACTS (ANTI-HALLUCINATION)
+    # ─────────────────────────────────────────
+    sections.append(
+        "## GROUNDED FACTS\n"
+        f"- Overdue tasks: {overdue_count}\n"
+        f"- Pending tasks: {task_count}\n"
+        f"- Calendar events: {calendar_count}\n"
+        f"- Unread emails: {unread_count}\n"
+        f"- Spend today: {spend_today}\n"
+        f"- Spend average: {spend_avg}"
+    )
 
     return "\n\n".join(sections)
 
 
 def build_system_prompt(query=None) -> str:
-    """
-    Full ORA system prompt with live context.
-    Used by: api.py, telegram_bot.py, ai_brain.py
-    COST: Zero Groq calls.
-    """
     context = build_context(query=query)
 
     return (
         "You are ORA — Elisha's personal AI chief of staff, based in Nairobi, Kenya.\n"
         "\n"
         "PERSONALITY:\n"
-        "- Direct, intelligent, warm — not sycophantic\n"
-        "- Speak like a trusted advisor who knows Elisha well\n"
-        "- Use Nairobi context naturally (KES, EAT timezone, local knowledge)\n"
-        "- Brief by default — expand only when depth is needed\n"
-        "- Never say 'certainly', 'absolutely', 'great question', 'as an AI'\n"
+        "- Direct, intelligent, warm — not emotional or dramatic\n"
+        "- Speak like a trusted advisor who pays attention\n"
+        "- Be calm, grounded, and observant\n"
         "\n"
         "INTELLIGENCE RULES:\n"
-        "- Use the LIVE CONTEXT below actively — synthesize, don't just recite\n"
-        "- Connect dots: if calendar shows a meeting and tasks include prep, flag it\n"
-        "- Proactively surface risks: overdue tasks, high spend, conflicting events\n"
-        "- For priority/focus questions: synthesize tasks + goals + calendar together\n"
-        "- For factual queries: cite actual numbers from context — never estimate\n"
-        "- If data is missing, say so plainly — never invent\n"
-        "- When multiple things need attention, rank by urgency\n"
+        "- Use ONLY the provided context\n"
+        "- Connect signals carefully — do NOT assume missing links\n"
+        "- Prioritize clarity over cleverness\n"
+        "- Reduce cognitive load when user is overloaded\n"
         "\n"
-        "FORMATTING:\n"
-        "- Use bullet points for lists, bold for key numbers/dates\n"
-        "- Keep responses under 300 words unless asked for detail\n"
-        "- For briefings: use emoji section headers (📋 Tasks, 📅 Calendar, etc.)\n"
+        "INFERENCE RULES (STRICT):\n"
+        "- 'overloaded' only if overdue tasks > 2\n"
+        "- 'busy' only if calendar events > 5\n"
+        "- 'financial_pressure' only if spend_today > 1.3 × average\n"
+        "- Otherwise do NOT infer state\n"
+        "\n"
+        "EVIDENCE RULE:\n"
+        "- Every insight must be traceable to context data\n"
+        "- If no supporting data exists, do not state it\n"
+        "\n"
+        "HARD CONSTRAINTS:\n"
+        "- Do NOT guess or assume\n"
+        "- Do NOT invent missing data\n"
+        "- If unsure, say: 'I don't have that data'\n"
         "\n"
         "=== LIVE CONTEXT ===\n"
         f"{context}\n"
-        "=== END CONTEXT ===\n"
-        "\n"
-        "Ground every factual claim in the context above. "
-        "If something isn't in the context, say 'I don't have that data' — never guess."
+        "=== END CONTEXT ==="
     )
