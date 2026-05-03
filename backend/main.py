@@ -243,6 +243,39 @@ def startup():
     init_profile()
     log_memory_event("system", "ORA started", importance=6)
 
+    # ── New systems from Claude Code improvements ──────────────────────────────
+    try:
+        from task_engine import task_engine
+        print("[ORA] Task Engine initialized")
+    except Exception as e:
+        print(f"[ORA] Task Engine init failed: {e}")
+
+    try:
+        from conversation_history import conversation_history
+        print("[ORA] Conversation History initialized")
+    except Exception as e:
+        print(f"[ORA] Conversation History init failed: {e}")
+
+    try:
+        from agent_scratchpad import scratchpad
+        purged = scratchpad.purge_expired()
+        print(f"[ORA] Agent Scratchpad initialized (purged {purged} stale notes)")
+    except Exception as e:
+        print(f"[ORA] Agent Scratchpad init failed: {e}")
+
+    try:
+        from tool_registry import registry
+        print(f"[ORA] Tool Registry initialized ({len(registry.list_tools())} tools)")
+    except Exception as e:
+        print(f"[ORA] Tool Registry init failed: {e}")
+
+    try:
+        from dynamic_scheduler import scheduler
+        scheduler.start()
+        print("[ORA] Dynamic Scheduler started")
+    except Exception as e:
+        print(f"[ORA] Dynamic Scheduler init failed: {e}")
+
     start_intelligence_layer()
 
     print("[ORA] Core systems online")

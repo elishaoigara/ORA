@@ -44,6 +44,12 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('agents.code_agent', fromlist=['init_code_agent_tables']).init_code_agent_tables(), "Code Agent DB"),
         (lambda: __import__('agents.agent_bus', fromlist=['init_agent_bus_table']).init_agent_bus_table(), "Agent Bus"),
         (lambda: __import__('connectors.gmail', fromlist=['init_gmail_tables']).init_gmail_tables(), "Gmail Replies"),
+        # ── New systems (Claude Code improvements) ─────────────────────────────
+        (lambda: __import__('task_engine', fromlist=['task_engine']).task_engine, "Task Engine"),
+        (lambda: __import__('conversation_history', fromlist=['conversation_history']).conversation_history, "Conv History"),
+        (lambda: __import__('agent_scratchpad', fromlist=['scratchpad']).scratchpad, "Scratchpad"),
+        (lambda: __import__('tool_registry', fromlist=['registry']).registry, "Tool Registry"),
+        (lambda: __import__('dynamic_scheduler', fromlist=['scheduler']).scheduler, "Job Registry"),
     ]:
         try:
             fn()
@@ -95,6 +101,21 @@ async def lifespan(app: FastAPI):
     except Exception:
         print("[SCHEDULER ERROR]")
         print(traceback.format_exc())
+
+    # ── Disk + DB cleanup (keeps Render 1GB disk healthy) ─────────────────────
+    try:
+        from task_engine import task_engine as _te
+        cleaned = _te.purge_old_tasks(days=3)
+        print(f"[ORA] Cleanup: removed {cleaned['deleted_rows']} old tasks, {cleaned['deleted_files']} files")
+    except Exception:
+        pass
+    try:
+        from agent_scratchpad import scratchpad as _sp
+        purged = _sp.purge_expired()
+        if purged:
+            print(f"[ORA] Scratchpad: purged {purged} expired notes")
+    except Exception:
+        pass
 
     try:
         from config import TELEGRAM_BOT_TOKEN
@@ -219,6 +240,7 @@ def agent_run_now():
 
 class ChatRequest(BaseModel):
     message: str
+    session_id: Optional[str] = None
 
 @app.post("/api/chat")
 async def chat(payload: ChatRequest):
@@ -229,6 +251,14 @@ async def chat(payload: ChatRequest):
         text = payload.message.strip()
         if not text:
             return {"reply": "Empty message."}
+
+        # Resolve or create session for conversation history
+        session_id = payload.session_id
+        try:
+            from conversation_history import conversation_history as _ch
+            session_id = _ch.get_or_create_session(session_id)
+        except Exception:
+            pass
 
         # ── 1. Fast-path: pure-regex intent actions (zero LLM cost) ──────────
         try:
@@ -264,7 +294,7 @@ async def chat(payload: ChatRequest):
 
         # ── 3. Multi-agent Coordinator ────────────────────────────────────────
         from brain.router import Coordinator
-        result = Coordinator.run(text, save_history=False)
+        result = Coordinator.run(text, save_history=True, session_id=session_id)  # type: ignore[call-arg]
         reply  = result["reply"]
         q_type = result["query_type"]
 
@@ -301,6 +331,8 @@ async def chat(payload: ChatRequest):
             "model":      "coordinator",
             "intent":     result.get("intent"),
             "pipeline":   result.get("pipeline"),
+            "session_id": session_id,
+            "task_id":    result.get("task_id"),
         }
 
     except Exception:
@@ -1365,5 +1397,152 @@ def proactive_status():
             "old_replies":     old_replies,
             "active_signals":  signals,
         }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW ENDPOINTS — Task Engine, Tool Registry, Scheduler, Conversation History
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Task Engine ───────────────────────────────────────────────────────────────
+
+@app.get("/api/agent-tasks")
+def get_agent_tasks(limit: int = 20, kind: str = "", status: str = ""):
+    """List recent agent pipeline tasks with status and duration."""
+    try:
+        from task_engine import task_engine
+        tasks = task_engine.get_recent(limit=limit, kind=kind, status=status)
+        return {"tasks": tasks, "count": len(tasks)}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.get("/api/agent-tasks/stats")
+def agent_task_stats():
+    """Get task pipeline stats: success rate, avg duration, counts by status."""
+    try:
+        from task_engine import task_engine
+        return task_engine.get_stats()
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.get("/api/agent-tasks/{task_id}")
+def get_agent_task(task_id: int):
+    """Get a single agent task by ID."""
+    try:
+        from task_engine import task_engine
+        task = task_engine.get_task(task_id)
+        if not task:
+            raise HTTPException(404, f"Task {task_id} not found")
+        return task
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+# ── Tool Registry ─────────────────────────────────────────────────────────────
+
+@app.get("/api/tools")
+def list_tools():
+    """List all registered ORA tools."""
+    try:
+        from tool_registry import registry
+        return {"tools": registry.list_tools(), "count": len(registry.list_tools())}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.post("/api/tools/{tool_name}/run")
+def run_tool(tool_name: str, payload: dict = {}):
+    """Run a tool by name with optional input payload."""
+    try:
+        from tool_registry import registry
+        if not registry.has(tool_name):
+            raise HTTPException(404, f"Tool '{tool_name}' not found")
+        result = registry.run(tool_name, payload)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+# ── Dynamic Scheduler ─────────────────────────────────────────────────────────
+
+@app.get("/api/scheduler/jobs")
+def list_scheduled_jobs():
+    """List all scheduled jobs with status and next run info."""
+    try:
+        from dynamic_scheduler import scheduler
+        return {"jobs": scheduler.list_jobs()}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.post("/api/scheduler/jobs/{job_name}/run")
+def run_job_now(job_name: str):
+    """Manually trigger a scheduled job immediately."""
+    try:
+        from dynamic_scheduler import scheduler
+        result = scheduler.run_now(job_name)
+        return result
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.post("/api/scheduler/jobs/{job_name}/enable")
+def enable_job(job_name: str):
+    try:
+        from dynamic_scheduler import scheduler
+        scheduler.set_enabled(job_name, True)
+        return {"ok": True, "job": job_name, "enabled": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.post("/api/scheduler/jobs/{job_name}/disable")
+def disable_job(job_name: str):
+    try:
+        from dynamic_scheduler import scheduler
+        scheduler.set_enabled(job_name, False)
+        return {"ok": True, "job": job_name, "enabled": False}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.get("/api/scheduler/jobs/{job_name}/history")
+def job_history(job_name: str, limit: int = 10):
+    try:
+        from dynamic_scheduler import scheduler
+        return {"job": job_name, "history": scheduler.get_job_history(job_name, limit)}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+# ── Conversation History ──────────────────────────────────────────────────────
+
+@app.get("/api/sessions")
+def list_sessions(limit: int = 10):
+    """List recent conversation sessions."""
+    try:
+        from conversation_history import conversation_history
+        return {"sessions": conversation_history.get_recent_sessions(limit)}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.get("/api/sessions/{session_id}/history")
+def get_session_history(session_id: str, limit: int = 20, before_id: Optional[int] = None):
+    """Get paginated message history for a session."""
+    try:
+        from conversation_history import conversation_history
+        page = conversation_history.get_page(session_id, before_id=before_id, limit=limit)
+        return page
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.get("/api/sessions/{session_id}")
+def get_session_info(session_id: str):
+    """Get session metadata."""
+    try:
+        from conversation_history import conversation_history
+        info = conversation_history.get_session_info(session_id)
+        if not info:
+            raise HTTPException(404, f"Session {session_id} not found")
+        return info
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
