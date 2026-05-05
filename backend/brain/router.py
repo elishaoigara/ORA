@@ -1,5 +1,5 @@
 """
-ORA Brain — Multi-Agent Coordinator  (brain/router.py)
+ORA Brain â€” Multi-Agent Coordinator  (brain/router.py)
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ def _run_memory_agent(bus):
         f=get_facts_as_context(limit=15)
         if f: parts.append(f[:500])
         if bus.intent=="memory_write":
-            extract_explicit_facts(bus.query); bus.reply="Got it — I've remembered that."
+            extract_explicit_facts(bus.query); bus.reply="Got it â€” I've remembered that."
             bus.memory_ctx="\n\n".join(parts); bus.add_context("MemoryAgent","Stored new fact.")
             bus.post("MemoryAgent","memory_result",{"action":"stored","from":bus.query},_ms()-t0); return
     except Exception as e: print(f"[MEMORY_AGENT] facts: {e}")
@@ -212,27 +212,27 @@ def _run_briefing_agent(bus):
         if tasks:
             now=datetime.now(); overdue=[t for t in tasks if t[4] and _parse_dt(t[4])<now]; high=[t for t in tasks if t[2]=="high"]
             lines=[f"  {'??' if t[2]=='high' else '??'} [{t[0]}] {t[1][:55]}"+(" ? OVERDUE" if t[4] and _parse_dt(t[4])<now else "") for t in tasks[:6]]
-            parts.append(f"?? **Tasks** — {len(tasks)} pending"+(f", {len(overdue)} overdue" if overdue else "")+(f", {len(high)} high priority" if high else "")+":\n"+"\n".join(lines))
-        else: parts.append("?? **Tasks** — All clear.")
+            parts.append(f"?? **Tasks** â€” {len(tasks)} pending"+(f", {len(overdue)} overdue" if overdue else "")+(f", {len(high)} high priority" if high else "")+":\n"+"\n".join(lines))
+        else: parts.append("?? **Tasks** â€” All clear.")
     except Exception as e: print(f"[BRIEFING] tasks: {e}")
     try:
         from intelligence.goals_engine import get_goals
         goals=get_goals("active")
         if goals:
             avg=int(sum(g.get("progress",0) for g in goals)/len(goals))
-            parts.append(f"?? **Goals** — {len(goals)} active, {avg}% avg:\n"+"\n".join(f"  • {g['goal'][:55]} — {g['progress']}%"+(f" (due {g['due_at'][:10]})" if g.get('due_at') else "") for g in goals[:4]))
+            parts.append(f"?? **Goals** â€” {len(goals)} active, {avg}% avg:\n"+"\n".join(f"  â€¢ {g['goal'][:55]} â€” {g['progress']}%"+(f" (due {g['due_at'][:10]})" if g.get('due_at') else "") for g in goals[:4]))
     except Exception as e: print(f"[BRIEFING] goals: {e}")
     try:
         from connectors.calendar import get_events_today,format_events_for_context
         ev=get_events_today()
-        parts.append("?? **Calendar** — "+(format_events_for_context(ev)[:300] if ev else "Nothing today."))
+        parts.append("?? **Calendar** â€” "+(format_events_for_context(ev)[:300] if ev else "Nothing today."))
     except: pass
     try:
         from connectors.google_auth import is_authorized
         from connectors.gmail import get_gmail_summary
         if is_authorized():
             g=get_gmail_summary()
-            if g and g.get("unread_count",0)>0: parts.append(f"?? **Email** — {g['unread_count']} unread")
+            if g and g.get("unread_count",0)>0: parts.append(f"?? **Email** â€” {g['unread_count']} unread")
     except: pass
     try:
         from mpesa_engine import get_today_spend,get_average_daily_spend
@@ -240,17 +240,17 @@ def _run_briefing_agent(bus):
             try: return float(v) if v is not None else 0.0
             except: return 0.0
         today=_f(get_today_spend()); avg=_f(get_average_daily_spend())
-        if today>0: parts.append(f"?? **Spend** — KES {today:,.0f} today ({'? above avg' if avg and today>avg*1.3 else '˜ normal'})")
+        if today>0: parts.append(f"?? **Spend** â€” KES {today:,.0f} today ({'? above avg' if avg and today>avg*1.3 else 'Ëœ normal'})")
     except: pass
     try:
         from connectors.weather import get_weather_summary
         w=get_weather_summary()
-        if w: parts.append(f"?? **Weather** — {w}")
+        if w: parts.append(f"?? **Weather** â€” {w}")
     except: pass
     try:
         from agents.code_agent import get_code_stats
         s=get_code_stats()
-        if s.get("total_runs",0)>0: parts.append(f"? **Code** — {s.get('open',0)} open findings, avg health {s.get('avg_health',0)}/100"+(f", ? {s['critical']} critical" if s.get('critical') else ""))
+        if s.get("total_runs",0)>0: parts.append(f"? **Code** â€” {s.get('open',0)} open findings, avg health {s.get('avg_health',0)}/100"+(f", ? {s['critical']} critical" if s.get('critical') else ""))
     except: pass
     bus.reply="\n\n".join(parts); bus.post("BriefingAgent","task_result",{"briefing":bus.reply},_ms()-t0)
 
@@ -280,7 +280,7 @@ def _run_chat_agent(bus):
         resp=_run_with_timeout(_call,timeout=10)
         bus.reply=(resp.choices[0].message.content or "").strip()
         bus.chain_log.append({"agent":"ChatAgent","key":"reply","duration_ms":_ms()-t0,"ts":datetime.now().isoformat()})
-    except AgentTimeoutError: bus.reply="Taking too long — try a simpler question."
+    except AgentTimeoutError: bus.reply="Taking too long â€” try a simpler question."
     except Exception as e: print(f"[CHAT_AGENT] {e}"); traceback.print_exc(); bus.reply="ORA error. Please try again."
 
 def _run_notifier_agent(bus):
