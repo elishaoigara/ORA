@@ -46,20 +46,82 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
 def _load_token() -> Optional[dict]:
+    """
+    Load the stored OAuth token from disk.
+
+    Handles corrupted token files gracefully:
+    - Extra data / multiple JSON objects concatenated (the current production bug)
+    - Truncated / partial writes
+    - Completely invalid JSON
+
+    If the file is corrupt it is removed so the next auth flow writes a clean one.
+    """
+    if not os.path.exists(TOKEN_PATH):
+        return None
     try:
-        if os.path.exists(TOKEN_PATH):
-            with open(TOKEN_PATH, "r") as f:
-                return json.load(f)
+        with open(TOKEN_PATH, "r") as f:
+            raw = f.read().strip()
+
+        if not raw:
+            return None
+
+        # Primary parse attempt — valid single-object files succeed here
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+
+        # FIX: Handle "Extra data" — file contains multiple JSON objects.
+        # A common corruption mode is appending a new token dict to the file
+        # instead of overwriting it, producing two back-to-back objects.
+        # We extract and return only the LAST complete object so we always
+        # have the freshest token.
+        decoder = json.JSONDecoder()
+        last_valid: Optional[dict] = None
+        idx = 0
+        while idx < len(raw):
+            # Skip whitespace between objects
+            while idx < len(raw) and raw[idx] in " \t\r\n":
+                idx += 1
+            if idx >= len(raw):
+                break
+            try:
+                obj, end_idx = decoder.raw_decode(raw, idx)
+                if isinstance(obj, dict):
+                    last_valid = obj
+                idx = end_idx
+            except json.JSONDecodeError:
+                break
+
+        if last_valid is not None:
+            print("[GOOGLE AUTH] Token file had extra data — repaired in memory. "
+                  "It will be rewritten cleanly on next save.")
+            # Overwrite the file now with just the last (freshest) object
+            _save_token(last_valid)
+            return last_valid
+
+        # Unrecoverable — remove so re-auth creates a clean file
+        print("[GOOGLE AUTH] Token file is unreadable — removing. "
+              "Please re-authorize at /api/auth/google")
+        try:
+            os.remove(TOKEN_PATH)
+        except OSError:
+            pass
+        return None
+
     except Exception as e:
         print(f"[GOOGLE AUTH] load error: {e}")
-    return None
+        return None
 
 
 def _save_token(token: dict) -> None:
     try:
         os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
-        with open(TOKEN_PATH, "w") as f:
+        # Write to a temp file then atomically rename to avoid partial writes
+        tmp_path = TOKEN_PATH + ".tmp"
+        with open(tmp_path, "w") as f:
             json.dump(token, f, indent=2)
+        os.replace(tmp_path, TOKEN_PATH)
     except Exception as e:
         print(f"[GOOGLE AUTH] save error: {e}")
 

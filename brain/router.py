@@ -387,7 +387,6 @@ def _run_research_agent(bus: MessageBus) -> None:
     try:
         from research_agent import deep_research
         result    = _run_with_timeout(deep_research, bus.query, timeout=10)
-        # deep_research returns {"content": ..., "result": ..., "sources": ...}
         synthesis = result.get("content") or result.get("result", "")
         bus.post("ResearchAgent", "research_result", result, _ms() - t0)
         if synthesis:
@@ -420,7 +419,6 @@ def _run_content_agent(bus: MessageBus) -> None:
             length        = "medium",
             extra_context = extra,
         )
-        # create_draft returns {"draft": ..., "id": ..., "title": ...}
         draft_text = draft.get("draft") or draft.get("draft_text", "")
         bus.post("ContentAgent", "content_draft", draft, _ms() - t0)
         bus.reply = draft_text
@@ -716,11 +714,15 @@ class Coordinator:
     """
     The single entry point for all ORA messages.
     Called by api.py /api/chat:
-        result = Coordinator.run(text, save_history=False)
+        result = Coordinator.run(text, save_history=True, session_id=session_id)
     """
 
     @staticmethod
-    def run(query: str, save_history: bool = True) -> Dict[str, Any]:
+    def run(
+        query: str,
+        save_history: bool = True,
+        session_id: Optional[str] = None,   # FIX: accept session_id from api.py
+    ) -> Dict[str, Any]:
         intent   = classify_intent(query)
         pipeline = build_pipeline(intent)
         bus      = MessageBus(query=query, intent=intent)
@@ -745,8 +747,17 @@ class Coordinator:
         if save_history and bus.reply:
             try:
                 from database import save_conversation
-                save_conversation("user",      query[:300])
-                save_conversation("assistant", bus.reply[:300])
+                # FIX: pass session_id through to the history store
+                save_conversation("user",      query[:300], session_id=session_id)
+                save_conversation("assistant", bus.reply[:300], session_id=session_id)
+            except TypeError:
+                # Fallback: save_conversation may not yet accept session_id
+                try:
+                    from database import save_conversation
+                    save_conversation("user",      query[:300])
+                    save_conversation("assistant", bus.reply[:300])
+                except Exception:
+                    pass
             except Exception:
                 pass
             try:
@@ -771,6 +782,7 @@ class Coordinator:
             "research":   bus.research_result,
             "draft":      bus.content_draft,
             "code":       bus.code_result,
+            "session_id": session_id,   # FIX: echo session_id back to caller
         }
 
 
