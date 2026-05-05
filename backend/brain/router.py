@@ -300,7 +300,7 @@ _AGENT_FN={"intent":_run_intent_agent,"memory":_run_memory_agent,"knowledge":_ru
 
 class Coordinator:
     @staticmethod
-    def run(query,save_history=True):
+    def run(query,save_history=True,session_id=None):
         intent=classify_intent(query); pipeline=build_pipeline(intent); bus=MessageBus(query=query,intent=intent)
         for name in pipeline:
             fn=_AGENT_FN.get(name)
