@@ -474,11 +474,14 @@ async def mpesa_sms_ingest(request: Request):
     try:
         body     = await request.json()
         sms_text = body.get("sms", "").strip()
+        print(f"[MPESA SMS] received body keys: {list(body.keys())}")
+        print(f"[MPESA SMS] sms text: '{sms_text}'")
         if not sms_text:
-            return {"status": "error", "message": "empty sms"}
+            return {"status": "error", "message": "empty sms", "body_received": str(body)}
 
         from mpesa_engine import ingest_sms
         result = ingest_sms(sms_text)
+        print(f"[MPESA SMS] parse result: {result}")
 
         # Notify via Telegram + push if valid transaction saved
         if result.get("status") == "saved":
