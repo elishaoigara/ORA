@@ -464,6 +464,73 @@ def mpesa_summary():
         return {"status": "error"}
 
 
+@app.post("/api/mpesa/sms")
+async def mpesa_sms_ingest(request: Request):
+    """
+    Receives M-Pesa SMS forwarded automatically by MacroDroid on your phone.
+    MacroDroid POSTs here the moment any SMS from 'MPESA' arrives.
+    Body: {"sms": "Confirmed. Ksh500 sent to John..."}
+    """
+    try:
+        body     = await request.json()
+        sms_text = body.get("sms", "").strip()
+        if not sms_text:
+            return {"status": "error", "message": "empty sms"}
+
+        from mpesa_engine import ingest_sms
+        result = ingest_sms(sms_text)
+
+        # Notify via Telegram + push if valid transaction saved
+        if result.get("status") == "saved":
+            txn = result.get("transaction", {})
+            try:
+                from intelligence.notifier import dual_notify
+                from mpesa_engine import check_spend_alert, get_today_spend
+                amount = txn.get("amount", 0)
+                party  = txn.get("party", "Unknown")
+                txtype = txn.get("type", "transaction")
+                emoji  = {"received":"💰","sent":"💸","paid":"💳",
+                           "withdrawn":"🏧","airtime":"📱"}.get(txtype, "💳")
+                verb   = {"received":"Received from","sent":"Sent to","paid":"Paid to",
+                           "withdrawn":"Withdrawn","airtime":"Airtime via"}.get(txtype, "Transaction")
+                today  = get_today_spend()
+                total  = float(today.get("total", 0)) if isinstance(today, dict) else float(today or 0)
+                body_lines = [f"{verb} {party}"]
+                if txtype in ("sent", "paid", "withdrawn", "airtime"):
+                    body_lines.append(f"Today total: Ksh{total:,.0f}")
+                dual_notify(
+                    title=f"{emoji} Ksh{amount:,.0f} — M-Pesa",
+                    body="\n".join(body_lines),
+                    is_alert=False,
+                )
+                alert = check_spend_alert()
+                if alert:
+                    dual_notify(title="⚠️ Spend Spike", body=alert["message"], is_alert=True)
+            except Exception as ne:
+                print(f"[MPESA SMS] notify error: {ne}")
+
+        return result
+
+    except Exception as e:
+        print(f"[API] mpesa/sms error: {e}")
+        print(traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/mpesa/sms/test")
+async def mpesa_sms_test():
+    """
+    Test endpoint — open this in your browser to confirm MacroDroid can reach ORA.
+    https://ora-oovf.onrender.com/api/mpesa/sms/test
+    """
+    return {
+        "status": "ok",
+        "message": "ORA M-Pesa SMS endpoint is live. MacroDroid can POST here.",
+        "endpoint": "POST /api/mpesa/sms",
+        "expected_body": {"sms": "ABC123 Confirmed. Ksh500 sent to John Doe 0712345678 on 7/5/26 at 9:00 AM.New M-PESA balance is Ksh1,234.00."},
+    }
+
+
 # ── Goals ─────────────────────────────────────────────────────
 
 class GoalCreate(BaseModel):
