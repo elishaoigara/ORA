@@ -34,6 +34,7 @@ _INTENT_PATTERNS=[
     ("research_then_content",re.compile(r"\b(research.{1,40}(and|then).{1,20}(write|draft|create|post)|find.{1,30}(and|then).{1,20}(write|draft))\b",re.I)),
     ("briefing",re.compile(r"\b(briefing|brief me|full brief|status update|what'?s? my status|catch me up|morning brief|evening brief|what'?s? going on)\b",re.I)),
     ("code",re.compile(r"\b(scan (repo|repos|code|branch)|failing (ci|test|check|build)|stale pr|dead branch|code (review|quality|issue|agent)|open (github )?issue|repo health)\b",re.I)),
+    ("news",re.compile(r"\b(news|headlines|what'?s? happening|top stories|latest news|news digest|news brief|current events)\b",re.I)),
     ("research",re.compile(r"\b(research|deep.?dive|investigate|look up|find out about|latest on|news about|search for|web search)\b",re.I)),
     ("content",re.compile(r"\b(write|draft|create|generate|compose|produce)\b.{0,40}\b(post|article|blog|email|tweet|thread|linkedin|caption|newsletter|script|copy|content)\b",re.I)),
     ("memory_write",re.compile(r"\b(remember|note that|save that|store that|my (name|preference|goal|email|role|company|style) is|i (prefer|like|hate|use|work at|am|live in))\b",re.I)),
@@ -56,7 +57,7 @@ def classify_intent(query):
 
 def classify(query):
     i=classify_intent(query)
-    if i in {"research","research_then_content","content","code","goal","complex","briefing"}: return "complex"
+    if i in {"research","research_then_content","content","code","news","goal","complex","briefing"}: return "complex"
     if i=="knowledge": return "document"
     return "simple"
 
@@ -68,16 +69,33 @@ def model_for(qt):
 def build_pipeline(intent):
     cached=_pcache.get(intent)
     if cached: return cached
-    M={"research_then_content":["memory","research","content","notify"],"research":["memory","research","notify"],"content":["memory","knowledge","content"],"code":["code","notify"],"memory_write":["memory"],"memory_read":["memory","chat"],"knowledge":["knowledge","chat"],"task":["intent"],"goal":["intent"],"calendar":["intent"],"weather":["intent"],"spend":["intent"],"briefing":["briefing"],"complex":["memory","knowledge","chat"],"simple":["chat"]}
+    M={
+        "research_then_content":["memory","research","content","notify"],
+        "research":["memory","research","notify"],
+        "content":["memory","knowledge","content"],
+        "code":["code","notify"],
+        "news":["news","notify"],
+        "memory_write":["memory"],
+        "memory_read":["memory","chat"],
+        "knowledge":["knowledge","chat"],
+        "task":["intent"],
+        "goal":["intent"],
+        "calendar":["intent"],
+        "weather":["intent"],
+        "spend":["intent"],
+        "briefing":["briefing"],
+        "complex":["memory","knowledge","chat"],
+        "simple":["chat"],
+    }
     r=M.get(intent,["chat"]); _pcache.set(intent,r); return r
 
 class MessageBus:
-    __slots__=("_lock","query","intent","started_at","context","reply","chain_log","memory_ctx","kb_ctx","research_result","content_draft","code_result","task_result","goal_result","memory_result")
+    __slots__=("_lock","query","intent","started_at","context","reply","chain_log","memory_ctx","kb_ctx","research_result","content_draft","code_result","news_result","task_result","goal_result","memory_result")
     def __init__(self,query,intent):
         self._lock=threading.Lock(); self.query=query; self.intent=intent; self.started_at=datetime.now().isoformat()
         self.context=[]; self.reply=""; self.chain_log=[]; self.memory_ctx=""; self.kb_ctx=""
         self.research_result=None; self.content_draft=None; self.code_result=None
-        self.task_result=None; self.goal_result=None; self.memory_result=None
+        self.news_result=None; self.task_result=None; self.goal_result=None; self.memory_result=None
     def post(self,agent,key,value,ms=0):
         with self._lock:
             setattr(self,key,value)
@@ -152,6 +170,46 @@ def _run_research_agent(bus):
         if bus.intent=="research": bus.reply=synthesis[:600] or "Research complete."
     except AgentTimeoutError: bus.reply="Research timed out."; bus.add_context("ResearchAgent","Timed out.")
     except Exception as e: print(f"[RESEARCH_AGENT] {e}"); bus.add_context("ResearchAgent",f"Failed: {str(e)[:100]}")
+
+def _run_news_agent(bus):
+    t0=_ms()
+    try:
+        from agents.news_agent import ingest_latest_news, get_latest_digest, generate_digest, get_headlines
+
+        # Always pull fresh articles first (fast — just RSS parse + SQLite insert)
+        ingest_latest_news(limit=20)
+
+        # Try to return an existing digest; generate one if stale/absent
+        digest=get_latest_digest()
+        if not digest:
+            digest=_run_with_timeout(generate_digest, timeout=10)
+
+        bus.post("NewsAgent","news_result",digest,_ms()-t0)
+
+        # Build a readable reply from the digest
+        if digest and not digest.get("error"):
+            headline=digest.get("headline","")
+            top=digest.get("top_story","")
+            sections=digest.get("sections",[])
+            lines=[]
+            if headline: lines.append(f"**{headline}**")
+            if top: lines.append(f"Top story: {top}")
+            for s in sections[:3]:
+                lines.append(f"\n**{s.get('category','')}** — {s.get('summary','')[:200]}")
+            bus.reply="\n".join(lines) or "News digest ready."
+        else:
+            # Fallback: just list headlines
+            items=get_headlines(limit=5)
+            bus.reply="Latest headlines:\n"+"\n".join(f"• {h['title']} ({h['source']})" for h in items)
+
+        bus.add_context("NewsAgent", bus.reply[:400])
+
+    except AgentTimeoutError:
+        bus.reply="News digest timed out — try again shortly."
+        bus.add_context("NewsAgent","Timed out.")
+    except Exception as e:
+        print(f"[NEWS_AGENT] {e}"); traceback.print_exc()
+        bus.add_context("NewsAgent",f"Failed: {str(e)[:100]}")
 
 def _detect_content_type(q):
     ql=q.lower()
@@ -284,19 +342,33 @@ def _run_chat_agent(bus):
     except Exception as e: print(f"[CHAT_AGENT] {e}"); traceback.print_exc(); bus.reply="ORA error. Please try again."
 
 def _run_notifier_agent(bus):
-    if bus.intent not in {"research","research_then_content","code"}: return
+    if bus.intent not in {"research","research_then_content","code","news"}: return
     t0=_ms()
     try:
         from intelligence.notifier import dual_notify
         if bus.intent=="code" and bus.code_result: title,body="ORA Code Agent",_build_code_summary(bus.code_result)[:200]
+        elif bus.intent=="news" and bus.news_result:
+            title="ORA News"
+            body=bus.news_result.get("headline","News digest ready.")[:200]
         elif bus.research_result:
             title="ORA Research"; body=f"Research complete: {bus.research_result.get('title',bus.query[:60])}"
-            if bus.content_draft: body+=f" ? Draft created ({_detect_content_type(bus.query)})"
+            if bus.content_draft: body+=f" → Draft created ({_detect_content_type(bus.query)})"
         else: title,body="ORA",bus.reply[:200]
         if body: dual_notify(title=title,body=body); bus.chain_log.append({"agent":"NotifierAgent","key":"notified","duration_ms":_ms()-t0,"ts":datetime.now().isoformat()})
     except Exception as e: print(f"[NOTIFIER_AGENT] {e}")
 
-_AGENT_FN={"intent":_run_intent_agent,"memory":_run_memory_agent,"knowledge":_run_knowledge_agent,"research":_run_research_agent,"content":_run_content_agent,"code":_run_code_agent,"briefing":_run_briefing_agent,"chat":_run_chat_agent,"notify":_run_notifier_agent}
+_AGENT_FN={
+    "intent":    _run_intent_agent,
+    "memory":    _run_memory_agent,
+    "knowledge": _run_knowledge_agent,
+    "research":  _run_research_agent,
+    "news":      _run_news_agent,
+    "content":   _run_content_agent,
+    "code":      _run_code_agent,
+    "briefing":  _run_briefing_agent,
+    "chat":      _run_chat_agent,
+    "notify":    _run_notifier_agent,
+}
 
 class Coordinator:
     @staticmethod
@@ -318,7 +390,17 @@ class Coordinator:
                 extract_explicit_facts(query)
                 threading.Thread(target=extract_facts_from_exchange,args=(query,bus.reply),daemon=True).start()
             except: pass
-        return {"reply":bus.reply or "No response generated.","query_type":classify(query),"intent":intent,"pipeline":pipeline,"chain_log":bus.chain_log,"research":bus.research_result,"draft":bus.content_draft,"code":bus.code_result}
+        return {
+            "reply":      bus.reply or "No response generated.",
+            "query_type": classify(query),
+            "intent":     intent,
+            "pipeline":   pipeline,
+            "chain_log":  bus.chain_log,
+            "research":   bus.research_result,
+            "news":       bus.news_result,
+            "draft":      bus.content_draft,
+            "code":       bus.code_result,
+        }
 
 coordinator=Coordinator()
 def run(query): return Coordinator.run(query)

@@ -20,6 +20,7 @@ Agent IDs (canonical names):
   "research"      — research_agent.py
   "content"       — agents/content_agent.py
   "code"          — agents/code_agent.py
+  "news"          — agents/news_agent.py
   "executive"     — planner_engine.py
   "memory"        — learning_engine.py
   "notifier"      — intelligence/notifier.py
@@ -82,6 +83,8 @@ def post_message(
       "notify.send"       — send a Telegram notification
       "memory.store"      — store a learned fact
       "executive.plan"    — generate daily plan
+      "news.ingest"       — pull fresh articles from RSS feeds
+      "news.digest"       — generate AI news digest
     """
     conn = get_conn()
     cur = conn.execute(
@@ -224,7 +227,6 @@ def process_pending_messages(max_per_run: int = 5) -> list[dict]:
     Picks up pending messages and dispatches them to the right agent function.
     Returns list of results.
     """
-    # Collect all pending messages across all agents
     conn = get_conn()
     rows = conn.execute(
         """SELECT id, from_agent, to_agent, intent, payload
@@ -297,9 +299,18 @@ def _dispatch(to_agent: str, intent: str, payload: dict) -> Any:
             repo = payload.get("repo", "")
             return scan_repo(repo) if repo else scan_all_repos()
 
+    # ── News agent ───────────────────────────────────────────
+    elif to_agent == "news":
+        from agents.news_agent import ingest_latest_news, generate_digest
+
+        if intent == "news.ingest":
+            return ingest_latest_news(limit=payload.get("limit", 30))
+        if intent == "news.digest":
+            return generate_digest(topic=payload.get("topic", "daily"))
+
     # ── Notifier ─────────────────────────────────────────────
     elif to_agent == "notifier":
-        from intelligence.notifier import notify # pyright: ignore[reportAttributeAccessIssue]
+        from intelligence.notifier import notify  # pyright: ignore[reportAttributeAccessIssue]
 
         if intent == "notify.send":
             notify(payload.get("message", ""), is_alert=payload.get("is_alert", False))
@@ -324,7 +335,7 @@ def _dispatch(to_agent: str, intent: str, payload: dict) -> Any:
     elif to_agent == "executive":
         if intent == "executive.plan":
             try:
-                from intelligence.planner_engine import generate_daily_plan # pyright: ignore[reportAttributeAccessIssue]
+                from intelligence.planner_engine import generate_daily_plan  # pyright: ignore[reportAttributeAccessIssue]
                 return generate_daily_plan()
             except ImportError:
                 from briefing import send_morning_briefing
@@ -354,6 +365,18 @@ def notify_user(message: str, from_agent: str = "orchestrator", priority: int = 
     """Post a notification request. Returns message ID."""
     return post_message(from_agent, "notifier", "notify.send",
                         {"message": message}, priority=priority)
+
+
+def request_news_digest(topic: str = "daily", from_agent: str = "orchestrator", priority: int = 6) -> int:
+    """Post a news digest request. Returns message ID."""
+    return post_message(from_agent, "news", "news.digest",
+                        {"topic": topic}, priority=priority)
+
+
+def request_news_ingest(from_agent: str = "orchestrator", priority: int = 5) -> int:
+    """Post a news ingest request. Returns message ID."""
+    return post_message(from_agent, "news", "news.ingest",
+                        {"limit": 30}, priority=priority)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

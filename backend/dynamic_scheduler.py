@@ -99,6 +99,8 @@ _DEFAULT_JOBS = [
     {"name": "rss_sync",         "description": "RSS feed sync (every 2h)",                          "tool_name": "rss_sync",         "interval_seconds": 7200},
     {"name": "github_sync",      "description": "GitHub activity sync (every 2h)",                   "tool_name": "github_sync",      "interval_seconds": 7200},
     {"name": "code_scan",        "description": "Full code repo scan (every 8h)",                    "tool_name": "code_scan",        "interval_seconds": 28800},
+    {"name": "news_ingest",      "description": "News article ingest (every 3h)",                    "tool_name": "news_ingest",      "interval_seconds": 10800},
+    {"name": "news_digest",      "description": "AI news digest (daily at 7am)",                     "tool_name": "news_digest",      "interval_seconds": 86400},
 ]
 
 
@@ -283,6 +285,8 @@ class DynamicScheduler:
             "rss_sync":         ("connectors.rss",                 "sync_rss"),
             "github_sync":      ("connectors.github",              "get_github_summary"),
             "code_scan":        ("agents.code_agent",              "scan_all_repos"),
+            "news_ingest":      ("agents.news_agent",              "ingest_latest_news"),
+            "news_digest":      ("agents.news_agent",              "generate_daily_briefing"),
         }
 
         if name not in _JOB_FNS:

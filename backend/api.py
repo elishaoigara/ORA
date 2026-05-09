@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('agents.code_agent', fromlist=['init_code_agent_tables']).init_code_agent_tables(), "Code Agent DB"),
         (lambda: __import__('agents.agent_bus', fromlist=['init_agent_bus_table']).init_agent_bus_table(), "Agent Bus"),
         (lambda: __import__('connectors.gmail', fromlist=['init_gmail_tables']).init_gmail_tables(), "Gmail Replies"),
+        (lambda: __import__('agents.news_agent', fromlist=['init_news_tables']).init_news_tables(), "News DB"),
         # ── New systems (Claude Code improvements) ─────────────────────────────
         (lambda: __import__('task_engine', fromlist=['task_engine']).task_engine, "Task Engine"),
         (lambda: __import__('conversation_history', fromlist=['conversation_history']).conversation_history, "Conv History"),
@@ -96,6 +97,9 @@ async def lifespan(app: FastAPI):
             {"trigger": "interval", "hours": 2,    "fn": github_sync,                   "name": "github_sync"},
             # ── Code Agent — every 8h (CPU-intensive, reduced from 6) ─────────────────
             {"trigger": "interval", "hours": 8,    "fn": code_scan_all,                 "name": "code_scan"},
+            # ── News Agent ───────────────────────────────────────────────────────────
+            {"trigger": "interval", "hours": 3, "fn": lambda: __import__('agents.news_agent', fromlist=['ingest_latest_news']).ingest_latest_news(), "name": "news_ingest"},
+            {"trigger": "cron",     "hour": 7,  "minute": 0, "fn": lambda: __import__('agents.news_agent', fromlist=['generate_daily_briefing']).generate_daily_briefing(), "name": "news_briefing"},
         ])
         print("[ORA] Scheduler started")
     except Exception:
@@ -165,6 +169,13 @@ try:
     print("[ORA] Code Agent routes loaded")
 except Exception as e:
     print("[ORA] Code Agent routes NOT loaded:", e)
+
+try:
+    from api_news_routes import router as news_router
+    app.include_router(news_router)
+    print("[ORA] News routes loaded")
+except Exception as e:
+    print(f"[ORA] News routes failed: {e}")
 
 
 # ── Health ────────────────────────────────────────────────────
@@ -533,6 +544,141 @@ async def mpesa_sms_test():
         "expected_body": {"sms": "ABC123 Confirmed. Ksh500 sent to John Doe 0712345678 on 7/5/26 at 9:00 AM.New M-PESA balance is Ksh1,234.00."},
     }
 
+
+
+
+# ── Location / Context ────────────────────────────────────────
+
+@app.post("/api/location/event")
+async def location_event(request: Request):
+    """
+    Receives location context events from MacroDroid.
+    Body: {"event": "arrived_home", "location": "home", "wifi": "MyWiFi"}
+    """
+    try:
+        body  = await request.json()
+        event = body.get("event", "").strip()
+        loc   = body.get("location", "unknown")
+        wifi  = body.get("wifi", "")
+        note  = body.get("note", "")
+
+        if not event:
+            return {"status": "error", "message": "event field required"}
+
+        print(f"[LOCATION] event={event} location={loc} wifi={wifi}")
+
+        # Save context to kv_store
+        try:
+            from database import get_conn, close_conn
+            conn = get_conn()
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)
+            """)
+            conn.execute("""
+                INSERT INTO kv_store (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """, ("location_context", f"{event}|{loc}|{wifi}"))
+            conn.execute("""
+                INSERT INTO kv_store (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """, ("last_location_event", datetime.now().isoformat()))
+            conn.commit()
+            close_conn()
+        except Exception as e:
+            print(f"[LOCATION] kv save failed: {e}")
+
+        # Save to memory profile
+        try:
+            from memory.profile import update_profile # pyright: ignore[reportAttributeAccessIssue]
+            location_map = {
+                "arrived_home": "home", "left_home": "away",
+                "arrived_work": "work", "left_work": "away",
+                "charging_started": "home",
+            }
+            ctx = location_map.get(event, loc)
+            update_profile("current_location", ctx)
+            update_profile("last_location_event", event)
+            update_profile("last_seen", datetime.now().strftime("%Y-%m-%d %H:%M"))
+        except Exception:
+            pass
+
+        # Notifications per event
+        notifs = {
+            "arrived_home": "🏠 Welcome home, Elisha.",
+            "left_home":    "🚶 You have left home. ORA is watching.",
+            "arrived_work": "💼 At work. Focus mode on.",
+            "left_work":    "🏁 Left work. Good job today.",
+            "charging_started": "🔋 Phone charging. ORA running night tasks.",
+        }
+        msg = notifs.get(event)
+
+        # Context-aware extras
+        if event == "arrived_home":
+            try:
+                from database import get_tasks
+                from mpesa_engine import get_today_spend
+                pending = get_tasks("pending")
+                high    = [t for t in pending if t[2] == "high"]
+                spend   = get_today_spend()
+                total   = float(spend.get("total", 0))
+                parts   = []
+                if high:      parts.append(f"{len(high)} high-priority task(s) open")
+                elif pending: parts.append(f"{len(pending)} tasks pending")
+                else:         parts.append("All tasks clear")
+                if total > 0: parts.append(f"Ksh{total:,.0f} spent today")
+                note = " · ".join(parts)
+            except Exception: pass
+
+        elif event == "left_home":
+            try:
+                from database import get_tasks
+                pending = get_tasks("pending")
+                high    = [t for t in pending if t[2] == "high"]
+                if high: note = f"Top priority: {high[0][1][:60]}"
+            except Exception: pass
+
+        elif event == "charging_started":
+            try:
+                import threading
+                from intelligence.proactive_engine import run_proactive_checks
+                threading.Thread(target=run_proactive_checks, daemon=True).start()
+            except Exception: pass
+
+        if msg:
+            try:
+                from intelligence.notifier import dual_notify
+                dual_notify(title=msg, body=note or "", is_alert=False)
+            except Exception as ne:
+                print(f"[LOCATION] notify error: {ne}")
+
+        return {"status": "ok", "event": event, "location": loc}
+
+    except Exception as e:
+        print(f"[API] location/event error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/location/current")
+def location_current():
+    """Get ORA current location context."""
+    try:
+        from database import get_conn, close_conn
+        conn = get_conn()
+        conn.execute("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)")
+        ctx = conn.execute("SELECT value FROM kv_store WHERE key=?", ("location_context",)).fetchone()
+        ts  = conn.execute("SELECT value FROM kv_store WHERE key=?", ("last_location_event",)).fetchone()
+        close_conn()
+        if not ctx:
+            return {"location": "unknown", "last_event": None}
+        parts = (ctx[0] or "").split("|")
+        return {
+            "last_event": parts[0] if len(parts) > 0 else None,
+            "location":   parts[1] if len(parts) > 1 else "unknown",
+            "wifi":       parts[2] if len(parts) > 2 else None,
+            "last_seen":  ts[0] if ts else None,
+        }
+    except Exception as e:
+        return {"location": "unknown", "error": str(e)}
 
 # ── Goals ─────────────────────────────────────────────────────
 

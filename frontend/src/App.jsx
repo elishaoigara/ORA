@@ -12,6 +12,7 @@ import ResearchPage  from "./pages/ResearchPage";
 import InboxPage     from "./pages/InboxPage";
 import ContentPage   from "./pages/ContentPage";
 import CodePage      from "./pages/CodePage";
+import NewsPage      from "./pages/NewsPage";
 
 import { health, getAlerts } from "./api";
 import BASE_URL from "./api";
@@ -27,6 +28,7 @@ const pages = {
   inbox:     InboxPage,
   content:   ContentPage,
   code:      CodePage,
+  news:      NewsPage,
 };
 
 // Primary nav items shown in bottom nav on mobile (most used first)
@@ -39,6 +41,7 @@ const PRIMARY_NAV = [
   { id: "knowledge", icon: "◆", label: "DOCS" },
   { id: "memory",    icon: "◌", label: "MEMORY" },
   { id: "research",  icon: "⊕", label: "SEARCH" },
+  { id: "news",      icon: "📰", label: "NEWS" },
   { id: "content",   icon: "✍️", label: "CONTENT" },
   { id: "code",      icon: "⌥",  label: "CODE" },
 ];
@@ -48,6 +51,7 @@ export default function App() {
   const [authBanner, setAuthBanner] = useState(null);
   const [unreadAlerts, setUnreadAlerts] = useState(0);
   const [unreadEmails, setUnreadEmails] = useState(0);
+  const [unreadNews, setUnreadNews] = useState(0);
 
   // ── Handle Google OAuth redirect ──────────────────────────────
   useEffect(() => {
@@ -93,6 +97,22 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
+  // ── Unread news badge ─────────────────────────────────────────
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res = await fetch(BASE_URL + "/api/news/unread/count");
+        if (res.ok) {
+          const data = await res.json();
+          setUnreadNews(data?.count || 0);
+        }
+      } catch {}
+    };
+    check();
+    const id = setInterval(check, 2 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const navigate = (next) => {
     if (!next || next === page) return;
     setPage(next);
@@ -107,6 +127,7 @@ export default function App() {
   const getBadge = (id) => {
     if (id === "alerts" && unreadAlerts > 0) return unreadAlerts;
     if (id === "inbox"  && unreadEmails > 0) return unreadEmails;
+    if (id === "news"   && unreadNews > 0)   return unreadNews > 9 ? "9+" : unreadNews;
     return null;
   };
 
@@ -150,7 +171,7 @@ export default function App() {
                 onClick={() => navigate(item.id)}
                 aria-label={item.label}
               >
-                {badge && <span className="mobile-nav-badge">{badge > 9 ? "9+" : badge}</span>}
+                {badge && <span className="mobile-nav-badge">{badge}</span>}
                 <span className="mobile-nav-item-icon">{item.icon}</span>
                 <span>{item.label}</span>
               </button>
