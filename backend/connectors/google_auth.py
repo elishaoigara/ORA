@@ -41,7 +41,7 @@ _LEGACY_TOKEN_PATH = os.path.join(DATA_DIR, "google_token.json")
 ACCOUNTS = ("primary", "secondary")
 
 SCOPES = [
-    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/calendar",          # full: read + create + edit + delete
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.modify",

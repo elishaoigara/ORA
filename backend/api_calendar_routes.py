@@ -222,3 +222,79 @@ def gmail_emails_route(limit: int = 10):
     except Exception:
         print(traceback.format_exc())
         return []
+
+
+# ── Calendar write routes ─────────────────────────────────────
+
+@router.post("/api/calendar/create")
+def calendar_create(body: dict):
+    """
+    Create a calendar event from natural language.
+    Body: {"text": "Team meeting tomorrow at 3pm for 1 hour"}
+    """
+    try:
+        from connectors.calendar import quick_event
+        text = (body.get("text") or "").strip()
+        if not text:
+            raise HTTPException(400, "text is required")
+        return quick_event(text)
+    except HTTPException:
+        raise
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Calendar create failed")
+
+
+@router.patch("/api/calendar/update/{event_id}")
+def calendar_update(event_id: str, body: dict):
+    """
+    Update an existing event.
+    Body: {title?, start? (ISO), end? (ISO), location?, description?}
+    """
+    try:
+        from connectors.calendar import update_event
+        from datetime import datetime, timezone
+
+        def _dt(s):
+            if not s:
+                return None
+            dt = datetime.fromisoformat(s)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+        return update_event(
+            event_id    = event_id,
+            title       = body.get("title"),
+            start       = _dt(body.get("start")),
+            end         = _dt(body.get("end")),
+            description = body.get("description"),
+            location    = body.get("location"),
+        )
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Calendar update failed")
+
+
+@router.delete("/api/calendar/delete/{event_id}")
+def calendar_delete(event_id: str):
+    """Delete a calendar event by ID."""
+    try:
+        from connectors.calendar import delete_event
+        return delete_event(event_id)
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Calendar delete failed")
+
+
+@router.get("/api/calendar/free-slot")
+def calendar_free_slot(duration: int = 60, hours_ahead: int = 48):
+    """Find the next free slot of `duration` minutes in the next `hours_ahead` hours."""
+    try:
+        from connectors.calendar import find_free_slot
+        result = find_free_slot(duration_minutes=duration, hours_ahead=hours_ahead)
+        if result.get("ok"):
+            result["start"] = result["start"].isoformat()
+            result["end"]   = result["end"].isoformat()
+        return result
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Free slot search failed")

@@ -274,6 +274,110 @@ class RecentAgentTasksTool(Tool):
         return {"ok": True, "tasks": tasks, "count": len(tasks)}
 
 
+class CalendarCreateTool(Tool):
+    name = "calendar_create"
+    description = (
+        "Create a new Google Calendar event from a natural-language description. "
+        "Input: {text: str}  e.g. {\"text\": \"Team meeting tomorrow at 3pm for 1 hour\"}"
+    )
+
+    def run(self, input: dict) -> dict:
+        from connectors.calendar import quick_event
+        text = (input.get("text") or "").strip()
+        if not text:
+            return {"ok": False, "error": "text is required"}
+        result = quick_event(text)
+        if result.get("ok"):
+            e = result["event"]
+            return {
+                "ok":      True,
+                "message": f"✅ Created: **{e['title']}** on {e['start'][:16].replace('T',' ')}",
+                "event":   e,
+            }
+        return result
+
+
+class CalendarUpdateTool(Tool):
+    name = "calendar_update"
+    description = (
+        "Update an existing calendar event. "
+        "Input: {event_id: str, title?: str, start?: ISO str, end?: ISO str, "
+        "location?: str, description?: str}"
+    )
+
+    def run(self, input: dict) -> dict:
+        from connectors.calendar import update_event
+        from datetime import datetime, timezone
+        event_id = input.get("event_id", "")
+        if not event_id:
+            return {"ok": False, "error": "event_id is required"}
+
+        def _parse_dt(s):
+            if not s:
+                return None
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+
+        result = update_event(
+            event_id    = event_id,
+            title       = input.get("title"),
+            start       = _parse_dt(input.get("start")),
+            end         = _parse_dt(input.get("end")),
+            description = input.get("description"),
+            location    = input.get("location"),
+        )
+        if result.get("ok"):
+            e = result["event"]
+            return {
+                "ok":      True,
+                "message": f"✅ Updated: **{e['title']}**",
+                "event":   e,
+            }
+        return result
+
+
+class CalendarDeleteTool(Tool):
+    name = "calendar_delete"
+    description = "Delete a calendar event by ID. Input: {event_id: str}"
+
+    def run(self, input: dict) -> dict:
+        from connectors.calendar import delete_event
+        event_id = input.get("event_id", "")
+        if not event_id:
+            return {"ok": False, "error": "event_id is required"}
+        result = delete_event(event_id)
+        if result.get("ok"):
+            return {"ok": True, "message": f"🗑️ Event {event_id} deleted."}
+        return result
+
+
+class CalendarFreeSlotTool(Tool):
+    name = "calendar_free_slot"
+    description = (
+        "Find the next free time slot in the calendar. "
+        "Input: {duration_minutes?: int, hours_ahead?: int}  defaults: 60 min, 48 h"
+    )
+
+    def run(self, input: dict) -> dict:
+        from connectors.calendar import find_free_slot
+        result = find_free_slot(
+            duration_minutes = int(input.get("duration_minutes", 60)),
+            hours_ahead      = int(input.get("hours_ahead", 48)),
+        )
+        if result.get("ok"):
+            start = result["start"]
+            end   = result["end"]
+            return {
+                "ok":      True,
+                "message": f"Next free slot: {start.strftime('%A %d %b, %H:%M')}–{end.strftime('%H:%M')} EAT",
+                "start":   start.isoformat(),
+                "end":     end.isoformat(),
+            }
+        return result
+
+
 # ─── Registry ─────────────────────────────────────────────────────────────────
 
 class ToolRegistry:
@@ -292,6 +396,10 @@ class ToolRegistry:
             WeatherTool(),
             CalendarTodayTool(),
             CalendarImminentTool(),
+            CalendarCreateTool(),
+            CalendarUpdateTool(),
+            CalendarDeleteTool(),
+            CalendarFreeSlotTool(),
             GmailSummaryTool(),
             GitHubSummaryTool(),
             MpesaSpendTool(),
