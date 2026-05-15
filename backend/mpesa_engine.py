@@ -234,6 +234,14 @@ def ingest_sms(raw_sms: str) -> dict:
     if not saved:
         return {"status": "duplicate", "transaction_id": txn["transaction_id"]}
     alert = check_spend_alert()
+
+    # Auto-log to Google Sheets (best-effort, never blocks the response)
+    try:
+        from connectors.sheets import log_mpesa_transaction
+        log_mpesa_transaction(txn)
+    except Exception as _sheets_err:
+        print(f"[MPESA] Sheets auto-log skipped: {_sheets_err}")
+
     return {"status": "saved", "transaction": txn, "alert": alert}
 
 

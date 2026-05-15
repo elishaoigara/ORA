@@ -378,6 +378,85 @@ class CalendarFreeSlotTool(Tool):
         return result
 
 
+
+
+class SheetsCreateTool(Tool):
+    name = "sheets_create"
+    description = (
+        "Create a Google Spreadsheet from a natural-language description. "
+        "Use when the user says things like: 'make a spreadsheet of...', "
+        "'put this in a sheet', 'create a Google Sheet with...', "
+        "'log this as a spreadsheet'. "
+        "Input: {text: str}  e.g. text=Spreadsheet of top 5 Kenyan banks"
+    )
+
+    def run(self, input: dict) -> dict:
+        from connectors.sheets import create_sheet_from_prompt
+        text = (input.get("text") or "").strip()
+        if not text:
+            return {"ok": False, "error": "text is required"}
+        return create_sheet_from_prompt(text)
+
+
+class SheetsReadTool(Tool):
+    name = "sheets_read"
+    description = (
+        "Read data from an existing Google Spreadsheet. "
+        "Input: {url_or_id: str, tab?: str, range?: str}"
+    )
+
+    def run(self, input: dict) -> dict:
+        from connectors.sheets import read_sheet
+        url = (input.get("url_or_id") or input.get("url") or "").strip()
+        if not url:
+            return {"ok": False, "error": "url_or_id is required"}
+        result = read_sheet(url,
+                            tab=input.get("tab", "Sheet1"),
+                            range_a1=input.get("range", ""))
+        if result.get("ok"):
+            rows = result["values"]
+            preview = "\n".join(", ".join(str(c) for c in r) for r in rows[:5])
+            result["message"] = (
+                f"Read {result['rows']} rows × {result['cols']} cols.\n{preview}"
+                + ("\n..." if result["rows"] > 5 else "")
+            )
+        return result
+
+
+class SheetsWriteTool(Tool):
+    name = "sheets_write"
+    description = (
+        "Write or append rows to an existing Google Spreadsheet. "
+        "Input: {url_or_id: str, rows: [[...], ...], tab?: str, append?: bool}"
+    )
+
+    def run(self, input: dict) -> dict:
+        from connectors.sheets import write_rows, append_rows
+        url  = (input.get("url_or_id") or input.get("url") or "").strip()
+        rows = input.get("rows", [])
+        tab  = input.get("tab", "Sheet1")
+        if not url:
+            return {"ok": False, "error": "url_or_id is required"}
+        if not rows:
+            return {"ok": False, "error": "rows is required"}
+        if input.get("append", True):
+            return append_rows(url, rows, tab=tab)
+        return write_rows(url, rows, tab=tab)
+
+
+class MpesaSyncSheetTool(Tool):
+    name = "mpesa_sync_sheet"
+    description = (
+        "Sync M-Pesa transaction history to a Google Sheet. "
+        "Use when user asks to export, backup, or sync M-Pesa data to Sheets. "
+        "Input: {days?: int}  default 30 days"
+    )
+
+    def run(self, input: dict) -> dict:
+        from connectors.sheets import sync_mpesa_history
+        days = int(input.get("days", 30))
+        return sync_mpesa_history(days=days)
+
 # ─── Registry ─────────────────────────────────────────────────────────────────
 
 class ToolRegistry:
@@ -401,6 +480,10 @@ class ToolRegistry:
             CalendarDeleteTool(),
             CalendarFreeSlotTool(),
             GmailSummaryTool(),
+            SheetsCreateTool(),
+            SheetsReadTool(),
+            SheetsWriteTool(),
+            MpesaSyncSheetTool(),
             GitHubSummaryTool(),
             MpesaSpendTool(),
             KnowledgeSearchTool(),

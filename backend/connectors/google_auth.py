@@ -46,6 +46,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",      # full: read + create + write sheets
 ]
 
 AUTH_URL  = "https://accounts.google.com/o/oauth2/v2/auth"

@@ -298,3 +298,98 @@ def calendar_free_slot(duration: int = 60, hours_ahead: int = 48):
     except Exception:
         print(traceback.format_exc())
         raise HTTPException(500, "Free slot search failed")
+
+
+# ── Google Sheets routes ──────────────────────────────────────
+
+@router.post("/api/sheets/create")
+def sheets_create(body: dict):
+    """
+    Create a spreadsheet from natural language.
+    Body: {"text": "spreadsheet of my monthly expenses with columns: Date, Category, Amount"}
+    """
+    try:
+        from connectors.sheets import create_sheet_from_prompt
+        text = (body.get("text") or "").strip()
+        if not text:
+            raise HTTPException(400, "text is required")
+        return create_sheet_from_prompt(text)
+    except HTTPException:
+        raise
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Sheets create failed")
+
+
+@router.get("/api/sheets/read")
+def sheets_read(url: str, tab: str = "Sheet1", range: str = ""):
+    """Read data from a Google Sheet by URL or ID."""
+    try:
+        from connectors.sheets import read_sheet
+        return read_sheet(url, tab=tab, range_a1=range)
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Sheets read failed")
+
+
+@router.post("/api/sheets/write")
+def sheets_write(body: dict):
+    """
+    Append or write rows to an existing sheet.
+    Body: {"url_or_id": "...", "rows": [["a","b"], ["c","d"]], "tab": "Sheet1", "append": true}
+    """
+    try:
+        from connectors.sheets import append_rows, write_rows
+        url  = (body.get("url_or_id") or body.get("url") or "").strip()
+        rows = body.get("rows", [])
+        tab  = body.get("tab", "Sheet1")
+        if not url:
+            raise HTTPException(400, "url_or_id is required")
+        if not rows:
+            raise HTTPException(400, "rows is required")
+        if body.get("append", True):
+            return append_rows(url, rows, tab=tab)
+        return write_rows(url, rows, tab=tab)
+    except HTTPException:
+        raise
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Sheets write failed")
+
+
+@router.post("/api/sheets/mpesa/sync")
+def sheets_mpesa_sync(days: int = 30):
+    """Sync M-Pesa transaction history to Google Sheets."""
+    try:
+        from connectors.sheets import sync_mpesa_history
+        return sync_mpesa_history(days=days)
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "M-Pesa sync failed")
+
+
+@router.get("/api/sheets/list")
+def sheets_list():
+    """List all ORA-managed sheets (M-Pesa, weekly reviews, etc.)."""
+    try:
+        from database import get_conn, close_conn
+        conn = get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT key, sheet_id, sheet_url, created_at FROM ora_sheets ORDER BY created_at DESC"
+            ).fetchall()
+            close_conn()
+            return [
+                {
+                    "key":        r[0],
+                    "sheet_id":   r[1],
+                    "url":        r[2] or f"https://docs.google.com/spreadsheets/d/{r[1]}",
+                    "created_at": r[3],
+                }
+                for r in rows
+            ]
+        except Exception:
+            close_conn()
+            return []
+    except Exception:
+        return []
