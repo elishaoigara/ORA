@@ -1,10 +1,9 @@
 """
-ORA Gmail Connector — Phase 2: Communication Agent
-- Real email parsing (headers, body, thread context)
-- AI smart reply generation with tone/context awareness
-- Send reply via Gmail REST API
-- Inbox triage: priority scoring per email
-- Pending reply queue with approve/reject/edit
+ORA Gmail Connector — multi-account + promotions filter
+- Reads from PRIMARY and SECONDARY Google accounts
+- Filters out promotions, social, updates, forums by default
+- All existing function signatures unchanged (backward-compatible)
+- New: account= parameter on key functions for per-account calls
 """
 
 from __future__ import annotations
@@ -14,15 +13,32 @@ import re
 import traceback
 from typing import List, Optional
 
-from connectors.google_auth import get_access_token, is_authorized
+from connectors.google_auth import (
+    get_access_token,
+    is_authorized,
+    get_all_authorized_accounts,
+)
 from database import get_conn, close_conn
 
 GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 
+# ─────────────────────────────────────────────
+# PROMOTIONS FILTER
+# Applied to every email fetch by default.
+# Gmail search syntax — same as the search bar.
+# ─────────────────────────────────────────────
+INBOX_FILTER = (
+    "in:inbox is:unread "
+    "-category:promotions "
+    "-category:social "
+    "-category:updates "
+    "-category:forums"
+)
 
-# ─────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────
 # DB INIT
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 
 def init_gmail_tables() -> None:
     conn = get_conn()
@@ -37,47 +53,60 @@ def init_gmail_tables() -> None:
             suggested_text TEXT NOT NULL,
             tone           TEXT DEFAULT 'professional',
             status         TEXT DEFAULT 'pending',
+            account        TEXT DEFAULT 'primary',
             created_at     TEXT DEFAULT (datetime('now')),
             updated_at     TEXT DEFAULT (datetime('now'))
         )
     """)
+    # Add account column to existing tables that don't have it
+    try:
+        conn.execute("ALTER TABLE suggested_replies ADD COLUMN account TEXT DEFAULT 'primary'")
+        conn.commit()
+    except Exception:
+        pass  # column already exists
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_replies_status
         ON suggested_replies(status, created_at DESC)
     """)
     conn.commit()
     close_conn()
-    print("[GMAIL] Tables ready")
+    print("[GMAIL] Tables ready (multi-account)")
 
 
-# ─────────────────────────────────────────────────────────────
-# RAW HTTP HELPERS (no google-api-python-client needed)
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# RAW HTTP HELPERS
+# ─────────────────────────────────────────────
 
-def _headers() -> dict:
-    return {"Authorization": f"Bearer {get_access_token()}"}
+def _headers(account: str = "primary") -> dict:
+    return {"Authorization": f"Bearer {get_access_token(account)}"}
 
 
-def _gmail_get(path: str, params: dict | None = None) -> dict:
+def _gmail_get(path: str, params: dict | None = None,
+               account: str = "primary") -> dict:
     import requests
     url = f"{GMAIL_BASE}/{path}"
-    r = requests.get(url, headers=_headers(), params=params or {}, timeout=15)
+    r = requests.get(url, headers=_headers(account),
+                     params=params or {}, timeout=15)
     r.raise_for_status()
     return r.json()
 
 
-def _gmail_post(path: str, body: dict) -> dict:
+def _gmail_post(path: str, body: dict, account: str = "primary") -> dict:
     import requests
     url = f"{GMAIL_BASE}/{path}"
-    r = requests.post(url, headers={**_headers(), "Content-Type": "application/json"},
-                      json=body, timeout=15)
+    r = requests.post(
+        url,
+        headers={**_headers(account), "Content-Type": "application/json"},
+        json=body,
+        timeout=15,
+    )
     r.raise_for_status()
     return r.json()
 
 
-# ─────────────────────────────────────────────────────────────
-# EMAIL PARSING HELPERS
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# EMAIL PARSING HELPERS  (unchanged)
+# ─────────────────────────────────────────────
 
 def _decode_header_value(raw: str) -> str:
     try:
@@ -120,7 +149,6 @@ def _extract_body(payload: dict) -> str:
         except Exception:
             return ""
 
-    # multipart — prefer plain, fallback to html
     plain = next((p for p in parts if p.get("mimeType") == "text/plain"), None)
     if plain:
         return _extract_body(plain)
@@ -131,7 +159,7 @@ def _extract_body(payload: dict) -> str:
     return ""
 
 
-def _parse_message(msg: dict) -> dict:
+def _parse_message(msg: dict, account: str = "primary") -> dict:
     hdrs = {h["name"].lower(): h["value"]
             for h in msg.get("payload", {}).get("headers", [])}
     return {
@@ -144,51 +172,124 @@ def _parse_message(msg: dict) -> dict:
         "labels":    msg.get("labelIds", []),
         "body":      _extract_body(msg.get("payload", {})),
         "snippet":   msg.get("snippet", ""),
+        "account":   account,   # NEW: tag each email with its source account
     }
 
 
-# ─────────────────────────────────────────────────────────────
-# BASIC GMAIL FUNCTIONS (used by InboxPage + sidebar badge)
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# CORE FETCH — single account, with filter
+# ─────────────────────────────────────────────
+
+def _fetch_emails_for_account(
+    account: str,
+    max_results: int = 15,
+    include_promotions: bool = False,
+) -> List[dict]:
+    """Fetch filtered unread emails for one account."""
+    if not is_authorized(account):
+        return []
+    try:
+        query = "in:inbox is:unread" if include_promotions else INBOX_FILTER
+        data  = _gmail_get("messages", {"q": query, "maxResults": max_results},
+                           account=account)
+        refs  = data.get("messages", [])
+        emails = []
+        for ref in refs:
+            try:
+                msg = _gmail_get(f"messages/{ref['id']}", {"format": "full"},
+                                 account=account)
+                emails.append(_parse_message(msg, account=account))
+            except Exception as e:
+                print(f"[GMAIL:{account}] fetch {ref['id']} failed: {e}")
+        return emails
+    except Exception as e:
+        print(f"[GMAIL:{account}] _fetch_emails failed: {e}")
+        return []
+
+
+# ─────────────────────────────────────────────
+# PUBLIC FUNCTIONS  (backward-compatible signatures)
+# ─────────────────────────────────────────────
 
 def get_gmail_summary() -> dict:
+    """
+    Returns unread counts per account (primary + secondary if connected).
+    Total unread excludes promotions.
+    """
     try:
-        if not is_authorized():
-            return {"authorized": False, "unread_count": 0}
-        data = _gmail_get("messages", {"labelIds": "UNREAD", "maxResults": 1})
-        unread = data.get("resultSizeEstimate", 0)
-        return {"authorized": True, "unread_count": unread}
+        result = {"authorized": False, "unread_count": 0, "accounts": {}}
+        any_auth = False
+
+        for account in ("primary", "secondary"):
+            if not is_authorized(account):
+                result["accounts"][account] = {"authorized": False, "unread_count": 0}
+                continue
+            try:
+                any_auth = True
+                data = _gmail_get(
+                    "messages",
+                    {"q": INBOX_FILTER, "maxResults": 1},
+                    account=account,
+                )
+                count = data.get("resultSizeEstimate", 0)
+                result["accounts"][account] = {"authorized": True, "unread_count": count}
+                result["unread_count"] += count
+            except Exception as e:
+                print(f"[GMAIL:{account}] summary failed: {e}")
+                result["accounts"][account] = {"authorized": True, "unread_count": 0}
+
+        result["authorized"] = any_auth
+        return result
+
     except Exception as e:
         print(f"[GMAIL] summary failed: {e}")
         return {"authorized": False, "unread_count": 0}
 
 
-def get_recent_emails(max_results: int = 15) -> List[dict]:
-    """Fetch recent unread emails with full body parsing."""
+def get_unread_count() -> int:
+    """Quick integer unread count across all accounts (no promotions)."""
+    summary = get_gmail_summary()
+    return summary.get("unread_count", 0)
+
+
+def get_recent_emails(
+    max_results: int = 15,
+    include_promotions: bool = False,
+) -> List[dict]:
+    """
+    Fetch recent primary-inbox unread emails from ALL authorized accounts.
+    Promotions/social/updates excluded by default.
+    Results are merged and sorted newest-first.
+    """
+    all_emails: List[dict] = []
+    per_account = max(5, max_results // len(get_all_authorized_accounts() or ["primary"]))
+
+    for account in ("primary", "secondary"):
+        emails = _fetch_emails_for_account(
+            account,
+            max_results=per_account,
+            include_promotions=include_promotions,
+        )
+        all_emails.extend(emails)
+
+    # Sort by date header (best-effort; keep original order on parse failure)
     try:
-        if not is_authorized():
-            return []
-        data = _gmail_get("messages", {
-            "labelIds": ["INBOX", "UNREAD"],
-            "maxResults": max_results,
-        })
-        refs = data.get("messages", [])
-        emails = []
-        for ref in refs:
+        from email.utils import parsedate_to_datetime
+        def _ts(e):
             try:
-                msg = _gmail_get(f"messages/{ref['id']}", {"format": "full"})
-                emails.append(_parse_message(msg))
-            except Exception as e:
-                print(f"[GMAIL] fetch {ref['id']} failed: {e}")
-        return emails
-    except Exception as e:
-        print(f"[GMAIL] get_recent_emails failed: {e}")
-        return []
+                return parsedate_to_datetime(e["date"]).timestamp()
+            except Exception:
+                return 0
+        all_emails.sort(key=_ts, reverse=True)
+    except Exception:
+        pass
+
+    return all_emails[:max_results]
 
 
-# ─────────────────────────────────────────────────────────────
-# PRIORITY SCORING — which emails need a reply
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# PRIORITY SCORING  (unchanged logic)
+# ─────────────────────────────────────────────
 
 _NO_REPLY_SENDERS = re.compile(
     r"no.?reply|noreply|do-not-reply|donotreply|newsletter|notification|"
@@ -220,15 +321,15 @@ def _priority_score(email: dict) -> int:
     to = (email.get("to") or "").lower()
     if "@" in to and len(to.split(",")) == 1:
         score += 8
-    if "IMPORTANT" in labels:          score += 15
+    if "IMPORTANT" in labels:           score += 15
     if "CATEGORY_PROMOTIONS" in labels: score -= 20
     if "CATEGORY_UPDATES" in labels:    score -= 10
     return min(100, max(0, score))
 
 
-# ─────────────────────────────────────────────────────────────
-# COMMUNICATION AGENT
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# COMMUNICATION AGENT  (unchanged, now multi-account aware)
+# ─────────────────────────────────────────────
 
 def get_emails_needing_reply(limit: int = 8) -> List[dict]:
     try:
@@ -259,10 +360,8 @@ def get_emails_needing_reply(limit: int = 8) -> List[dict]:
 
 
 def suggest_reply(email_data: dict, tone: str = "professional") -> str:
-    """Generate a context-aware smart reply via Groq."""
     try:
         from ai_brain import ask_groq
-
         tone_guide = {
             "professional": "professional and warm — clear, direct, not stuffy",
             "friendly":     "friendly and conversational, like writing to a colleague",
@@ -273,9 +372,11 @@ def suggest_reply(email_data: dict, tone: str = "professional") -> str:
         sender  = email_data.get("sender", "Unknown")
         subject = email_data.get("subject", "(no subject)")
         body    = (email_data.get("body") or email_data.get("snippet") or "")[:900]
+        account = email_data.get("account", "primary")
+        acct_label = "" if account == "primary" else f" (via your {account} account)"
 
         prompt = f"""You are ORA, the personal AI assistant for Elisha Oigara (software engineer, Nairobi).
-Write a reply to this email on Elisha's behalf.
+Write a reply to this email on Elisha's behalf{acct_label}.
 
 Tone: {tone_guide}
 
@@ -314,15 +415,16 @@ def save_suggested_reply(
     email_body:     str = "",
     suggested_text: str = "",
     tone:           str = "professional",
+    account:        str = "primary",
 ) -> bool:
     try:
         conn = get_conn()
         conn.execute("""
             INSERT INTO suggested_replies
-                (email_id, thread_id, subject, sender, email_body, suggested_text, tone)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (email_id, thread_id, subject, sender, email_body, suggested_text, tone, account)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (email_id, thread_id, subject[:300], sender[:200],
-               email_body[:1000], suggested_text, tone))
+               email_body[:1000], suggested_text, tone, account))
         conn.commit()
         close_conn()
         return True
@@ -336,7 +438,8 @@ def get_pending_replies(limit: int = 15) -> List[dict]:
         conn = get_conn()
         rows = conn.execute("""
             SELECT id, email_id, thread_id, subject, sender,
-                   email_body, suggested_text, tone, status, created_at
+                   email_body, suggested_text, tone, status, created_at,
+                   COALESCE(account, 'primary') as account
             FROM suggested_replies
             WHERE status = 'pending'
             ORDER BY created_at DESC LIMIT ?
@@ -347,7 +450,7 @@ def get_pending_replies(limit: int = 15) -> List[dict]:
                 "id": r[0], "email_id": r[1], "thread_id": r[2],
                 "subject": r[3], "sender": r[4], "email_body": r[5],
                 "suggested_text": r[6], "tone": r[7], "status": r[8],
-                "created_at": r[9],
+                "created_at": r[9], "account": r[10],
             }
             for r in rows
         ]
@@ -373,22 +476,24 @@ def update_reply_text(reply_id: int, new_text: str) -> bool:
 
 
 def regenerate_reply(reply_id: int, tone: str = "professional") -> dict:
-    """Re-generate the suggested text for an existing pending reply."""
     try:
         conn = get_conn()
         row = conn.execute("""
-            SELECT email_id, subject, sender, email_body
+            SELECT email_id, subject, sender, email_body,
+                   COALESCE(account, 'primary')
             FROM suggested_replies WHERE id=?
         """, (reply_id,)).fetchone()
         close_conn()
         if not row:
             return {"ok": False, "error": "Not found"}
 
-        email_data = {"id": row[0], "subject": row[1], "sender": row[2], "body": row[3]}
+        email_data = {
+            "id": row[0], "subject": row[1], "sender": row[2],
+            "body": row[3], "account": row[4],
+        }
         new_text = suggest_reply(email_data, tone=tone)
         ok = update_reply_text(reply_id, new_text)
 
-        # Also update tone
         conn = get_conn()
         conn.execute("UPDATE suggested_replies SET tone=?, updated_at=datetime('now') WHERE id=?",
                      (tone, reply_id))
@@ -401,14 +506,11 @@ def regenerate_reply(reply_id: int, tone: str = "professional") -> dict:
 
 
 def approve_and_send_reply(reply_id: int) -> dict:
-    """
-    Approve a reply. Attempts to send via Gmail REST API.
-    If gmail.send scope is missing, marks as 'approved' (user copies manually).
-    """
     try:
         conn = get_conn()
         row = conn.execute("""
-            SELECT email_id, thread_id, subject, sender, suggested_text
+            SELECT email_id, thread_id, subject, sender, suggested_text,
+                   COALESCE(account, 'primary')
             FROM suggested_replies WHERE id=?
         """, (reply_id,)).fetchone()
         close_conn()
@@ -416,19 +518,19 @@ def approve_and_send_reply(reply_id: int) -> dict:
         if not row:
             return {"ok": False, "error": "Reply not found"}
 
-        email_id, thread_id, subject, sender, text = row
+        email_id, thread_id, subject, sender, text, account = row
         sent      = False
         error_msg = None
 
-        if is_authorized():
+        if is_authorized(account):
             try:
                 _send_gmail_reply(to=sender, subject=subject,
-                                  thread_id=thread_id, body=text)
+                                  thread_id=thread_id, body=text,
+                                  account=account)
                 sent = True
             except Exception as e:
-                # Likely missing gmail.send scope — degrade gracefully
                 error_msg = str(e)
-                print(f"[GMAIL_REPLY] send failed (marking approved): {e}")
+                print(f"[GMAIL_REPLY:{account}] send failed: {e}")
 
         new_status = "sent" if sent else "approved"
         conn = get_conn()
@@ -440,29 +542,25 @@ def approve_and_send_reply(reply_id: int) -> dict:
         conn.commit()
         close_conn()
 
-        return {"ok": True, "sent": sent, "status": new_status, "error": error_msg}
+        return {"ok": True, "sent": sent, "status": new_status,
+                "error": error_msg, "account": account}
 
     except Exception as e:
         print(f"[GMAIL_REPLY] approve_and_send failed: {e}")
         return {"ok": False, "error": str(e)}
 
 
-def _send_gmail_reply(to: str, subject: str,
-                      thread_id: Optional[str], body: str) -> None:
-    """Send via Gmail REST API /messages/send."""
+def _send_gmail_reply(to: str, subject: str, thread_id: Optional[str],
+                      body: str, account: str = "primary") -> None:
     from email.mime.text import MIMEText
-    import json
-
     msg = MIMEText(body)
     msg["To"]      = to
     msg["Subject"] = subject if subject.startswith("Re:") else f"Re: {subject}"
-
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
     payload: dict = {"raw": raw}
     if thread_id:
         payload["threadId"] = thread_id
-
-    _gmail_post("messages/send", payload)
+    _gmail_post("messages/send", payload, account=account)
 
 
 def reject_reply(reply_id: int) -> bool:
@@ -486,7 +584,7 @@ def get_reply_history(limit: int = 20) -> List[dict]:
         conn = get_conn()
         rows = conn.execute("""
             SELECT id, subject, sender, suggested_text, status, tone,
-                   created_at, updated_at
+                   created_at, updated_at, COALESCE(account, 'primary')
             FROM suggested_replies
             WHERE status IN ('sent', 'approved', 'rejected')
             ORDER BY updated_at DESC LIMIT ?
@@ -494,10 +592,11 @@ def get_reply_history(limit: int = 20) -> List[dict]:
         close_conn()
         return [
             {"id": r[0], "subject": r[1], "sender": r[2], "text": r[3],
-             "status": r[4], "tone": r[5], "created_at": r[6], "updated_at": r[7]}
+             "status": r[4], "tone": r[5], "created_at": r[6],
+             "updated_at": r[7], "account": r[8]}
             for r in rows
         ]
-    except Exception as e:
+    except Exception:
         return []
 
 
@@ -516,9 +615,9 @@ def get_reply_stats() -> dict:
         return {"total": 0, "pending": 0, "sent": 0, "approved": 0, "rejected": 0}
 
 
-# ─────────────────────────────────────────────────────────────
-# SCHEDULER HOOK — called every 15 min
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# SCHEDULER HOOK
+# ─────────────────────────────────────────────
 
 def run_gmail_reply_checks() -> None:
     try:
@@ -547,6 +646,7 @@ def run_gmail_reply_checks() -> None:
                 sender=email.get("sender", ""),
                 email_body=email.get("body", ""),
                 suggested_text=suggested,
+                account=email.get("account", "primary"),
             ):
                 added += 1
 
@@ -563,4 +663,4 @@ def run_gmail_reply_checks() -> None:
         print(traceback.format_exc())
 
 
-print("[GMAIL] Communication Agent v2 loaded")
+print("[GMAIL] Multi-account connector loaded")

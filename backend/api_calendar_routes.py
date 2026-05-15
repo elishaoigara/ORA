@@ -1,5 +1,6 @@
 """
 ORA Google routes — Calendar, Gmail status, OAuth flow.
+Multi-account support: primary + secondary Gmail accounts.
 """
 
 import os
@@ -11,7 +12,7 @@ from fastapi.responses import RedirectResponse
 router = APIRouter()
 
 
-# ── Google OAuth ─────────────────────────────────────────────
+# ── Primary Google Account OAuth ─────────────────────────────
 
 @router.get("/api/auth/google")
 def google_auth_start():
@@ -21,7 +22,7 @@ def google_auth_start():
             raise HTTPException(500, "GOOGLE_CLIENT_ID not set in environment variables")
         if not REDIRECT_URI:
             raise HTTPException(500, "GOOGLE_REDIRECT_URI not set in environment variables")
-        return RedirectResponse(get_auth_url())
+        return RedirectResponse(get_auth_url(account="primary"))
     except HTTPException:
         raise
     except Exception:
@@ -31,7 +32,6 @@ def google_auth_start():
 
 @router.get("/api/auth/google/callback")
 def google_auth_callback(code: str = "", error: str = ""):
-    # Determine where to send the user back after auth
     frontend_url = (
         os.getenv("FRONTEND_URL", "").rstrip("/")
         or os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
@@ -46,8 +46,7 @@ def google_auth_callback(code: str = "", error: str = ""):
 
     try:
         from connectors.google_auth import exchange_code
-        exchange_code(code)
-        # ✅ Redirect back to the frontend app (memory page shows auth status)
+        exchange_code(code, account="primary")
         return RedirectResponse(f"{frontend_url}?google_auth=success")
     except Exception:
         print(traceback.format_exc())
@@ -59,7 +58,7 @@ def google_auth_status():
     try:
         from connectors.google_auth import is_authorized, CLIENT_ID
         return {
-            "authorized":    is_authorized(),
+            "authorized":        is_authorized("primary"),
             "client_configured": bool(CLIENT_ID),
         }
     except Exception:
@@ -68,15 +67,94 @@ def google_auth_status():
 
 @router.delete("/api/auth/google")
 def google_auth_revoke():
-    """Disconnect Google — delete stored token."""
+    """Disconnect primary Google account."""
     try:
-        from connectors.google_auth import TOKEN_PATH
-        import os
-        if os.path.exists(TOKEN_PATH):
-            os.remove(TOKEN_PATH)
+        from connectors.google_auth import revoke
+        revoke("primary")
         return {"status": "disconnected"}
     except Exception:
         raise HTTPException(500, "Disconnect failed")
+
+
+# ── Secondary Google Account OAuth ───────────────────────────
+# Before using: add /api/auth/google/callback2 as an authorised
+# redirect URI in Google Cloud Console (same OAuth client).
+
+@router.get("/api/auth/google/secondary")
+def google_auth_secondary_start():
+    """Start OAuth flow for the second Gmail account."""
+    try:
+        from connectors.google_auth import get_auth_url, CLIENT_ID
+        if not CLIENT_ID:
+            raise HTTPException(500, "GOOGLE_CLIENT_ID not set")
+        return RedirectResponse(get_auth_url(account="secondary"))
+    except HTTPException:
+        raise
+    except Exception:
+        print(traceback.format_exc())
+        raise HTTPException(500, "Auth URL failed")
+
+
+@router.get("/api/auth/google/callback2")
+def google_auth_secondary_callback(code: str = "", error: str = ""):
+    """OAuth callback for the second Gmail account."""
+    frontend_url = (
+        os.getenv("FRONTEND_URL", "").rstrip("/")
+        or os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+        or "http://localhost:5173"
+    )
+
+    if error:
+        return RedirectResponse(f"{frontend_url}?google_auth2=error&detail={error}")
+    if not code:
+        raise HTTPException(400, "Missing code")
+
+    try:
+        from connectors.google_auth import exchange_code
+        exchange_code(code, account="secondary")
+        return RedirectResponse(f"{frontend_url}?google_auth2=success")
+    except Exception:
+        print(traceback.format_exc())
+        return RedirectResponse(f"{frontend_url}?google_auth2=error&detail=token_exchange_failed")
+
+
+@router.get("/api/auth/google/secondary/status")
+def google_auth_secondary_status():
+    """Check if the secondary account is authorized."""
+    try:
+        from connectors.google_auth import is_authorized
+        return {"authorized": is_authorized("secondary")}
+    except Exception:
+        return {"authorized": False}
+
+
+@router.delete("/api/auth/google/secondary")
+def google_auth_secondary_revoke():
+    """Disconnect the secondary Google account."""
+    try:
+        from connectors.google_auth import revoke
+        revoke("secondary")
+        return {"status": "disconnected"}
+    except Exception:
+        raise HTTPException(500, "Disconnect failed")
+
+
+@router.get("/api/auth/google/accounts")
+def google_accounts_status():
+    """Auth status for all accounts in one call."""
+    try:
+        from connectors.google_auth import is_authorized, get_all_authorized_accounts
+        return {
+            "primary":   {"authorized": is_authorized("primary")},
+            "secondary": {"authorized": is_authorized("secondary")},
+            "connected": get_all_authorized_accounts(),
+        }
+    except Exception:
+        return {
+            "primary":   {"authorized": False},
+            "secondary": {"authorized": False},
+            "connected": [],
+        }
 
 
 # ── Calendar ─────────────────────────────────────────────────
@@ -113,9 +191,13 @@ def calendar_imminent(minutes: int = 30):
 
 @router.get("/api/gmail/summary")
 def gmail_summary_route():
+    """
+    Returns combined unread count from all authorized accounts.
+    Promotions/social/updates excluded automatically.
+    """
     try:
         from connectors.google_auth import is_authorized
-        if not is_authorized():
+        if not is_authorized("primary") and not is_authorized("secondary"):
             return {"authorized": False, "unread_count": 0}
         from connectors.gmail import get_gmail_summary
         result = get_gmail_summary()
@@ -127,12 +209,16 @@ def gmail_summary_route():
 
 @router.get("/api/gmail/emails")
 def gmail_emails_route(limit: int = 10):
+    """
+    Returns primary-inbox unread emails from all authorized accounts,
+    merged and sorted newest-first. Promotions excluded.
+    """
     try:
         from connectors.google_auth import is_authorized
-        if not is_authorized():
+        if not is_authorized("primary") and not is_authorized("secondary"):
             return []
         from connectors.gmail import get_recent_emails
-        return get_recent_emails(max_results=min(limit, 10))
+        return get_recent_emails(max_results=min(limit, 20))
     except Exception:
         print(traceback.format_exc())
         return []
