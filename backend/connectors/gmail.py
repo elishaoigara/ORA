@@ -28,7 +28,7 @@ GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 # Gmail search syntax — same as the search bar.
 # ─────────────────────────────────────────────
 INBOX_FILTER = (
-    "in:inbox is:unread "
+    "in:inbox "
     "-category:promotions "
     "-category:social "
     "-category:updates "
@@ -185,7 +185,7 @@ def _fetch_emails_for_account(
     max_results: int = 15,
     include_promotions: bool = False,
 ) -> List[dict]:
-    """Fetch filtered unread emails for one account."""
+    """Fetch filtered emails for one account (read + unread unless include_promotions changes query)."""
     if not is_authorized(account):
         return []
     try:
@@ -213,8 +213,8 @@ def _fetch_emails_for_account(
 
 def get_gmail_summary() -> dict:
     """
-    Returns unread counts per account (primary + secondary if connected).
-    Total unread excludes promotions.
+    Returns total and unread counts per account (primary + secondary if connected).
+    Total excludes promotions/categories, unread is the subset that's unread.
     """
     try:
         result = {"authorized": False, "unread_count": 0, "accounts": {}}
@@ -231,9 +231,19 @@ def get_gmail_summary() -> dict:
                     {"q": INBOX_FILTER, "maxResults": 1},
                     account=account,
                 )
-                count = data.get("resultSizeEstimate", 0)
-                result["accounts"][account] = {"authorized": True, "unread_count": count}
-                result["unread_count"] += count
+                unread_data = _gmail_get(
+                    "messages",
+                    {"q": INBOX_FILTER + " is:unread", "maxResults": 1},
+                    account=account,
+                )
+                total_count  = data.get("resultSizeEstimate", 0)
+                unread_count = unread_data.get("resultSizeEstimate", 0)
+                result["accounts"][account] = {
+                    "authorized": True,
+                    "total_count": total_count,
+                    "unread_count": unread_count,
+                }
+                result["unread_count"] += unread_count
             except Exception as e:
                 print(f"[GMAIL:{account}] summary failed: {e}")
                 result["accounts"][account] = {"authorized": True, "unread_count": 0}
@@ -257,8 +267,9 @@ def get_recent_emails(
     include_promotions: bool = False,
 ) -> List[dict]:
     """
-    Fetch recent primary-inbox unread emails from ALL authorized accounts.
-    Promotions/social/updates excluded by default.
+    Fetch recent primary-inbox emails from ALL authorized accounts.
+    By default fetches all emails (read + unread) excluding promotions/social/updates.
+    When include_promotions=True, fetches only unread emails across all categories.
     Results are merged and sorted newest-first.
     """
     all_emails: List[dict] = []
