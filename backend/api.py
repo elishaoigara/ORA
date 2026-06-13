@@ -558,7 +558,7 @@ async def location_event(request: Request):
             print(f"[LOCATION] kv save failed: {e}")
 
         try:
-            from memory.profile import update_profile # pyright: ignore[reportAttributeAccessIssue]
+            from memory.profile import update_profile # type: ignore
             location_map = {"arrived_home": "home", "left_home": "away",
                             "arrived_work": "work", "left_work": "away", "charging_started": "home"}
             update_profile("current_location", location_map.get(event, loc))
@@ -1009,6 +1009,61 @@ def gmail_generate_replies_now():
                 if saved:
                     added += 1
         return {"ok": True, "generated": added}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+class GenerateSingleRequest(BaseModel):
+    email_id:       str
+    thread_id:      Optional[str] = None
+    subject:        str = ""
+    sender:         str = ""
+    email_body:     str = ""
+    suggested_text: Optional[str] = None  # if provided, skip AI generation
+    tone:           str = "professional"
+    account:        str = "primary"
+
+@app.post("/api/gmail/replies/generate-single")
+def gmail_generate_single(payload: GenerateSingleRequest):
+    """Generate (or save) a reply for one specific email. Used by the compose modal."""
+    try:
+        from connectors.gmail import suggest_reply, save_suggested_reply
+
+        text = payload.suggested_text
+        if not text:
+            email_data = {
+                "id":      payload.email_id,
+                "subject": payload.subject,
+                "sender":  payload.sender,
+                "body":    payload.email_body,
+                "account": payload.account,
+            }
+            text = suggest_reply(email_data, tone=payload.tone)
+
+        saved = save_suggested_reply(
+            email_id=payload.email_id,
+            thread_id=payload.thread_id,
+            subject=payload.subject,
+            sender=payload.sender,
+            email_body=payload.email_body,
+            suggested_text=text,
+            tone=payload.tone,
+            account=payload.account,
+        )
+
+        from database import get_conn, close_conn
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT id FROM suggested_replies WHERE email_id=? ORDER BY created_at DESC LIMIT 1",
+            (payload.email_id,)
+        ).fetchone()
+        close_conn()
+
+        return {
+            "ok":             saved,
+            "suggested_text": text,
+            "reply_id":       row[0] if row else None,
+        }
     except Exception as e:
         raise HTTPException(500, str(e))
 

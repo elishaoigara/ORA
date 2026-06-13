@@ -2,8 +2,8 @@
 ORA Gmail Connector — multi-account + promotions filter
 - Reads from PRIMARY and SECONDARY Google accounts
 - Filters out promotions, social, updates, forums by default
-- All existing function signatures unchanged (backward-compatible)
-- New: account= parameter on key functions for per-account calls
+- Shows ALL primary inbox emails (not just unread)
+- Tracks unread count separately for dashboard badge
 """
 
 from __future__ import annotations
@@ -23,9 +23,8 @@ from database import get_conn, close_conn
 GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 # ─────────────────────────────────────────────
-# PROMOTIONS FILTER
-# Applied to every email fetch by default.
-# Gmail search syntax — same as the search bar.
+# INBOX FILTER
+# Excludes promotions/social/updates but shows ALL emails (read + unread)
 # ─────────────────────────────────────────────
 INBOX_FILTER = (
     "in:inbox "
@@ -58,7 +57,6 @@ def init_gmail_tables() -> None:
             updated_at     TEXT DEFAULT (datetime('now'))
         )
     """)
-    # Add account column to existing tables that don't have it
     try:
         conn.execute("ALTER TABLE suggested_replies ADD COLUMN account TEXT DEFAULT 'primary'")
         conn.commit()
@@ -105,7 +103,7 @@ def _gmail_post(path: str, body: dict, account: str = "primary") -> dict:
 
 
 # ─────────────────────────────────────────────
-# EMAIL PARSING HELPERS  (unchanged)
+# EMAIL PARSING HELPERS
 # ─────────────────────────────────────────────
 
 def _decode_header_value(raw: str) -> str:
@@ -162,6 +160,7 @@ def _extract_body(payload: dict) -> str:
 def _parse_message(msg: dict, account: str = "primary") -> dict:
     hdrs = {h["name"].lower(): h["value"]
             for h in msg.get("payload", {}).get("headers", [])}
+    labels = msg.get("labelIds", [])
     return {
         "id":        msg.get("id", ""),
         "thread_id": msg.get("threadId", ""),
@@ -169,27 +168,28 @@ def _parse_message(msg: dict, account: str = "primary") -> dict:
         "sender":    _decode_header_value(hdrs.get("from", "")),
         "to":        _decode_header_value(hdrs.get("to", "")),
         "date":      hdrs.get("date", ""),
-        "labels":    msg.get("labelIds", []),
+        "labels":    labels,
+        "is_unread": "UNREAD" in labels,
         "body":      _extract_body(msg.get("payload", {})),
         "snippet":   msg.get("snippet", ""),
-        "account":   account,   # NEW: tag each email with its source account
+        "account":   account,
     }
 
 
 # ─────────────────────────────────────────────
-# CORE FETCH — single account, with filter
+# CORE FETCH — single account
 # ─────────────────────────────────────────────
 
 def _fetch_emails_for_account(
     account: str,
-    max_results: int = 15,
+    max_results: int = 20,
     include_promotions: bool = False,
 ) -> List[dict]:
-    """Fetch filtered emails for one account (read + unread unless include_promotions changes query)."""
+    """Fetch all primary inbox emails for one account (read + unread)."""
     if not is_authorized(account):
         return []
     try:
-        query = "in:inbox is:unread" if include_promotions else INBOX_FILTER
+        query = "in:inbox" if include_promotions else INBOX_FILTER
         data  = _gmail_get("messages", {"q": query, "maxResults": max_results},
                            account=account)
         refs  = data.get("messages", [])
@@ -208,72 +208,80 @@ def _fetch_emails_for_account(
 
 
 # ─────────────────────────────────────────────
-# PUBLIC FUNCTIONS  (backward-compatible signatures)
+# PUBLIC FUNCTIONS
 # ─────────────────────────────────────────────
 
 def get_gmail_summary() -> dict:
     """
-    Returns total and unread counts per account (primary + secondary if connected).
-    Total excludes promotions/categories, unread is the subset that's unread.
+    Returns total + unread counts per account.
+    total_count = all primary inbox (no promotions)
+    unread_count = unread primary inbox (no promotions)
     """
     try:
-        result = {"authorized": False, "unread_count": 0, "accounts": {}}
+        result = {"authorized": False, "unread_count": 0, "total_count": 0, "accounts": {}}
         any_auth = False
 
         for account in ("primary", "secondary"):
             if not is_authorized(account):
-                result["accounts"][account] = {"authorized": False, "unread_count": 0}
+                result["accounts"][account] = {"authorized": False, "unread_count": 0, "total_count": 0}
                 continue
             try:
                 any_auth = True
+
+                # All inbox emails
                 data = _gmail_get(
                     "messages",
                     {"q": INBOX_FILTER, "maxResults": 1},
                     account=account,
                 )
+                total_count = data.get("resultSizeEstimate", 0)
+
+                # Unread only (for badge)
                 unread_data = _gmail_get(
                     "messages",
                     {"q": INBOX_FILTER + " is:unread", "maxResults": 1},
                     account=account,
                 )
-                total_count  = data.get("resultSizeEstimate", 0)
                 unread_count = unread_data.get("resultSizeEstimate", 0)
+
                 result["accounts"][account] = {
-                    "authorized": True,
-                    "total_count": total_count,
+                    "authorized":   True,
+                    "total_count":  total_count,
                     "unread_count": unread_count,
                 }
                 result["unread_count"] += unread_count
+                result["total_count"]  += total_count
+
             except Exception as e:
                 print(f"[GMAIL:{account}] summary failed: {e}")
-                result["accounts"][account] = {"authorized": True, "unread_count": 0}
+                result["accounts"][account] = {"authorized": True, "unread_count": 0, "total_count": 0}
 
         result["authorized"] = any_auth
         return result
 
     except Exception as e:
         print(f"[GMAIL] summary failed: {e}")
-        return {"authorized": False, "unread_count": 0}
+        return {"authorized": False, "unread_count": 0, "total_count": 0}
 
 
 def get_unread_count() -> int:
-    """Quick integer unread count across all accounts (no promotions)."""
-    summary = get_gmail_summary()
-    return summary.get("unread_count", 0)
+    """Quick integer unread count across all accounts."""
+    return get_gmail_summary().get("unread_count", 0)
 
 
 def get_recent_emails(
-    max_results: int = 15,
+    max_results: int = 20,
     include_promotions: bool = False,
 ) -> List[dict]:
     """
-    Fetch recent primary-inbox emails from ALL authorized accounts.
-    By default fetches all emails (read + unread) excluding promotions/social/updates.
-    When include_promotions=True, fetches only unread emails across all categories.
-    Results are merged and sorted newest-first.
+    Fetch recent primary inbox emails from ALL authorized accounts.
+    Returns ALL emails (read + unread). Each email has is_unread flag.
+    Promotions/social/updates excluded by default.
+    Sorted newest-first.
     """
     all_emails: List[dict] = []
-    per_account = max(5, max_results // len(get_all_authorized_accounts() or ["primary"]))
+    authorized = get_all_authorized_accounts() or ["primary"]
+    per_account = max(5, max_results // len(authorized))
 
     for account in ("primary", "secondary"):
         emails = _fetch_emails_for_account(
@@ -283,7 +291,6 @@ def get_recent_emails(
         )
         all_emails.extend(emails)
 
-    # Sort by date header (best-effort; keep original order on parse failure)
     try:
         from email.utils import parsedate_to_datetime
         def _ts(e):
@@ -298,8 +305,15 @@ def get_recent_emails(
     return all_emails[:max_results]
 
 
+def get_unread_emails(max_results: int = 20) -> List[dict]:
+    """Convenience function — returns only unread emails."""
+    all_emails = get_recent_emails(max_results=max_results * 2)
+    unread = [e for e in all_emails if e.get("is_unread")]
+    return unread[:max_results]
+
+
 # ─────────────────────────────────────────────
-# PRIORITY SCORING  (unchanged logic)
+# PRIORITY SCORING
 # ─────────────────────────────────────────────
 
 _NO_REPLY_SENDERS = re.compile(
@@ -335,11 +349,13 @@ def _priority_score(email: dict) -> int:
     if "IMPORTANT" in labels:           score += 15
     if "CATEGORY_PROMOTIONS" in labels: score -= 20
     if "CATEGORY_UPDATES" in labels:    score -= 10
+    # Boost unread emails slightly
+    if email.get("is_unread"):          score += 5
     return min(100, max(0, score))
 
 
 # ─────────────────────────────────────────────
-# COMMUNICATION AGENT  (unchanged, now multi-account aware)
+# REPLY AGENT
 # ─────────────────────────────────────────────
 
 def get_emails_needing_reply(limit: int = 8) -> List[dict]:
