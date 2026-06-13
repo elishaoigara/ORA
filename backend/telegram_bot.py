@@ -1,80 +1,89 @@
 ﻿"""
-ORA Telegram Bot — Phase 2 hardened
-- Phase 2 commands: /inbox, /replies, /proactive
-- Fixed: get_tasks("all") crash
-- Fixed: Telegram "Conflict" spam — single getUpdates loop with proper offset
-- Fixed: Groq timeout kwarg removed (not supported in groq SDK)
-- Render free tier safe: exponential backoff, no runaway threads
+ORA Telegram Bot — PTB async (python-telegram-bot v20+)
+- STT: Groq Whisper (whisper-large-v3)
+- TTS: gTTS → OGG Opus voice notes
+- /voice on|off  — toggle voice replies
+- Single PTB Application polling loop — no Conflict errors
+- All original commands preserved
 """
 
+from __future__ import annotations
+
+import asyncio
+import io
+import re
 import time
 import traceback
-import requests
 from datetime import datetime
+from typing import Optional, Dict
 from threading import Lock
-from typing import Optional, Dict, Any, List, Tuple
-from functools import wraps
 from collections import defaultdict
+
+import requests
+from groq import Groq
+
+from telegram import Update, Bot
+from telegram.constants import ChatAction, ParseMode
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GROQ_API_KEY, GROQ_MODEL_PRIMARY
 from database import save_conversation, get_conversation_history
 from context import build_system_prompt
-from groq import Groq
 
 
 # ─────────────────────────────────────────────
-# CONFIGURATION
+# INIT
 # ─────────────────────────────────────────────
 
-TELEGRAM_ENABLED  = bool(TELEGRAM_BOT_TOKEN)
-BASE              = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}" if TELEGRAM_ENABLED else None
-client            = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-ALLOWED_CHAT_ID   = int(TELEGRAM_CHAT_ID) if TELEGRAM_CHAT_ID else None
+groq_client   = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+ALLOWED_CHAT  = int(TELEGRAM_CHAT_ID) if TELEGRAM_CHAT_ID else None
 
-RATE_LIMIT        = defaultdict(list)
-RATE_LIMIT_WINDOW = 60
-RATE_LIMIT_MAX    = 20
+# Voice reply preference per chat_id (default: on)
+_VOICE_PREFS: Dict[int, bool] = {}
+_VOICE_LOCK  = Lock()
 
-print("[TELEGRAM] Enabled:", TELEGRAM_ENABLED)
+# Rate limiting
+_RATE:        dict = defaultdict(list)
+RATE_WINDOW   = 60
+RATE_MAX      = 20
+
+# Response cache
+_CACHE:       Dict[str, dict] = {}
+_CACHE_LOCK   = Lock()
+_CACHE_TTL    = 180
+_CACHE_MAX    = 100
+
+_start_time   = time.time()
+
+print("[TELEGRAM] PTB async bot initialising")
 
 
 # ─────────────────────────────────────────────
-# DECORATORS
+# GUARDS
 # ─────────────────────────────────────────────
 
-def rate_limit(chat_id: int) -> bool:
-    now = time.time()
-    window_start = now - RATE_LIMIT_WINDOW
-    RATE_LIMIT[chat_id] = [ts for ts in RATE_LIMIT[chat_id] if ts > window_start]
-    if len(RATE_LIMIT[chat_id]) >= RATE_LIMIT_MAX:
+def _allowed(chat_id: int) -> bool:
+    return ALLOWED_CHAT is None or chat_id == ALLOWED_CHAT
+
+def _rate_ok(chat_id: int) -> bool:
+    now   = time.time()
+    cutoff = now - RATE_WINDOW
+    _RATE[chat_id] = [t for t in _RATE[chat_id] if t > cutoff]
+    if len(_RATE[chat_id]) >= RATE_MAX:
         return False
-    RATE_LIMIT[chat_id].append(now)
+    _RATE[chat_id].append(now)
     return True
-
-
-def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            for attempt in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        raise
-                    time.sleep(delay * (2 ** attempt))
-        return wrapper
-    return decorator
 
 
 # ─────────────────────────────────────────────
 # CACHE
 # ─────────────────────────────────────────────
-
-_CACHE: Dict[str, Dict[str, Any]] = {}
-_CACHE_LOCK = Lock()
-_CACHE_TTL  = 180
-_CACHE_MAX  = 100
 
 def _get_cache(key: str) -> Optional[str]:
     with _CACHE_LOCK:
@@ -89,200 +98,226 @@ def _get_cache(key: str) -> Optional[str]:
 def _set_cache(key: str, value: str):
     with _CACHE_LOCK:
         if len(_CACHE) >= _CACHE_MAX:
-            oldest = sorted(_CACHE.items(), key=lambda x: x[1]["t"])[:20]
-            for k, _ in oldest:
+            for k, _ in sorted(_CACHE.items(), key=lambda x: x[1]["t"])[:20]:
                 _CACHE.pop(k, None)
         _CACHE[key] = {"v": value, "t": time.time()}
 
 
 # ─────────────────────────────────────────────
-# TELEGRAM HELPERS
+# VOICE PREFS
 # ─────────────────────────────────────────────
 
-@retry_on_failure(max_retries=3, delay=1.0)
-def tg_send(chat_id: int, text: str, parse_mode: Optional[str] = None,
-            reply_to_message_id: Optional[int] = None) -> Optional[int]:
-    if not TELEGRAM_ENABLED:
-        return None
+def _voice_on(chat_id: int) -> bool:
+    with _VOICE_LOCK:
+        return _VOICE_PREFS.get(chat_id, True)  # default ON
+
+def _set_voice(chat_id: int, enabled: bool):
+    with _VOICE_LOCK:
+        _VOICE_PREFS[chat_id] = enabled
+
+
+# ─────────────────────────────────────────────
+# STT — Groq Whisper
+# ─────────────────────────────────────────────
+
+async def _download_tg_file(bot: Bot, file_id: str) -> Optional[bytes]:
     try:
-        payload: dict = {"chat_id": chat_id, "text": text[:4000]}
-        if parse_mode:
-            payload["parse_mode"] = parse_mode
-        if reply_to_message_id:
-            payload["reply_to_message_id"] = reply_to_message_id
-        r = requests.post(f"{BASE}/sendMessage", json=payload, timeout=15)
-        result = r.json()
-        if not result.get("ok"):
-            print(f"[TG SEND ERROR] {result.get('description')}")
-            return None
-        return result.get("result", {}).get("message_id")
+        tg_file = await bot.get_file(file_id)
+        buf = io.BytesIO()
+        await tg_file.download_to_memory(buf)
+        buf.seek(0)
+        return buf.read()
     except Exception as e:
-        print(f"[TG SEND ERROR] {e}")
-        raise
+        print(f"[STT] Download error: {e}")
+        return None
 
 
-def tg_send_typing(chat_id: int):
-    if not TELEGRAM_ENABLED:
-        return
+async def transcribe(bot: Bot, voice) -> Optional[str]:
+    """Download Telegram voice OGG → Groq Whisper → transcript string."""
+    if not groq_client:
+        return None
+    if voice.duration > 300:
+        return None
+
+    audio_bytes = await _download_tg_file(bot, voice.file_id)
+    if not audio_bytes:
+        return None
+
     try:
-        requests.post(f"{BASE}/sendChatAction",
-                      json={"chat_id": chat_id, "action": "typing"}, timeout=5)
-    except Exception:
-        pass
-
-
-def tg_get_updates(offset: Optional[int] = None, timeout: int = 25) -> List[Dict]:
-    """
-    Long-poll for updates. timeout=25s keeps us under Render's 30s request limit.
-    Returns [] on any error — never raises, so the loop stays alive.
-    """
-    if not TELEGRAM_ENABLED:
-        return []
-    try:
-        params: Dict[str, Any] = {"timeout": timeout}
-        if offset is not None:
-            params["offset"] = offset
-        r = requests.get(f"{BASE}/getUpdates", params=params, timeout=timeout + 5)
-        data = r.json()
-        if not data.get("ok"):
-            # Log but don't crash — Conflict errors are handled by the backoff loop
-            desc = data.get("description", "")
-            if "Conflict" not in desc:
-                print(f"[TG POLL ERROR] {desc}")
-            return []
-        return data.get("result", [])
+        buf = io.BytesIO(audio_bytes)
+        buf.name = "voice.ogg"
+        result = groq_client.audio.transcriptions.create(
+            model="whisper-large-v3",
+            file=buf,
+            response_format="text",
+        )
+        text = result.strip() if isinstance(result, str) else (result.text or "").strip()
+        print(f"[STT] {text[:80]}")
+        return text or None
     except Exception as e:
-        print(f"[TG POLL ERROR] {e}")
-        return []
-
-
-def notify(text: str, is_alert: bool = False):
-    """
-    Public API: used by proactive_engine, notifier, briefing, etc.
-    Push a message to the owner's Telegram.
-    """
-    if not TELEGRAM_ENABLED or not ALLOWED_CHAT_ID:
-        return
-    prefix   = "🚨 " if is_alert else "📢 "
-    max_len  = 4000 - len(prefix) - 5
-    if len(text) > max_len:
-        for chunk in [text[i:i+max_len] for i in range(0, len(text), max_len)]:
-            tg_send(ALLOWED_CHAT_ID, f"{prefix}{chunk}")
-            time.sleep(0.5)
-    else:
-        tg_send(ALLOWED_CHAT_ID, f"{prefix}{text}")
-
-
-# ─────────────────────────────────────────────
-# SAFE PARSERS
-# ─────────────────────────────────────────────
-
-def extract_chat_id(update: Dict) -> Optional[int]:
-    try:
-        return update.get("message", {}).get("chat", {}).get("id")
-    except Exception:
-        return None
-
-def extract_message_text(update: Dict) -> Tuple[Optional[str], Optional[int]]:
-    try:
-        msg      = update.get("message", {})
-        text     = msg.get("text")
-        reply_to = msg.get("reply_to_message", {}).get("message_id")
-        return text, reply_to
-    except Exception:
-        return None, None
-
-def safe_str(x) -> str:
-    return (x or "").strip()
-
-def safe_int(x) -> Optional[int]:
-    try:
-        return int(safe_str(x))
-    except (ValueError, TypeError):
+        print(f"[STT] Whisper error: {e}")
         return None
 
 
 # ─────────────────────────────────────────────
-# CHAT ENGINE
+# TTS — gTTS → OGG Opus
 # ─────────────────────────────────────────────
 
-def _handle_chat(chat_id: int, text: str, reply_to: Optional[int] = None):
-    text = safe_str(text)
-    if not text or not client:
-        tg_send(chat_id, "❌ Missing Groq API key.", reply_to_message_id=reply_to)
-        return
+def _tts(text: str) -> Optional[bytes]:
+    """
+    Text → OGG Opus bytes for Telegram voice notes.
+    Returns None (silently) if gTTS/pydub/ffmpeg unavailable.
+    """
+    try:
+        from gtts import gTTS
+        import pydub
 
-    if not rate_limit(chat_id):
-        tg_send(chat_id, "⏳ Rate limit — wait a moment.", reply_to_message_id=reply_to)
-        return
+        clean = re.sub(r"[*_`#~\[\]()]", "", text)
+        clean = re.sub(r"\s+", " ", clean).strip()
+        if len(clean) > 500:
+            clean = clean[:497] + "..."
+
+        mp3 = io.BytesIO()
+        gTTS(text=clean, lang="en", slow=False).write_to_fp(mp3)
+        mp3.seek(0)
+
+        audio = pydub.AudioSegment.from_mp3(mp3)
+        ogg   = io.BytesIO()
+        audio.export(ogg, format="ogg", codec="libopus",
+                     parameters=["-vbr", "on", "-compression_level", "10"])
+        ogg.seek(0)
+        return ogg.read()
+
+    except ImportError as e:
+        print(f"[TTS] Missing lib ({e}) — text-only")
+        return None
+    except Exception as e:
+        print(f"[TTS] Error: {e}")
+        return None
+
+
+# ─────────────────────────────────────────────
+# LLM
+# ─────────────────────────────────────────────
+
+def _llm_reply(text: str) -> str:
+    if not groq_client:
+        return "❌ Groq API key not set."
 
     cached = _get_cache(text)
     if cached:
-        tg_send(chat_id, cached, reply_to_message_id=reply_to)
+        return cached
+
+    history       = get_conversation_history(limit=10)
+    system_prompt = build_system_prompt(query=text)
+    messages: list = [{"role": "system", "content": system_prompt}]
+    for role, content, _ in history[-10:]:
+        if role in ("user", "assistant"):
+            messages.append({"role": role, "content": (content or "")[:500]})
+    messages.append({"role": "user", "content": text})
+
+    response = groq_client.chat.completions.create(
+        model=GROQ_MODEL_PRIMARY or "llama-3.3-70b-versatile",
+        messages=messages,  # type: ignore
+        max_tokens=500,
+        temperature=0.4,
+    )
+    reply = (response.choices[0].message.content or "").strip() or "No response."
+    _set_cache(text, reply)
+    save_conversation("user",      text[:500])
+    save_conversation("assistant", reply[:500])
+    return reply
+
+
+# ─────────────────────────────────────────────
+# DELIVER — text always, voice if prefs allow
+# ─────────────────────────────────────────────
+
+async def _deliver(update: Update, reply: str, with_voice: bool = False):
+    await update.message.reply_text(reply)
+
+    if with_voice and _voice_on(update.effective_chat.id):
+        await update.effective_chat.send_action(ChatAction.RECORD_VOICE)
+        audio = await asyncio.get_event_loop().run_in_executor(None, _tts, reply)
+        if audio:
+            await update.message.reply_voice(voice=audio)
+
+
+# ─────────────────────────────────────────────
+# PUBLIC NOTIFY (used by proactive_engine etc.)
+# ─────────────────────────────────────────────
+
+_bot_instance: Optional[Bot] = None
+
+def set_bot(bot: Bot):
+    global _bot_instance
+    _bot_instance = bot
+
+def notify(text: str, is_alert: bool = False):
+    """Push a message to owner's Telegram from non-async context."""
+    if not _bot_instance or not ALLOWED_CHAT:
         return
-
-    tg_send_typing(chat_id)
-
+    prefix  = "🚨 " if is_alert else "📢 "
+    payload = f"{prefix}{text}"[:4096]
     try:
-        history       = get_conversation_history(limit=10)
-        system_prompt = build_system_prompt(query=text)
-        messages: list = [{"role": "system", "content": system_prompt}]
-        for role, content, _ in history[-10:]:
-            if role in ("user", "assistant"):
-                messages.append({"role": role, "content": (content or "")[:500]})
-        messages.append({"role": "user", "content": text})
-
-        # Note: Groq SDK does not accept timeout= kwarg — use requests timeout via the HTTP layer
-        response = client.chat.completions.create(
-            model=GROQ_MODEL_PRIMARY or "llama-3.3-70b-versatile",
-            messages=messages,  # type: ignore
-            max_tokens=500,
-            temperature=0.4,
-        )
-        reply = (response.choices[0].message.content or "").strip() or "No response."
-
-        _set_cache(text, reply)
-        save_conversation("user",      text[:500])
-        save_conversation("assistant", reply[:500])
-        tg_send(chat_id, reply, reply_to_message_id=reply_to)
-
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(_bot_instance.send_message(ALLOWED_CHAT, payload))
+        else:
+            loop.run_until_complete(_bot_instance.send_message(ALLOWED_CHAT, payload))
     except Exception as e:
-        tg_send(chat_id, f"❌ ORA error: {str(e)[:100]}", reply_to_message_id=reply_to)
-        print(f"[CHAT ERROR]\n{traceback.format_exc()}")
+        print(f"[NOTIFY] {e}")
 
 
 # ─────────────────────────────────────────────
 # COMMAND HANDLERS
 # ─────────────────────────────────────────────
 
-def _cmd_help(chat_id: int, reply_to=None):
-    tg_send(chat_id, (
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
+    await update.message.reply_text("🤖 ORA online. /help for commands.")
+
+async def cmd_ping(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
+    await update.message.reply_text("🏓 pong!")
+
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
+    await update.message.reply_text(
         "🤖 *ORA Commands*\n\n"
-        "*Tasks:*\n"
-        "/tasks — pending tasks\n"
-        "/done <id> — mark complete\n\n"
-        "*Goals & Finance:*\n"
-        "/goals — active goals\n"
-        "/mpesa — M-Pesa summary\n"
-        "/brief — full status brief\n\n"
-        "*Phase 2:*\n"
-        "/inbox — unread Gmail count\n"
-        "/replies — pending smart replies\n"
-        "/proactive — active signals\n\n"
-        "*Utility:*\n"
-        "/ping — health check\n"
-        "/stats — bot stats\n"
-        "/help — this menu\n\n"
-        "Or just *type anything* to chat with ORA."
-    ), parse_mode="Markdown", reply_to_message_id=reply_to)
+        "*Tasks:*\n/tasks — pending tasks\n/done <id> — mark complete\n\n"
+        "*Goals & Finance:*\n/goals — active goals\n/mpesa — M-Pesa summary\n/brief — full brief\n\n"
+        "*Inbox:*\n/inbox — Gmail status\n/replies — smart replies\n/proactive — active signals\n\n"
+        "*Voice:*\n/voice on — ORA replies with voice + text\n/voice off — text only\n"
+        "🎤 Send a voice note anytime\n\n"
+        "*Utility:*\n/ping — health\n/stats — stats\n/help — this menu\n\n"
+        "Or just *type or speak* anything.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
 
+async def cmd_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
+    arg = " ".join(ctx.args or []).lower()
+    if arg == "on":
+        _set_voice(update.effective_chat.id, True)
+        await update.message.reply_text("🔊 Voice replies ON.")
+    elif arg == "off":
+        _set_voice(update.effective_chat.id, False)
+        await update.message.reply_text("🔇 Voice replies OFF — text only.")
+    else:
+        status = "ON 🔊" if _voice_on(update.effective_chat.id) else "OFF 🔇"
+        await update.message.reply_text(
+            f"Voice replies: *{status}*\n\nUse `/voice on` or `/voice off`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
 
-def _cmd_tasks(chat_id: int, reply_to=None):
+async def cmd_tasks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
     try:
         from database import get_tasks
         tasks = get_tasks("pending")
         if not tasks:
-            tg_send(chat_id, "📋 No pending tasks. 🎉", reply_to_message_id=reply_to)
+            await update.message.reply_text("📋 No pending tasks. 🎉")
             return
         lines = [f"📋 *Pending Tasks* ({len(tasks)})"]
         for t in tasks[:10]:
@@ -292,40 +327,38 @@ def _cmd_tasks(chat_id: int, reply_to=None):
             lines.append(f"{emoji} *{title[:55]}* — #{tid}{due_s}")
         if len(tasks) > 10:
             lines.append(f"_...and {len(tasks)-10} more_")
-        tg_send(chat_id, "\n".join(lines), parse_mode="Markdown", reply_to_message_id=reply_to)
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
-        tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        await update.message.reply_text(f"❌ {e}")
 
-
-def _cmd_done(chat_id: int, arg: str, reply_to=None):
-    task_id = safe_int(arg)
-    if task_id is None:
-        tg_send(chat_id, "Usage: `/done <id>`\nGet IDs with /tasks",
-                parse_mode="Markdown", reply_to_message_id=reply_to)
+async def cmd_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
+    arg = " ".join(ctx.args or "")
+    try:
+        task_id = int(arg.strip())
+    except ValueError:
+        await update.message.reply_text("Usage: `/done <id>`", parse_mode=ParseMode.MARKDOWN)
         return
     try:
         from database import complete_task, get_tasks
-        # get_tasks("all") now works after the database.py fix
-        all_tasks = get_tasks("all")
-        if not any(t[0] == task_id for t in all_tasks):
-            tg_send(chat_id, f"❌ Task #{task_id} not found.", reply_to_message_id=reply_to)
+        if not any(t[0] == task_id for t in get_tasks("all")):
+            await update.message.reply_text(f"❌ Task #{task_id} not found.")
             return
         complete_task(task_id)
-        tg_send(chat_id, f"✅ Task #{task_id} done! 🎉", reply_to_message_id=reply_to)
+        await update.message.reply_text(f"✅ Task #{task_id} done! 🎉")
         pending = get_tasks("pending")
         if pending:
-            tg_send(chat_id, f"💡 Next: #{pending[0][0]} — {pending[0][1][:50]}",
-                    reply_to_message_id=reply_to)
+            await update.message.reply_text(f"💡 Next: #{pending[0][0]} — {pending[0][1][:50]}")
     except Exception as e:
-        tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        await update.message.reply_text(f"❌ {e}")
 
-
-def _cmd_goals(chat_id: int, reply_to=None):
+async def cmd_goals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
     try:
         from intelligence.goals_engine import get_goals
         goals = get_goals("active")
         if not goals:
-            tg_send(chat_id, "🎯 No active goals.", reply_to_message_id=reply_to)
+            await update.message.reply_text("🎯 No active goals.")
             return
         lines = [f"🎯 *Active Goals* ({len(goals)})"]
         for g in goals[:7]:
@@ -333,15 +366,14 @@ def _cmd_goals(chat_id: int, reply_to=None):
             progress = g.get("progress", 0)
             filled   = int(10 * progress / 100)
             bar      = "█" * filled + "░" * (10 - filled)
-            due      = g.get("due_at", "")
-            due_s    = f" _due {due[:10]}_" if due else ""
+            due_s    = f" _due {g['due_at'][:10]}_" if g.get("due_at") else ""
             lines.append(f"• {name}\n  `{bar}` {progress}%{due_s}")
-        tg_send(chat_id, "\n\n".join(lines), parse_mode="Markdown", reply_to_message_id=reply_to)
+        await update.message.reply_text("\n\n".join(lines), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
-        tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        await update.message.reply_text(f"❌ {e}")
 
-
-def _cmd_mpesa(chat_id: int, reply_to=None):
+async def cmd_mpesa(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
     try:
         from mpesa_engine import get_today_spend, get_average_daily_spend
         today = get_today_spend()
@@ -349,217 +381,225 @@ def _cmd_mpesa(chat_id: int, reply_to=None):
         total = today.get("total", 0) if isinstance(today, dict) else 0
         txns  = today.get("transactions", 0) if isinstance(today, dict) else 0
         trend = "📈 above avg" if total > avg * 1.3 else ("📉 below avg" if total < avg * 0.7 else "📊 normal")
-        tg_send(chat_id, (
-            f"💳 *M-Pesa Summary*\n\n"
-            f"Today: KES {total:,.0f} ({txns} txns)\n"
-            f"Daily avg: KES {avg:,.0f} — {trend}"
-        ), parse_mode="Markdown", reply_to_message_id=reply_to)
+        await update.message.reply_text(
+            f"💳 *M-Pesa Summary*\n\nToday: KES {total:,.0f} ({txns} txns)\nDaily avg: KES {avg:,.0f} — {trend}",
+            parse_mode=ParseMode.MARKDOWN,
+        )
     except Exception as e:
-        tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        await update.message.reply_text(f"❌ {e}")
 
-
-def _cmd_brief(chat_id: int, reply_to=None):
-    tg_send_typing(chat_id)
+async def cmd_brief(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
+    await update.effective_chat.send_action(ChatAction.TYPING)
     try:
         from briefing import generate_briefing
         briefing = generate_briefing()
-        if len(briefing) > 4000:
-            for i, chunk in enumerate([briefing[j:j+4000] for j in range(0, len(briefing), 4000)]):
-                tg_send(chat_id, chunk, parse_mode="Markdown",
-                        reply_to_message_id=reply_to if i == 0 else None)
-                time.sleep(0.5)
-        else:
-            tg_send(chat_id, briefing, parse_mode="Markdown", reply_to_message_id=reply_to)
+        for i, chunk in enumerate([briefing[j:j+4000] for j in range(0, len(briefing), 4000)]):
+            await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+            if i > 0:
+                await asyncio.sleep(0.4)
     except Exception as e:
-        tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        await update.message.reply_text(f"❌ {e}")
 
-
-# ── Phase 2 commands ──────────────────────────────────────────
-
-def _cmd_inbox(chat_id: int, reply_to=None):
-    """Show unread Gmail count + pending reply count."""
+async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
     try:
         from connectors.gmail import get_gmail_summary, get_reply_stats
         summary = get_gmail_summary()
-        stats   = get_reply_stats()
         if not summary.get("authorized"):
-            tg_send(chat_id,
-                    "📭 Gmail not connected.\nVisit ORA → Settings → Connect Google.",
-                    reply_to_message_id=reply_to)
+            await update.message.reply_text("📭 Gmail not connected. Visit ORA → Settings → Connect Google.")
             return
-        unread  = summary.get("unread_count", 0)
-        pending = stats.get("pending", 0)
-        tg_send(chat_id, (
-            f"📬 *Gmail Status*\n\n"
-            f"Unread: {unread}\n"
-            f"Smart replies pending: {pending}\n\n"
-            f"Use /replies to review them."
-        ), parse_mode="Markdown", reply_to_message_id=reply_to)
+        stats   = get_reply_stats()
+        await update.message.reply_text(
+            f"📬 *Gmail Status*\n\nUnread: {summary.get('unread_count', 0)}\n"
+            f"Smart replies pending: {stats.get('pending', 0)}\n\nUse /replies to review.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
     except Exception as e:
-        tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        await update.message.reply_text(f"❌ {e}")
 
-
-def _cmd_replies(chat_id: int, reply_to=None):
-    """List pending smart replies with approve/reject hint."""
+async def cmd_replies(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
     try:
         from connectors.gmail import get_pending_replies
         pending = get_pending_replies(limit=5)
         if not pending:
-            tg_send(chat_id, "✅ No pending reply suggestions.", reply_to_message_id=reply_to)
+            await update.message.reply_text("✅ No pending reply suggestions.")
             return
         lines = [f"📧 *{len(pending)} pending reply suggestion(s):*\n"]
         for r in pending:
-            subj = (r.get("subject") or "(no subject)")[:45]
-            sndr = (r.get("sender") or "")[:35]
-            rid  = r.get("id")
+            subj    = (r.get("subject") or "(no subject)")[:45]
+            sndr    = (r.get("sender") or "")[:35]
             preview = (r.get("suggested_text") or "")[:80]
-            lines.append(
-                f"*#{rid}* — {subj}\n"
-                f"From: _{sndr}_\n"
-                f"Draft: _{preview}_...\n"
-            )
+            lines.append(f"*#{r.get('id')}* — {subj}\nFrom: _{sndr}_\nDraft: _{preview}_...\n")
         lines.append("Open ORA → Inbox → Smart Replies to approve/edit.")
-        tg_send(chat_id, "\n".join(lines), parse_mode="Markdown", reply_to_message_id=reply_to)
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
-        tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        await update.message.reply_text(f"❌ {e}")
 
-
-def _cmd_proactive(chat_id: int, reply_to=None):
-    """Show what proactive signals are active right now."""
+async def cmd_proactive(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
     try:
         from database import get_tasks, get_conn, close_conn
         now     = datetime.now()
         pending = get_tasks("pending")
         overdue = [t for t in pending if t[4] and datetime.fromisoformat(t[4]) < now]
         high    = [t for t in pending if t[2] == "high"]
-
-        conn       = get_conn()
-        old_r      = conn.execute(
+        conn    = get_conn()
+        old_r   = conn.execute(
             "SELECT COUNT(*) FROM suggested_replies WHERE status='pending' AND created_at < datetime('now','-24 hours')"
         ).fetchone()[0]
         close_conn()
-
-        lines = ["🔔 *Proactive Signal Status*\n"]
-        lines.append(f"{'🔴' if overdue else '✅'} Overdue tasks: {len(overdue)}")
-        lines.append(f"{'🟡' if len(high) >= 2 else '✅'} High-priority open: {len(high)}")
-        lines.append(f"{'🟡' if old_r else '✅'} Unanswered emails (>24h): {old_r}")
-        lines.append(f"\n_Next proactive check runs in background._")
-        tg_send(chat_id, "\n".join(lines), parse_mode="Markdown", reply_to_message_id=reply_to)
+        lines = ["🔔 *Proactive Signal Status*\n",
+                 f"{'🔴' if overdue else '✅'} Overdue tasks: {len(overdue)}",
+                 f"{'🟡' if len(high) >= 2 else '✅'} High-priority open: {len(high)}",
+                 f"{'🟡' if old_r else '✅'} Unanswered emails (>24h): {old_r}",
+                 "\n_Next proactive check runs in background._"]
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
-        tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        await update.message.reply_text(f"❌ {e}")
 
-
-def _cmd_stats(chat_id: int, reply_to=None):
+async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _allowed(update.effective_chat.id): return
     try:
         from database import get_conversation_history, get_tasks
-        conv_count  = len(get_conversation_history(limit=10000)) // 2
-        task_count  = len(get_tasks("all"))
-        cache_size  = len(_CACHE)
-        uptime_s    = int(time.time() - _start_time)
-        h, m        = divmod(uptime_s // 60, 60)
-        uptime_str  = f"{h}h {m}m" if h else f"{m}m"
-        tg_send(chat_id, (
-            f"📊 *ORA Stats*\n\n"
-            f"Conversations: {conv_count}\n"
-            f"Tasks: {task_count}\n"
-            f"Cache entries: {cache_size}\n"
-            f"Uptime: {uptime_str}"
-        ), parse_mode="Markdown", reply_to_message_id=reply_to)
+        conv  = len(get_conversation_history(limit=10000)) // 2
+        tasks = len(get_tasks("all"))
+        h, m  = divmod(int(time.time() - _start_time) // 60, 60)
+        await update.message.reply_text(
+            f"📊 *ORA Stats*\n\nConversations: {conv}\nTasks: {tasks}\n"
+            f"Cache: {len(_CACHE)}\nUptime: {f'{h}h {m}m' if h else f'{m}m'}",
+            parse_mode=ParseMode.MARKDOWN,
+        )
     except Exception as e:
-        tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        await update.message.reply_text(f"❌ {e}")
 
 
 # ─────────────────────────────────────────────
-# MESSAGE ROUTER
+# MESSAGE HANDLERS
 # ─────────────────────────────────────────────
 
-_start_time = time.time()
-
-
-def handle_message(chat_id: int, text: str = "", reply_to: Optional[int] = None, voice=None):
-    if ALLOWED_CHAT_ID and chat_id != ALLOWED_CHAT_ID:
-        print(f"[TELEGRAM] Rejected chat_id={chat_id}")
+async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Voice note → Whisper STT → LLM → text + optional voice reply."""
+    chat_id = update.effective_chat.id
+    if not _allowed(chat_id): return
+    if not _rate_ok(chat_id):
+        await update.message.reply_text("⏳ Rate limit — wait a moment.")
         return
 
-    text  = safe_str(text)
-    lower = text.lower()
+    await update.effective_chat.send_action(ChatAction.TYPING)
+    transcript = await transcribe(ctx.bot, update.message.voice)
 
-    if voice:
-        tg_send(chat_id, "🎤 Voice not supported in Telegram — use the ORA web app for voice input.",
-                reply_to_message_id=reply_to)
+    if not transcript:
+        await update.message.reply_text("❌ Couldn't transcribe audio. Try again or type your message.")
         return
 
-    if lower.startswith("/start"):
-        tg_send(chat_id, "🤖 ORA online. /help for commands.", reply_to_message_id=reply_to)
-    elif lower.startswith("/ping"):
-        tg_send(chat_id, "🏓 pong!", reply_to_message_id=reply_to)
-    elif lower.startswith("/help"):
-        _cmd_help(chat_id, reply_to)
-    elif lower.startswith("/tasks"):
-        _cmd_tasks(chat_id, reply_to)
-    elif lower.startswith("/done"):
-        _cmd_done(chat_id, text[5:], reply_to)
-    elif lower.startswith("/goals"):
-        _cmd_goals(chat_id, reply_to)
-    elif lower.startswith("/mpesa"):
-        _cmd_mpesa(chat_id, reply_to)
-    elif lower.startswith("/brief"):
-        _cmd_brief(chat_id, reply_to)
-    elif lower.startswith("/inbox"):
-        _cmd_inbox(chat_id, reply_to)
-    elif lower.startswith("/replies"):
-        _cmd_replies(chat_id, reply_to)
-    elif lower.startswith("/proactive"):
-        _cmd_proactive(chat_id, reply_to)
-    elif lower.startswith("/stats"):
-        _cmd_stats(chat_id, reply_to)
-    else:
-        _handle_chat(chat_id, text, reply_to)
+    # Echo what was heard
+    await update.message.reply_text(f"🎤 _{transcript}_", parse_mode=ParseMode.MARKDOWN)
+
+    try:
+        reply = await asyncio.get_event_loop().run_in_executor(None, _llm_reply, transcript)
+        await _deliver(update, reply, with_voice=True)
+    except Exception as e:
+        await update.message.reply_text(f"❌ ORA error: {str(e)[:100]}")
+        print(f"[VOICE HANDLER]\n{traceback.format_exc()}")
+
+
+async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Plain text → LLM → text (+ voice if prefs on)."""
+    chat_id = update.effective_chat.id
+    if not _allowed(chat_id): return
+
+    text = (update.message.text or "").strip()
+    if not text: return
+
+    if not _rate_ok(chat_id):
+        await update.message.reply_text("⏳ Rate limit — wait a moment.")
+        return
+
+    await update.effective_chat.send_action(ChatAction.TYPING)
+    try:
+        reply = await asyncio.get_event_loop().run_in_executor(None, _llm_reply, text)
+        await _deliver(update, reply, with_voice=_voice_on(chat_id))
+    except Exception as e:
+        await update.message.reply_text(f"❌ ORA error: {str(e)[:100]}")
+        print(f"[TEXT HANDLER]\n{traceback.format_exc()}")
 
 
 # ─────────────────────────────────────────────
-# MAIN POLLING LOOP
+# APP BUILDER
+# ─────────────────────────────────────────────
+
+def build_app() -> Application:
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start",     cmd_start))
+    app.add_handler(CommandHandler("ping",      cmd_ping))
+    app.add_handler(CommandHandler("help",      cmd_help))
+    app.add_handler(CommandHandler("voice",     cmd_voice))
+    app.add_handler(CommandHandler("tasks",     cmd_tasks))
+    app.add_handler(CommandHandler("done",      cmd_done))
+    app.add_handler(CommandHandler("goals",     cmd_goals))
+    app.add_handler(CommandHandler("mpesa",     cmd_mpesa))
+    app.add_handler(CommandHandler("brief",     cmd_brief))
+    app.add_handler(CommandHandler("inbox",     cmd_inbox))
+    app.add_handler(CommandHandler("replies",   cmd_replies))
+    app.add_handler(CommandHandler("proactive", cmd_proactive))
+    app.add_handler(CommandHandler("stats",     cmd_stats))
+
+    app.add_handler(MessageHandler(filters.VOICE, on_voice))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+
+    return app
+
+
+# ─────────────────────────────────────────────
+# ENTRY POINTS
 # ─────────────────────────────────────────────
 
 def run_telegram_bot():
     """
-    Long-poll loop. Runs in a daemon thread started by api.py lifespan.
-    The lifespan wrapper already handles restarting on crash with backoff,
-    so this function exits cleanly on error rather than looping internally —
-    that prevents the "Conflict: terminated by other getUpdates" log spam.
+    Blocking entry point — called from api.py lifespan in a daemon thread.
+    Runs PTB's own event loop internally via run_polling().
     """
-    print("[TELEGRAM] Starting long-poll loop")
-    offset: Optional[int] = None
+    if not TELEGRAM_BOT_TOKEN:
+        print("[TELEGRAM] No token — bot disabled")
+        return
 
-    while True:
-        try:
-            updates = tg_get_updates(offset, timeout=25)
+    print("[TELEGRAM] Starting PTB async polling")
+    app = build_app()
+    set_bot(app.bot)
+    app.run_polling(
+        allowed_updates=["message"],
+        drop_pending_updates=True,   # ignore backlog on restart
+        close_loop=False,            # don't kill the outer loop
+    )
 
-            for update in updates:
-                offset = update.get("update_id", 0) + 1
-                chat_id = extract_chat_id(update)
-                if not chat_id:
-                    continue
-                text, reply_to = extract_message_text(update)
-                msg   = update.get("message", {})
-                handle_message(
-                    chat_id,
-                    text=text or "",
-                    reply_to=reply_to,
-                    voice=msg.get("voice"),
-                )
-                time.sleep(0.05)
 
-            if not updates:
-                time.sleep(1)
+async def run_telegram_bot_async():
+    """
+    Async entry point — use this if api.py lifespan is already async.
+    await run_telegram_bot_async() inside your lifespan.
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        print("[TELEGRAM] No token — bot disabled")
+        return
 
-        except KeyboardInterrupt:
-            print("[TELEGRAM] Shutting down")
-            break
-        except Exception as e:
-            print(f"[TELEGRAM LOOP ERROR] {e}")
-            # Re-raise so the lifespan thread restarts us with backoff
-            raise
+    print("[TELEGRAM] Starting PTB async polling (async mode)")
+    app = build_app()
+    set_bot(app.bot)
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(
+        allowed_updates=["message"],
+        drop_pending_updates=True,
+    )
+    try:
+        await asyncio.Event().wait()   # run until cancelled
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
 
 
 if __name__ == "__main__":
