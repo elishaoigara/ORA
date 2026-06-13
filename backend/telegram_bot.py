@@ -248,23 +248,24 @@ async def _deliver(update: Update, reply: str, with_voice: bool = False):
 # ─────────────────────────────────────────────
 
 _bot_instance: Optional[Bot] = None
+_bot_loop:     Optional[asyncio.AbstractEventLoop] = None
 
 def set_bot(bot: Bot):
-    global _bot_instance
+    global _bot_instance, _bot_loop
     _bot_instance = bot
+    _bot_loop     = asyncio.get_event_loop()
 
 def notify(text: str, is_alert: bool = False):
-    """Push a message to owner's Telegram from non-async context."""
-    if not _bot_instance or not ALLOWED_CHAT:
+    """Push a message to owner's Telegram from any (non-async) context."""
+    if not _bot_instance or not ALLOWED_CHAT or not _bot_loop:
         return
     prefix  = "🚨 " if is_alert else "📢 "
     payload = f"{prefix}{text}"[:4096]
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.ensure_future(_bot_instance.send_message(ALLOWED_CHAT, payload))
-        else:
-            loop.run_until_complete(_bot_instance.send_message(ALLOWED_CHAT, payload))
+        asyncio.run_coroutine_threadsafe(
+            _bot_instance.send_message(ALLOWED_CHAT, payload),
+            _bot_loop,
+        )
     except Exception as e:
         print(f"[NOTIFY] {e}")
 
@@ -560,46 +561,46 @@ def build_app() -> Application:
 def run_telegram_bot():
     """
     Blocking entry point — called from api.py lifespan in a daemon thread.
-    Runs PTB's own event loop internally via run_polling().
+
+    run_polling() uses loop.add_signal_handler() which only works on the main
+    thread. Called from a daemon thread it silently breaks incoming messages
+    while outgoing notify() still works (exactly the bug we saw).
+
+    Fix: spin up a brand-new event loop in this thread and drive PTB manually
+    via initialize / start / updater.start_polling — no signal handlers needed.
     """
     if not TELEGRAM_BOT_TOKEN:
         print("[TELEGRAM] No token — bot disabled")
         return
 
-    print("[TELEGRAM] Starting PTB async polling")
-    app = build_app()
-    set_bot(app.bot)
-    app.run_polling(
-        allowed_updates=["message"],
-        drop_pending_updates=True,   # ignore backlog on restart
-        close_loop=False,            # don't kill the outer loop
-    )
+    print("[TELEGRAM] Starting PTB async polling (thread-safe loop)")
 
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
-async def run_telegram_bot_async():
-    """
-    Async entry point — use this if api.py lifespan is already async.
-    await run_telegram_bot_async() inside your lifespan.
-    """
-    if not TELEGRAM_BOT_TOKEN:
-        print("[TELEGRAM] No token — bot disabled")
-        return
+    async def _run():
+        app = build_app()
+        set_bot(app.bot)
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(
+            allowed_updates=["message"],
+            drop_pending_updates=True,
+        )
+        print("[TELEGRAM] Polling active — listening for messages")
+        try:
+            await asyncio.Event().wait()   # block until thread is killed
+        finally:
+            await app.updater.stop()
+            await app.stop()
+            await app.shutdown()
 
-    print("[TELEGRAM] Starting PTB async polling (async mode)")
-    app = build_app()
-    set_bot(app.bot)
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling(
-        allowed_updates=["message"],
-        drop_pending_updates=True,
-    )
     try:
-        await asyncio.Event().wait()   # run until cancelled
+        loop.run_until_complete(_run())
+    except Exception as e:
+        print(f"[TELEGRAM] Loop exited: {e}")
     finally:
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
+        loop.close()
 
 
 if __name__ == "__main__":
