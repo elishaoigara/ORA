@@ -34,6 +34,43 @@ from connectors.google_auth import get_access_token, is_authorized
 
 CALENDAR_BASE    = "https://www.googleapis.com/calendar/v3"
 PRIMARY_CALENDAR = "primary"
+
+# Cache calendar list to avoid fetching on every call
+_CALENDAR_IDS_CACHE: list[str] = []
+_CALENDAR_IDS_TTL   = 300   # seconds
+_CALENDAR_IDS_FETCHED_AT: float = 0.0
+
+
+def get_all_calendar_ids() -> list[str]:
+    """
+    Return IDs of all calendars the user has access to (owned + subscribed).
+    Falls back to ["primary"] if fetch fails or user not authorized.
+    Results cached for 5 minutes.
+    """
+    global _CALENDAR_IDS_CACHE, _CALENDAR_IDS_FETCHED_AT
+    import time as _time
+
+    if _CALENDAR_IDS_CACHE and (_time.time() - _CALENDAR_IDS_FETCHED_AT) < _CALENDAR_IDS_TTL:
+        return _CALENDAR_IDS_CACHE
+
+    if not is_authorized():
+        return [PRIMARY_CALENDAR]
+
+    try:
+        data = _cal_get("users/me/calendarList", {"minAccessRole": "reader"})
+        ids  = [item["id"] for item in data.get("items", [])
+                if not item.get("deleted")]
+        if not ids:
+            ids = [PRIMARY_CALENDAR]
+        _CALENDAR_IDS_CACHE      = ids
+        _CALENDAR_IDS_FETCHED_AT = _time.time()
+        print(f"[CALENDAR] Found {len(ids)} calendar(s): {ids}")
+        return ids
+    except Exception as e:
+        print(f"[CALENDAR] get_all_calendar_ids failed: {e}")
+        return [PRIMARY_CALENDAR]
+
+
 NAIROBI_TZ       = "Africa/Nairobi"
 
 
@@ -121,20 +158,44 @@ def get_upcoming_events(
     if not is_authorized():
         print("[CALENDAR] Not authorized — visit /api/auth/google")
         return []
+
+    # When using the default primary, expand to all calendars
+    cal_ids = get_all_calendar_ids() if calendar_id == PRIMARY_CALENDAR else [calendar_id]
+
     try:
-        now = datetime.now(timezone.utc)
-        end = now + timedelta(hours=hours_ahead)
-        data = _cal_get(
-            f"calendars/{calendar_id}/events",
-            {
-                "timeMin":      now.isoformat(),
-                "timeMax":      end.isoformat(),
-                "maxResults":   max_results,
-                "singleEvents": True,
-                "orderBy":      "startTime",
-            },
-        )
-        return [_parse_event(i) for i in data.get("items", [])]
+        now    = datetime.now(timezone.utc)
+        end    = now + timedelta(hours=hours_ahead)
+        params = {
+            "timeMin":      now.isoformat(),
+            "timeMax":      end.isoformat(),
+            "maxResults":   max_results,
+            "singleEvents": True,
+            "orderBy":      "startTime",
+        }
+
+        all_events: list[dict] = []
+        seen_ids: set[str]     = set()
+
+        for cid in cal_ids:
+            try:
+                data   = _cal_get(f"calendars/{cid}/events", params)
+                events = [_parse_event(i) for i in data.get("items", [])]
+                for ev in events:
+                    eid = ev.get("id", "")
+                    if eid and eid not in seen_ids:
+                        ev["_calendar_id"] = cid   # tag source calendar
+                        all_events.append(ev)
+                        seen_ids.add(eid)
+            except Exception as e:
+                print(f"[CALENDAR] Error reading calendar {cid}: {e}")
+
+        # Sort merged results by start time
+        def _sort_key(ev: dict) -> str:
+            return ev.get("start") or ev.get("date") or ""
+
+        all_events.sort(key=_sort_key)
+        return all_events[:max_results]
+
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 401:
             print("[CALENDAR] Token expired — re-authorize via /api/auth/google")
