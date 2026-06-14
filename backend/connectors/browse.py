@@ -25,8 +25,8 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-MAX_RAW_CHARS   = 12_000   # chars sent to Groq for summary
-MAX_DIRECT_CHARS = 3_000   # if content fits, return directly without LLM
+MAX_RAW_CHARS    = 12_000   # chars sent to Groq for summary
+MAX_DIRECT_CHARS =  4_000   # if content fits, return directly without LLM
 
 
 # ─────────────────────────────────────────────
@@ -102,7 +102,7 @@ def _fetch_pdf(url: str) -> dict:
 
 def _fetch_html(url: str) -> dict:
     try:
-        r = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=True)
+        r = requests.get(url, headers=HEADERS, timeout=(5, 12), allow_redirects=True)
         r.raise_for_status()
         content_type = r.headers.get("content-type", "")
         if "pdf" in content_type:
@@ -133,7 +133,9 @@ def _summarise(content: str, url: str, question: Optional[str] = None) -> str:
     try:
         from groq import Groq
         from config import GROQ_API_KEY, GROQ_MODEL_PRIMARY
-        client = Groq(api_key=GROQ_API_KEY)
+        import httpx
+
+        client = Groq(api_key=GROQ_API_KEY, timeout=httpx.Timeout(20.0))
 
         if question:
             prompt = (
@@ -146,8 +148,8 @@ def _summarise(content: str, url: str, question: Optional[str] = None) -> str:
             prompt = (
                 f"Summarise the key information from this page ({url}):\n\n"
                 f"{content[:MAX_RAW_CHARS]}\n\n"
-                "Give a clear, structured summary in 3-5 bullet points. "
-                "Include the most important facts, numbers, or conclusions."
+                "Give a clear structured summary in 3-5 bullet points covering "
+                "the most important facts, numbers, or conclusions."
             )
 
         resp = client.chat.completions.create(
@@ -159,8 +161,9 @@ def _summarise(content: str, url: str, question: Optional[str] = None) -> str:
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
         print(f"[BROWSE] Summarise error: {e}")
-        # Fallback: return truncated raw content
-        return content[:MAX_DIRECT_CHARS]
+        # Fallback: return first MAX_DIRECT_CHARS of raw content
+        lines = [l for l in content.splitlines() if l.strip()]
+        return "\n".join(lines[:60])[:MAX_DIRECT_CHARS]
 
 
 # ─────────────────────────────────────────────
