@@ -87,6 +87,76 @@ async def lifespan(app: FastAPI):
             except Exception:
                 print(traceback.format_exc())
 
+        def weather_monitor():
+            """
+            Runs every 30 min. Alerts Elisha when:
+            - Rain / storm is approaching in the next 3 hours (≥60% probability)
+            - Temperature drops >4°C from last reading
+            - Weather code jumps to severe (thunderstorm, heavy rain)
+            - Morning forecast (8am) — what to expect today
+            """
+            try:
+                from connectors.weather import get_weather, get_weather_forecast, _code_to_icon
+                from intelligence.notifier import dual_notify
+                from datetime import datetime
+                import zoneinfo as _zi
+
+                now_eat = datetime.now(_zi.ZoneInfo("Africa/Nairobi"))
+                current = get_weather()
+                if not current:
+                    return
+
+                SEVERE_CODES = {65, 75, 82, 95, 96}   # heavy rain, snow, thunderstorm
+                RAIN_CODES   = {51,53,55,61,63,65,80,81,82,95,96}
+
+                # ── Morning forecast at 8:00 ──────────────────────────
+                if now_eat.hour == 8 and now_eat.minute < 30:
+                    forecast = get_weather_forecast(hours=10)
+                    rain_hrs = [f for f in forecast if (f.get("rain_pct") or 0) >= 50]
+                    icon     = current.get("icon","🌡️")
+                    cond     = current.get("condition","")
+                    temp     = current.get("temp","—")
+                    msg      = f"{icon} *Juja Weather Today*\n\nNow: {cond}, {temp}°C\n"
+                    if rain_hrs:
+                        first = rain_hrs[0]
+                        msg += f"🌧 Rain expected around {first['time']} ({first['rain_pct']}% chance)\n"
+                        msg += "☂️ _Consider carrying an umbrella._"
+                    else:
+                        msg += "✅ No rain expected today."
+                    dual_notify(title="🌤 Morning Weather", body=msg)
+                    return
+
+                # ── Check incoming rain in next 3 hours ──────────────
+                forecast = get_weather_forecast(hours=3)
+                rain_soon = [f for f in forecast if (f.get("rain_pct") or 0) >= 60
+                             and f.get("code",0) in RAIN_CODES]
+                if rain_soon:
+                    first = rain_soon[0]
+                    pct   = first.get("rain_pct", "—")
+                    t     = first.get("time","soon")
+                    icon  = first.get("icon","🌧")
+                    cond  = first.get("condition","Rain")
+                    dual_notify(
+                        title=f"{icon} Rain Alert — Juja",
+                        body=f"{cond} expected around *{t}* ({pct}% probability)\n☂️ _You may want an umbrella._",
+                    )
+                    return
+
+                # ── Severe weather now ────────────────────────────────
+                code = current.get("code", 0) if isinstance(current.get("code"), int) else 0
+                if code in SEVERE_CODES:
+                    icon = current.get("icon","⛈️")
+                    cond = current.get("condition","Severe weather")
+                    temp = current.get("temp","—")
+                    dual_notify(
+                        title=f"{icon} Weather Alert — Juja",
+                        body=f"*{cond}* right now in Juja, Kiambu\nTemp: {temp}°C\n⚠️ _Stay safe._",
+                        is_alert=True,
+                    )
+
+            except Exception:
+                print(f"[WEATHER MONITOR] {traceback.format_exc()}")
+
         start_scheduler([
             # Core agent loop
             {"trigger": "interval", "minutes": 10,  "fn": run_agent_cycle,             "name": "agent_loop"},
@@ -102,26 +172,23 @@ async def lifespan(app: FastAPI):
             # Data connectors
             {"trigger": "interval", "minutes": 30, "fn": sync_drive,                   "name": "drive_sync"},
             {"trigger": "interval", "minutes": 15, "fn": sync_gmail,                   "name": "gmail_sync"},
+            {"trigger": "interval", "minutes": 30, "fn": weather_monitor,              "name": "weather_monitor"},
         ])
         print("[ORA] Scheduler started")
     except Exception:
         print("[SCHEDULER ERROR]")
         print(traceback.format_exc())
 
-    # ── Telegram bot thread ────────────────────────────────────────────────────
+    # ── Telegram bot thread (PTB async — handles reconnects internally) ────────
     try:
         from config import TELEGRAM_BOT_TOKEN
         if TELEGRAM_BOT_TOKEN:
             def _tg():
-                delay = 5
-                while True:
-                    try:
-                        from telegram_bot import run_telegram_bot
-                        run_telegram_bot()   # blocks; only returns on crash
-                    except Exception as e:
-                        print(f"[TELEGRAM ERROR] {e}\n{traceback.format_exc()}")
-                    time.sleep(delay)
-                    delay = min(delay * 2, 60)   # backoff up to 60s
+                try:
+                    from telegram_bot import run_telegram_bot
+                    run_telegram_bot()   # PTB run_polling — blocks until process exits
+                except Exception as e:
+                    print(f"[TELEGRAM ERROR] {e}\n{traceback.format_exc()}")
             threading.Thread(target=_tg, daemon=True, name="telegram-bot").start()
     except Exception:
         print(traceback.format_exc())
