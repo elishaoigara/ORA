@@ -272,6 +272,7 @@ def _cmd_help(chat_id, reply_to=None):
         "*Tasks:*\n/tasks — pending tasks\n/done <id> — mark complete\n\n"
         "*Goals & Finance:*\n/goals — active goals\n/mpesa — M-Pesa summary\n/brief — full brief\n\n"
         "*Inbox:*\n/inbox — Gmail status\n/replies — smart replies\n/proactive — signals\n\n"
+        "*Browse:*\n/browse <url> [question] — read any page/PDF/YouTube\n\n"
         "*Email:*\n/email to@x.com | Subject | Body — send email\n"
         "/draft to@x.com | Subject | Body — save draft\n"
         "Or just say: _email john@x.com about meeting saying Hi..._\n\n"
@@ -419,7 +420,57 @@ def _cmd_stats(chat_id, reply_to=None):
     except Exception as e:
         tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
 
-def _cmd_email(chat_id: int, arg: str, reply_to=None):
+def _cmd_browse(chat_id: int, arg: str, reply_to=None):
+    """
+    /browse <url> [question]
+    e.g. /browse https://news.ycombinator.com
+         /browse https://example.com/paper.pdf what are the conclusions?
+    """
+    arg = arg.strip()
+    if not arg:
+        tg_send(chat_id,
+            "🌐 *Browse any URL:*\n\n"
+            "`/browse https://example.com` — summarise page\n"
+            "`/browse https://example.com/paper.pdf what are the key findings?` — answer a question\n\n"
+            "Also works naturally:\n"
+            "_read https://techcrunch.com_\n"
+            "_summarise https://arxiv.org/abs/xxxx_",
+            "Markdown", reply_to)
+        return
+
+    # Split URL from optional question
+    parts  = arg.split(None, 1)
+    url    = parts[0]
+    question = parts[1].strip() if len(parts) > 1 else None
+
+    tg_send(chat_id, f"🌐 Fetching _{url}_...", "Markdown", reply_to)
+    _tg_action(chat_id)
+
+    from connectors.browse import browse
+    result = browse(url, question=question)
+
+    if not result.get("ok"):
+        tg_send(chat_id, f"❌ {result.get('error', 'Could not load page')}",
+                reply_to_message_id=reply_to)
+        return
+
+    title   = result.get("title", url)
+    summary = result.get("summary", "")
+    raw_len = result.get("raw_length", 0)
+    ptype   = result.get("type", "html")
+    icon    = {"pdf": "📄", "youtube": "🎥", "html": "🌐"}.get(ptype, "🌐")
+
+    header = f"{icon} *{title}*\n_{url}_\n\n"
+    footer = f"\n\n_({raw_len:,} chars read)_"
+    body   = f"*Q: {question}*\n\n{summary}" if question else summary
+    full   = header + body + footer
+
+    # Chunk if too long
+    for i, chunk in enumerate([full[j:j+4000] for j in range(0, len(full), 4000)]):
+        tg_send(chat_id, chunk, "Markdown", reply_to if i == 0 else None)
+
+
+
     """
     /email <to> | <subject> | <body>
     e.g. /email john@x.com | Meeting tomorrow | Hi John, just confirming...
@@ -544,6 +595,8 @@ def handle_message(chat_id: int, text: str = "",
         _cmd_mpesa(chat_id, reply_to)
     elif lower.startswith("/brief"):
         _cmd_brief(chat_id, reply_to)
+    elif lower.startswith("/browse"):
+        _cmd_browse(chat_id, text[7:], reply_to)
     elif lower.startswith("/email"):
         _cmd_email(chat_id, text[6:], reply_to)
     elif lower.startswith("/draft"):

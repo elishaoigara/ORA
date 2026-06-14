@@ -89,7 +89,24 @@ class WebSearchTool(Tool):
         }
 
 
-class WeatherTool(Tool):
+class BrowseTool(Tool):
+    name        = "browse"
+    description = "Fetch and read any URL — web pages, PDFs, YouTube transcripts. Input: {url: str, question?: str}"
+    schema      = {
+        "url":      {"type": "str", "required": True,  "desc": "Full URL to fetch"},
+        "question": {"type": "str", "required": False, "desc": "Optional question to answer from the page"},
+    }
+
+    def run(self, input: dict) -> dict: # type: ignore
+        from connectors.browse import browse
+        url      = (input.get("url") or "").strip()
+        question = (input.get("question") or "").strip() or None
+        if not url:
+            return {"ok": False, "error": "url is required"}
+        return browse(url, question=question)
+
+
+
     name = "weather"
     description = "Get current weather summary (Nairobi default). Input: {}"
 
@@ -524,7 +541,8 @@ class ToolRegistry:
     def _register_defaults(self):
         defaults = [
             WebSearchTool(),
-            WeatherTool(),
+            BrowseTool(),
+            WeatherTool(), # type: ignore
             CalendarTodayTool(),
             CalendarImminentTool(),
             CalendarCreateTool(),

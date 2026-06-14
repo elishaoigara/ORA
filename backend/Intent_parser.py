@@ -104,6 +104,14 @@ _INTENTS = [
          r"\b(create|draft|write|generate|make)\s+(post|caption|linkedin|twitter|x|thread|email|content|draft)\b",
          re.I
      )),
+    # ── Browse / read a URL ────────────────────────────────────
+    ("browse",
+     re.compile(
+         r"\b(open|browse|read|fetch|load|visit|go to|check out|summarise|summarize|what('?s| is) (on|at))\b.{0,60}https?://"
+         r"|\b(open|browse|read|fetch|summarise|summarize)\s+https?://\S+"
+         r"|https?://\S{5,}",   # bare URL in message
+         re.I
+     )),
     # ── NEW: Send new email ────────────────────────────────────
     ("send_email",
      re.compile(
@@ -157,6 +165,7 @@ def execute_intent(intent: dict) -> str:
     payload = intent["payload"]
     try:
         dispatch = {
+            "browse":        lambda: _do_browse(payload),
             "send_email":    lambda: _do_send_email(payload),
             "draft_email":   lambda: _do_draft_email(payload),
             "add_task":       lambda: _do_add_task(payload),
@@ -244,6 +253,18 @@ def _extract_payload(intent_name: str, text: str) -> dict:
             content_type = "thread"
             
         return {"topic": topic or text[:150], "type": content_type}
+
+    if intent_name == "browse":
+        url_match = re.search(r"https?://\S+", text)
+        url = url_match.group(0).rstrip(".,)\"'") if url_match else ""
+        # Extract question after the URL if present
+        question = ""
+        if url:
+            after = text[text.find(url) + len(url):].strip()
+            after = re.sub(r"^(and|,|—|-|\?)\s*", "", after).strip()
+            if len(after) > 5:
+                question = after
+        return {"url": url, "question": question, "raw": text[:300]}
 
     # NEW: Send email payload
     if intent_name in ("send_email", "draft_email"):
@@ -581,6 +602,33 @@ def _do_create_content(payload: dict) -> str:
 
 
 # ── NEW: Gmail Reply Executor ─────────────────────────────
+def _do_browse(payload: dict) -> str:
+    url      = payload.get("url", "").strip()
+    question = payload.get("question", "").strip() or None
+
+    if not url:
+        return "❌ No URL found. Include a full URL starting with https://"
+
+    from connectors.browse import browse
+    result = browse(url, question=question)
+
+    if not result.get("ok"):
+        return f"❌ Couldn't load that page: {result.get('error', 'unknown error')}"
+
+    title    = result.get("title", url)
+    summary  = result.get("summary", "")
+    raw_len  = result.get("raw_length", 0)
+    ptype    = result.get("type", "html")
+
+    type_icon = {"pdf": "📄", "youtube": "🎥", "html": "🌐"}.get(ptype, "🌐")
+    header = f"{type_icon} *{title}*\n_{url}_\n\n"
+    footer = f"\n\n_({raw_len:,} chars read)_"
+
+    if question:
+        return f"{header}*Q: {question}*\n\n{summary}{footer}"
+    return f"{header}{summary}{footer}"
+
+
 def _do_send_email(payload: dict) -> str:
     """
     Send a new email. If regex couldn't extract all fields, falls back to
