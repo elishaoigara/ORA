@@ -82,10 +82,29 @@ _INTENTS = [
          r"|catch me up|what's going on|morning brief|evening brief)\b",
          re.I
      )),
+    ("schedule_event",
+     re.compile(
+         r"\b(schedule|create|add|book|set up|block|put|remind me)\b.{0,40}"
+         r"\b(meeting|event|appointment|call|session|standup|lunch|dinner|interview|reminder|slot)\b"
+         r"|\b(schedule|add to calendar|put on calendar|block time)\b",
+         re.I
+     )),
+    ("delete_event",
+     re.compile(
+         r"\b(cancel|delete|remove|drop)\b.{0,30}"
+         r"\b(meeting|event|appointment|call|session)\b",
+         re.I
+     )),
+    ("free_slot",
+     re.compile(
+         r"\b(when am i free|find.*free.*slot|any.*free.*time|available.*time"
+         r"|free slot|open slot|gap in.*calendar|when can i)\b",
+         re.I
+     )),
     ("calendar",
      re.compile(
-         r"\b(calendar|meetings?|schedule|agenda|what'?s? on today"
-         r"|any events|upcoming events)\b",
+         r"\b(calendar|meetings?|agenda|what'?s? on today|what'?s? on tomorrow"
+         r"|any events|upcoming events|my schedule|today'?s? events)\b",
          re.I
      )),
     ("github",
@@ -165,6 +184,9 @@ def execute_intent(intent: dict) -> str:
     payload = intent["payload"]
     try:
         dispatch = {
+            "schedule_event": lambda: _do_schedule_event(payload),
+            "delete_event":   lambda: _do_delete_event(payload),
+            "free_slot":      lambda: _do_free_slot(payload),
             "browse":        lambda: _do_browse(payload),
             "send_email":    lambda: _do_send_email(payload),
             "draft_email":   lambda: _do_draft_email(payload),
@@ -253,6 +275,20 @@ def _extract_payload(intent_name: str, text: str) -> dict:
             content_type = "thread"
             
         return {"topic": topic or text[:150], "type": content_type}
+
+    if intent_name == "schedule_event":
+        return {"raw": text[:300]}
+
+    if intent_name == "delete_event":
+        return {"raw": text[:300]}
+
+    if intent_name == "free_slot":
+        # Extract date hint if present
+        date_hint = ""
+        m = re.search(r"\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+                      r"|\d{1,2}[/-]\d{1,2}|\d{4}-\d{2}-\d{2})\b", text, re.I)
+        if m: date_hint = m.group(0)
+        return {"date_hint": date_hint, "raw": text[:300]}
 
     if intent_name == "browse":
         url_match = re.search(r"https?://\S+", text)
@@ -602,6 +638,122 @@ def _do_create_content(payload: dict) -> str:
 
 
 # ── NEW: Gmail Reply Executor ─────────────────────────────
+def _do_schedule_event(payload: dict) -> str:
+    """Natural language → create Google Calendar event via quick_event()."""
+    raw = payload.get("raw", "").strip()
+    if not raw:
+        return "❌ What should I schedule? Try: _schedule a meeting with John tomorrow at 3pm_"
+    try:
+        from connectors.calendar import quick_event
+        result = quick_event(raw)
+        if result.get("ok"):
+            ev    = result["event"]
+            title = ev.get("title", "Event")
+            start = ev.get("start", "")
+            end   = ev.get("end", "")
+            loc   = ev.get("location", "")
+            loc_s = f"\n📍 {loc}" if loc else ""
+            link  = ev.get("link", "")
+            link_s = f"\n🔗 {link}" if link else ""
+            return (
+                f"✅ *Event created!*\n\n"
+                f"📅 *{title}*\n"
+                f"🕐 {start} → {end}"
+                f"{loc_s}{link_s}"
+            )
+        return f"❌ Could not create event: {result.get('error', 'unknown error')}"
+    except Exception as e:
+        return f"❌ Calendar error: {str(e)[:100]}"
+
+
+def _do_delete_event(payload: dict) -> str:
+    """Find and delete a calendar event by title/description."""
+    raw = payload.get("raw", "").strip()
+    try:
+        from connectors.calendar import get_upcoming_events, delete_event
+        from groq import Groq
+        from config import GROQ_API_KEY, GROQ_MODEL_PRIMARY
+        import json as _json
+
+        events = get_upcoming_events(max_results=20)
+        if not events:
+            return "📅 No upcoming events found to cancel."
+
+        # Ask Groq which event the user means
+        event_list = "\n".join(
+            f"{i+1}. {e.get('title','?')} on {e.get('start','?')} (id: {e.get('id','?')})"
+            for i, e in enumerate(events[:15])
+        )
+        client = Groq(api_key=GROQ_API_KEY)
+        prompt = (
+            f"The user wants to cancel: \"{raw}\"\n\n"
+            f"Upcoming events:\n{event_list}\n\n"
+            "Which event ID matches best? Reply ONLY with JSON: "
+            "{\"id\": \"event_id\", \"title\": \"event title\"} "
+            "or {\"id\": null} if no match."
+        )
+        resp  = client.chat.completions.create(
+            model=GROQ_MODEL_PRIMARY or "llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=100, temperature=0.1,
+        )
+        import re as _re
+        raw_json = _re.sub(r"```(?:json)?|```", "",
+                           resp.choices[0].message.content or "{}").strip()
+        parsed = _json.loads(raw_json)
+
+        event_id = parsed.get("id")
+        if not event_id:
+            return "❌ I couldn't find a matching event. Use /cal to list events and try again."
+
+        title = parsed.get("title", "Event")
+        ok    = delete_event(event_id)
+        return f"✅ *{title}* has been cancelled." if ok else f"❌ Could not delete *{title}*."
+    except Exception as e:
+        return f"❌ Calendar error: {str(e)[:100]}"
+
+
+def _do_free_slot(payload: dict) -> str:
+    """Find free time slots on a given day."""
+    date_hint = payload.get("date_hint", "today")
+    raw       = payload.get("raw", "")
+    try:
+        from connectors.calendar import find_free_slot
+        from datetime import date, timedelta
+        import re as _re
+
+        # Resolve date
+        today = date.today()
+        dh    = date_hint.lower()
+        if not dh or dh == "today":
+            target = today
+        elif dh == "tomorrow":
+            target = today + timedelta(days=1)
+        elif dh in ("monday","tuesday","wednesday","thursday","friday","saturday","sunday"):
+            day_map = {"monday":0,"tuesday":1,"wednesday":2,"thursday":3,
+                       "friday":4,"saturday":5,"sunday":6}
+            days_ahead = (day_map[dh] - today.weekday()) % 7 or 7
+            target = today + timedelta(days=days_ahead)
+        else:
+            try:
+                from datetime import datetime
+                target = datetime.strptime(date_hint, "%Y-%m-%d").date()
+            except Exception:
+                target = today
+
+        slots = find_free_slot(target_date=target) # pyright: ignore[reportCallIssue]
+        if not slots:
+            return f"📅 No free slots found on {target.strftime('%A %d %B')}."
+
+        lines = [f"🕐 *Free slots on {target.strftime('%A %d %B')}:*\n"]
+        for s in slots[:5]:
+            lines.append(f"• {s.get('start','?')} – {s.get('end','?')}")
+        lines.append("\nSay _schedule a meeting [time]_ to book one.")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"❌ Calendar error: {str(e)[:100]}"
+
+
 def _do_browse(payload: dict) -> str:
     url      = payload.get("url", "").strip()
     question = payload.get("question", "").strip() or None

@@ -261,6 +261,13 @@ def _cmd_help(chat_id, reply_to=None):
         "*Tasks:*\n/tasks — pending tasks\n/done <id> — mark complete\n\n"
         "*Goals & Finance:*\n/goals — active goals\n/mpesa — M-Pesa summary\n/brief — full brief\n\n"
         "*Inbox:*\n/inbox — Gmail status\n/replies — smart replies\n/proactive — signals\n\n"
+        "*Calendar:*\n"
+        "`/cal` — today's events\n"
+        "`/cal week` — this week\n"
+        "`/cal add <event>` — create event\n"
+        "`/cal free [day]` — find free slots\n"
+        "`/cal cancel <name>` — delete event\n"
+        "Or say: _schedule a call with John tomorrow at 3pm_\n\n"
         "*Browse:*\n`/browse <url>` — read any page/PDF/YouTube\n"
         "`/browse <url> <question>` — answer Q from page\n\n"
         "*Email:*\n`/email to@x.com | Subject | Body` — send\n"
@@ -433,7 +440,113 @@ def _cmd_voice(chat_id, arg: str, reply_to=None):
                 "Markdown", reply_to)
 
 
-def _cmd_browse(chat_id: int, arg: str, reply_to=None):
+def _cmd_cal(chat_id: int, arg: str, reply_to=None):
+    """
+    /cal                       — today's events
+    /cal week                  — this week
+    /cal add <natural text>    — create event
+    /cal free [day]            — find free slots
+    /cal cancel <event name>   — delete event
+    """
+    arg   = arg.strip()
+    lower = arg.lower()
+
+    # ── List today / week ─────────────────────────────────────
+    if not arg or lower == "today":
+        try:
+            from connectors.calendar import get_events_today, format_events_for_context
+            events = get_events_today()
+            if not events:
+                tg_send(chat_id, "📅 Nothing on the calendar today.", reply_to_message_id=reply_to)
+            else:
+                tg_send(chat_id, f"📅 *Today's schedule:*\n\n{format_events_for_context(events)}",
+                        "Markdown", reply_to)
+        except Exception as e:
+            tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        return
+
+    if lower == "week":
+        try:
+            from connectors.calendar import get_events_this_week, format_events_for_context
+            events = get_events_this_week()
+            if not events:
+                tg_send(chat_id, "📅 Nothing scheduled this week.", reply_to_message_id=reply_to)
+            else:
+                tg_send(chat_id, f"📅 *This week:*\n\n{format_events_for_context(events)}",
+                        "Markdown", reply_to)
+        except Exception as e:
+            tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        return
+
+    # ── Add/schedule ──────────────────────────────────────────
+    if lower.startswith("add ") or lower.startswith("schedule ") or lower.startswith("create "):
+        text = re.sub(r"^(add|schedule|create)\s+", "", arg, flags=re.I)
+        tg_send(chat_id, "📅 Creating event...", reply_to_message_id=reply_to)
+        try:
+            from connectors.calendar import quick_event
+            result = quick_event(text)
+            if result.get("ok"):
+                ev     = result["event"]
+                title  = ev.get("title", "Event")
+                start  = ev.get("start", "")
+                end    = ev.get("end", "")
+                loc    = ev.get("location", "")
+                loc_s  = f"\n📍 {loc}" if loc else ""
+                tg_send(chat_id,
+                    f"✅ *Event created!*\n\n📅 *{title}*\n🕐 {start} → {end}{loc_s}",
+                    "Markdown", reply_to)
+            else:
+                tg_send(chat_id, f"❌ {result.get('error', 'Could not create event')}",
+                        reply_to_message_id=reply_to)
+        except Exception as e:
+            tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        return
+
+    # ── Free slots ────────────────────────────────────────────
+    if lower.startswith("free"):
+        date_hint = arg[4:].strip() or "today"
+        try:
+            from Intent_parser import _do_free_slot
+            reply_text = _do_free_slot({"date_hint": date_hint, "raw": arg})
+            tg_send(chat_id, reply_text, "Markdown", reply_to)
+        except Exception as e:
+            tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        return
+
+    # ── Cancel/delete ─────────────────────────────────────────
+    if lower.startswith("cancel ") or lower.startswith("delete "):
+        text = re.sub(r"^(cancel|delete)\s+", "", arg, flags=re.I)
+        tg_send(chat_id, "🗑 Finding event...", reply_to_message_id=reply_to)
+        try:
+            from Intent_parser import _do_delete_event
+            reply_text = _do_delete_event({"raw": text})
+            tg_send(chat_id, reply_text, "Markdown", reply_to)
+        except Exception as e:
+            tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+        return
+
+    # ── Unknown subcommand — treat as schedule ─────────────────
+    tg_send(chat_id, "📅 Creating event...", reply_to_message_id=reply_to)
+    try:
+        from connectors.calendar import quick_event
+        result = quick_event(arg)
+        if result.get("ok"):
+            ev    = result["event"]
+            tg_send(chat_id,
+                f"✅ *{ev.get('title','Event')}* scheduled for {ev.get('start','')}",
+                "Markdown", reply_to)
+        else:
+            tg_send(chat_id,
+                f"❌ {result.get('error')}\n\nTry:\n"
+                "`/cal` — today\n`/cal week` — this week\n"
+                "`/cal add meeting with John tomorrow 3pm`\n"
+                "`/cal free tomorrow`\n`/cal cancel standup`",
+                "Markdown", reply_to)
+    except Exception as e:
+        tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+
+
+
     """
     /browse <url> [optional question]
     /browse https://example.com
@@ -591,8 +704,9 @@ def handle_message(chat_id: int, text: str = "",
     elif lower.startswith("/done"):      _cmd_done(chat_id, text[5:], reply_to)
     elif lower.startswith("/goals"):     _cmd_goals(chat_id, reply_to)
     elif lower.startswith("/mpesa"):     _cmd_mpesa(chat_id, reply_to)
+    elif lower.startswith("/cal"):       _cmd_cal(chat_id, text[4:], reply_to)
     elif lower.startswith("/brief"):     _cmd_brief(chat_id, reply_to)
-    elif lower.startswith("/browse"):    _cmd_browse(chat_id, text[7:], reply_to)
+    elif lower.startswith("/browse"):    _cmd_browse(chat_id, text[7:], reply_to) # type: ignore
     elif lower.startswith("/email"):     _cmd_email(chat_id, text[6:], reply_to)
     elif lower.startswith("/draft"):     _cmd_draft(chat_id, text[6:], reply_to)
     elif lower.startswith("/inbox"):     _cmd_inbox(chat_id, reply_to)
