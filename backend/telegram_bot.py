@@ -482,7 +482,7 @@ def _cmd_browse(chat_id: int, arg: str, reply_to=None):
     full   = header + body + footer
 
     for i, chunk in enumerate([full[j:j+4000] for j in range(0, len(full), 4000)]):
-        tg_send(chat_id, chunk, "Markdown", reply_to if i == 0 else None)
+        tg_send(chat_id, chunk, None, reply_to if i == 0 else None)
         if i > 0: time.sleep(0.3)
 
 

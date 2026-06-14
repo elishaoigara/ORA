@@ -161,9 +161,10 @@ def _summarise(content: str, url: str, question: Optional[str] = None) -> str:
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
         print(f"[BROWSE] Summarise error: {e}")
-        # Fallback: return first MAX_DIRECT_CHARS of raw content
-        lines = [l for l in content.splitlines() if l.strip()]
-        return "\n".join(lines[:60])[:MAX_DIRECT_CHARS]
+        # Fallback: return clean lines, strip HTML entities
+        import html
+        lines = [html.unescape(l) for l in content.splitlines() if len(l.strip()) > 30]
+        return "\n".join(lines[:40])[:MAX_DIRECT_CHARS]
 
 
 # ─────────────────────────────────────────────
@@ -207,10 +208,11 @@ def browse(url: str, question: Optional[str] = None) -> dict:
     raw_len   = len(content)
     title     = result.get("title", url)
 
-    # Short content — return directly, no LLM needed
-    if raw_len <= MAX_DIRECT_CHARS and not question:
+    # Very short content — return directly
+    if raw_len < 800 and not question:
         summary = content
     else:
+        # Always summarise — raw HTML text is not useful as-is
         summary = _summarise(content, url, question=question)
 
     return {
