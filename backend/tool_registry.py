@@ -459,6 +459,58 @@ class MpesaSyncSheetTool(Tool):
 
 # ─── Registry ─────────────────────────────────────────────────────────────────
 
+class GmailSendTool(Tool):
+    name        = "gmail_send"
+    description = "Send a new email via Gmail"
+    schema      = {
+        "to":      {"type": "str",  "required": True,  "desc": "Recipient email address"},
+        "subject": {"type": "str",  "required": True,  "desc": "Email subject line"},
+        "body":    {"type": "str",  "required": True,  "desc": "Email body (plain text)"},
+        "cc":      {"type": "str",  "required": False, "desc": "CC address (optional)"},
+        "account": {"type": "str",  "required": False, "desc": "primary or secondary (default: primary)"},
+    }
+
+    def run(self, input: dict) -> dict:
+        from connectors.gmail import send_new_email
+        to      = (input.get("to") or "").strip()
+        subject = (input.get("subject") or "").strip()
+        body    = (input.get("body") or "").strip()
+        if not to or not subject or not body:
+            return {"ok": False, "error": "to, subject, and body are all required"}
+        return send_new_email(
+            to=to,
+            subject=subject,
+            body=body,
+            cc=input.get("cc", ""),
+            account=input.get("account", "primary"),
+        )
+
+
+class GmailDraftTool(Tool):
+    name        = "gmail_draft"
+    description = "Save an email as a Gmail draft without sending"
+    schema      = {
+        "to":      {"type": "str", "required": True,  "desc": "Recipient email address"},
+        "subject": {"type": "str", "required": True,  "desc": "Email subject line"},
+        "body":    {"type": "str", "required": True,  "desc": "Email body (plain text)"},
+        "account": {"type": "str", "required": False, "desc": "primary or secondary"},
+    }
+
+    def run(self, input: dict) -> dict:
+        from connectors.gmail import create_draft
+        to      = (input.get("to") or "").strip()
+        subject = (input.get("subject") or "").strip()
+        body    = (input.get("body") or "").strip()
+        if not to or not subject or not body:
+            return {"ok": False, "error": "to, subject, and body are all required"}
+        return create_draft(
+            to=to,
+            subject=subject,
+            body=body,
+            account=input.get("account", "primary"),
+        )
+
+
 class ToolRegistry:
     """
     Central registry of all ORA tools.
@@ -480,6 +532,8 @@ class ToolRegistry:
             CalendarDeleteTool(),
             CalendarFreeSlotTool(),
             GmailSummaryTool(),
+            GmailSendTool(),
+            GmailDraftTool(),
             SheetsCreateTool(),
             SheetsReadTool(),
             SheetsWriteTool(),

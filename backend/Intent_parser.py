@@ -104,6 +104,21 @@ _INTENTS = [
          r"\b(create|draft|write|generate|make)\s+(post|caption|linkedin|twitter|x|thread|email|content|draft)\b",
          re.I
      )),
+    # ── NEW: Send new email ────────────────────────────────────
+    ("send_email",
+     re.compile(
+         r"\b(send|email|mail|shoot an email|write an email|compose)\b.{0,60}"
+         r"\b(to|@)\b"
+         r"|\bemail\s+\S+@\S+\b"
+         r"|\bsend.{0,30}email\b",
+         re.I
+     )),
+    # ── NEW: Save email as draft ───────────────────────────────
+    ("draft_email",
+     re.compile(
+         r"\b(draft|save as draft|prepare an email|compose.{0,20}don'?t send)\b",
+         re.I
+     )),
     # ── NEW: Gmail Reply Agent ─────────────────────────────
     ("reply_email",
      re.compile(
@@ -142,6 +157,8 @@ def execute_intent(intent: dict) -> str:
     payload = intent["payload"]
     try:
         dispatch = {
+            "send_email":    lambda: _do_send_email(payload),
+            "draft_email":   lambda: _do_draft_email(payload),
             "add_task":       lambda: _do_add_task(payload),
             "remind":         lambda: _do_remind(payload),
             "complete_task":  lambda: _do_complete_task(payload),
@@ -227,6 +244,34 @@ def _extract_payload(intent_name: str, text: str) -> dict:
             content_type = "thread"
             
         return {"topic": topic or text[:150], "type": content_type}
+
+    # NEW: Send email payload
+    if intent_name in ("send_email", "draft_email"):
+        # Extract "to" — look for email address or "to <name>"
+        email_match = re.search(r"[\w.+-]+@[\w.-]+\.\w+", text)
+        to_addr = email_match.group(0) if email_match else ""
+
+        # Extract subject — "about X", "regarding X", "re: X", or "subject: X"
+        subj_match = re.search(
+            r"\b(about|regarding|re:|subject:|titled?|called?)\s+([\"']?)(.{3,80?})\2",
+            text, re.I
+        )
+        subject = subj_match.group(3).strip() if subj_match else ""
+
+        # Extract body — "saying X", "that says X", "message: X", "body: X"
+        body_match = re.search(
+            r"\b(saying|that says|message:|body:|content:|tell them|write)\s+[\"']?(.{5,500})[\"']?$",
+            text, re.I
+        )
+        body = body_match.group(2).strip() if body_match else ""
+
+        return {
+            "to": to_addr,
+            "subject": subject,
+            "body": body,
+            "raw": text[:300],
+            "needs_llm": not (to_addr and subject and body),
+        }
 
     # NEW: Reply Email Payload
     if intent_name == "reply_email":
@@ -536,6 +581,108 @@ def _do_create_content(payload: dict) -> str:
 
 
 # ── NEW: Gmail Reply Executor ─────────────────────────────
+def _do_send_email(payload: dict) -> str:
+    """
+    Send a new email. If regex couldn't extract all fields, falls back to
+    asking Groq to extract them from the raw user text.
+    """
+    to      = payload.get("to", "").strip()
+    subject = payload.get("subject", "").strip()
+    body    = payload.get("body", "").strip()
+    raw     = payload.get("raw", "")
+
+    # If any field missing, use LLM to extract
+    if not (to and subject and body):
+        try:
+            from groq import Groq
+            from config import GROQ_API_KEY, GROQ_MODEL_PRIMARY
+            client = Groq(api_key=GROQ_API_KEY)
+            prompt = (
+                "Extract the email fields from this message. "
+                "Reply ONLY with JSON: {\"to\": \"...\", \"subject\": \"...\", \"body\": \"...\"}\n\n"
+                f"Message: {raw}"
+            )
+            resp = client.chat.completions.create(
+                model=GROQ_MODEL_PRIMARY or "llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300, temperature=0.1,
+            )
+            import json, re as _re
+            raw_json = resp.choices[0].message.content or "{}"
+            # Strip markdown code fences if present
+            raw_json = _re.sub(r"```(?:json)?|```", "", raw_json).strip()
+            extracted = json.loads(raw_json)
+            to      = to      or extracted.get("to", "").strip()
+            subject = subject or extracted.get("subject", "").strip()
+            body    = body    or extracted.get("body", "").strip()
+        except Exception as e:
+            print(f"[INTENT send_email] LLM extract failed: {e}")
+
+    if not to:
+        return "❌ I couldn't find a recipient email address. Try: *email john@example.com about Meeting subject saying Hi John...*"
+    if not subject:
+        return f"❌ What's the subject? Try: *email {to} about [subject] saying [body]*"
+    if not body:
+        return f"❌ What should I say? Try: *email {to} about {subject} saying [your message]*"
+
+    from connectors.gmail import send_new_email
+    result = send_new_email(to=to, subject=subject, body=body)
+    if result.get("ok"):
+        return (
+            f"✅ Email sent!\n\n"
+            f"*To:* {to}\n"
+            f"*Subject:* {subject}\n"
+            f"*Preview:* _{body[:120]}{'...' if len(body) > 120 else ''}_"
+        )
+    return f"❌ Failed to send email: {result.get('error', 'unknown error')}"
+
+
+def _do_draft_email(payload: dict) -> str:
+    """Save an email as a draft — same extraction logic as send but saves instead."""
+    to      = payload.get("to", "").strip()
+    subject = payload.get("subject", "").strip()
+    body    = payload.get("body", "").strip()
+    raw     = payload.get("raw", "")
+
+    if not (to and subject and body):
+        try:
+            from groq import Groq
+            from config import GROQ_API_KEY, GROQ_MODEL_PRIMARY
+            import json, re as _re
+            client = Groq(api_key=GROQ_API_KEY)
+            prompt = (
+                "Extract email fields from this message. "
+                "Reply ONLY with JSON: {\"to\": \"...\", \"subject\": \"...\", \"body\": \"...\"}\n\n"
+                f"Message: {raw}"
+            )
+            resp = client.chat.completions.create(
+                model=GROQ_MODEL_PRIMARY or "llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300, temperature=0.1,
+            )
+            raw_json = _re.sub(r"```(?:json)?|```", "", resp.choices[0].message.content or "{}").strip()
+            extracted = json.loads(raw_json)
+            to      = to      or extracted.get("to", "").strip()
+            subject = subject or extracted.get("subject", "").strip()
+            body    = body    or extracted.get("body", "").strip()
+        except Exception as e:
+            print(f"[INTENT draft_email] LLM extract failed: {e}")
+
+    if not to or not subject or not body:
+        return "❌ Need recipient, subject and body to save a draft."
+
+    from connectors.gmail import create_draft
+    result = create_draft(to=to, subject=subject, body=body)
+    if result.get("ok"):
+        return (
+            f"📝 Draft saved!\n\n"
+            f"*To:* {to}\n"
+            f"*Subject:* {subject}\n"
+            f"_Open Gmail to review and send._"
+        )
+    return f"❌ Draft failed: {result.get('error', 'unknown error')}"
+
+
 def _do_reply_email(payload: dict) -> str:
     """Handle /reply or approve reply commands."""
     try:

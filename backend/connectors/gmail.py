@@ -590,6 +590,64 @@ def _send_gmail_reply(to: str, subject: str, thread_id: Optional[str],
     _gmail_post("messages/send", payload, account=account)
 
 
+def send_new_email(
+    to: str,
+    subject: str,
+    body: str,
+    account: str = "primary",
+    cc: Optional[str] = None,
+) -> dict:
+    """
+    Send a brand-new email (not a reply to a thread).
+    Returns {"ok": True, "message_id": "..."} or {"ok": False, "error": "..."}
+    """
+    try:
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText as _MIMEText
+
+        msg = MIMEMultipart("alternative")
+        msg["To"]      = to
+        msg["Subject"] = subject
+        if cc:
+            msg["Cc"] = cc
+        msg.attach(_MIMEText(body, "plain", "utf-8"))
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+        result = _gmail_post("messages/send", {"raw": raw}, account=account)
+        print(f"[GMAIL] Sent email to={to} subject={subject!r}")
+        return {"ok": True, "message_id": result.get("id", ""), "to": to, "subject": subject}
+    except Exception as e:
+        print(f"[GMAIL] send_new_email failed: {e}\n{traceback.format_exc()}")
+        return {"ok": False, "error": str(e)}
+
+
+def create_draft(
+    to: str,
+    subject: str,
+    body: str,
+    account: str = "primary",
+) -> dict:
+    """
+    Save an email as a Gmail draft without sending.
+    Returns {"ok": True, "draft_id": "..."} or {"ok": False, "error": "..."}
+    """
+    try:
+        from email.mime.text import MIMEText as _MIMEText
+
+        msg = _MIMEText(body, "plain", "utf-8")
+        msg["To"]      = to
+        msg["Subject"] = subject
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+        result = _gmail_post("drafts", {"message": {"raw": raw}}, account=account)
+        draft_id = result.get("id", "")
+        print(f"[GMAIL] Draft saved to={to} subject={subject!r} id={draft_id}")
+        return {"ok": True, "draft_id": draft_id, "to": to, "subject": subject}
+    except Exception as e:
+        print(f"[GMAIL] create_draft failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 def reject_reply(reply_id: int) -> bool:
     try:
         conn = get_conn()

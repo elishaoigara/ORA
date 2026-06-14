@@ -272,6 +272,9 @@ def _cmd_help(chat_id, reply_to=None):
         "*Tasks:*\n/tasks — pending tasks\n/done <id> — mark complete\n\n"
         "*Goals & Finance:*\n/goals — active goals\n/mpesa — M-Pesa summary\n/brief — full brief\n\n"
         "*Inbox:*\n/inbox — Gmail status\n/replies — smart replies\n/proactive — signals\n\n"
+        "*Email:*\n/email to@x.com | Subject | Body — send email\n"
+        "/draft to@x.com | Subject | Body — save draft\n"
+        "Or just say: _email john@x.com about meeting saying Hi..._\n\n"
         "*Voice:*\n/voice on — ORA replies with voice + text\n/voice off — text only\n"
         "🎤 Send a voice note anytime\n\n"
         "*Utility:*\n/ping /stats /help\n\n"
@@ -416,7 +419,70 @@ def _cmd_stats(chat_id, reply_to=None):
     except Exception as e:
         tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
 
-def _cmd_voice(chat_id, arg: str, reply_to=None):
+def _cmd_email(chat_id: int, arg: str, reply_to=None):
+    """
+    /email <to> | <subject> | <body>
+    e.g. /email john@x.com | Meeting tomorrow | Hi John, just confirming...
+    Also handles natural language via intent parser.
+    """
+    arg = arg.strip()
+    if not arg:
+        tg_send(chat_id,
+            "📧 *Send an email:*\n\n"
+            "Two ways:\n\n"
+            "*1. Pipe format:*\n"
+            "`/email to@example.com | Subject here | Body of the email`\n\n"
+            "*2. Natural language:*\n"
+            "`email john@gmail.com about the meeting saying Hi John, see you at 3pm`\n\n"
+            "*To save as draft instead:*\n"
+            "`draft email to john@gmail.com about Budget saying...`",
+            "Markdown", reply_to)
+        return
+
+    # Pipe format: to | subject | body
+    parts = [p.strip() for p in arg.split("|")]
+    if len(parts) >= 3:
+        to, subject, body = parts[0], parts[1], "|".join(parts[2:])
+        from connectors.gmail import send_new_email
+        tg_send(chat_id, f"📤 Sending to *{to}*...", "Markdown", reply_to)
+        result = send_new_email(to=to, subject=subject, body=body)
+        if result.get("ok"):
+            tg_send(chat_id,
+                f"✅ *Email sent!*\n\n*To:* {to}\n*Subject:* {subject}\n"
+                f"_Preview: {body[:100]}{'...' if len(body)>100 else ''}_",
+                "Markdown", reply_to)
+        else:
+            tg_send(chat_id, f"❌ Failed: {result.get('error')}", reply_to_message_id=reply_to)
+    else:
+        # Treat whole arg as natural language
+        from Intent_parser import parse_intent, execute_intent
+        intent = parse_intent(f"email {arg}") or {"type": "send_email",
+            "payload": {"raw": arg, "to": "", "subject": "", "body": "", "needs_llm": True}}
+        tg_send(chat_id, "📤 Composing...", reply_to_message_id=reply_to)
+        reply = execute_intent(intent) or _llm_reply(f"email {arg}")
+        tg_send(chat_id, reply, "Markdown", reply_to)
+
+
+def _cmd_draft(chat_id: int, arg: str, reply_to=None):
+    """/draft <to> | <subject> | <body>"""
+    parts = [p.strip() for p in arg.split("|")]
+    if len(parts) >= 3:
+        to, subject, body = parts[0], parts[1], "|".join(parts[2:])
+        from connectors.gmail import create_draft
+        result = create_draft(to=to, subject=subject, body=body)
+        if result.get("ok"):
+            tg_send(chat_id,
+                f"📝 *Draft saved!*\n\n*To:* {to}\n*Subject:* {subject}\n"
+                "_Open Gmail to review and send._",
+                "Markdown", reply_to)
+        else:
+            tg_send(chat_id, f"❌ Draft failed: {result.get('error')}", reply_to_message_id=reply_to)
+    else:
+        tg_send(chat_id,
+            "Usage: `/draft to@example.com | Subject | Body`", "Markdown", reply_to)
+
+
+
     arg = arg.strip().lower()
     if arg == "on":
         _set_voice(chat_id, True)
@@ -478,6 +544,10 @@ def handle_message(chat_id: int, text: str = "",
         _cmd_mpesa(chat_id, reply_to)
     elif lower.startswith("/brief"):
         _cmd_brief(chat_id, reply_to)
+    elif lower.startswith("/email"):
+        _cmd_email(chat_id, text[6:], reply_to)
+    elif lower.startswith("/draft"):
+        _cmd_draft(chat_id, text[6:], reply_to)
     elif lower.startswith("/inbox"):
         _cmd_inbox(chat_id, reply_to)
     elif lower.startswith("/replies"):
@@ -489,6 +559,18 @@ def handle_message(chat_id: int, text: str = "",
     else:
         if not _rate_ok(chat_id):
             tg_send(chat_id, "⏳ Rate limit — wait a moment.", reply_to_message_id=reply_to); return
+        # ── Intent parser first (fast, no API call) ───────────────
+        try:
+            from Intent_parser import parse_intent, execute_intent
+            intent = parse_intent(text)
+            if intent:
+                intent_reply = execute_intent(intent)
+                if intent_reply:
+                    _deliver(chat_id, intent_reply, reply_to, with_voice=_voice_on(chat_id))
+                    return
+        except Exception as e:
+            print(f"[INTENT] {e}")
+        # ── LLM fallback ──────────────────────────────────────────
         _tg_action(chat_id)
         reply = _llm_reply(text)
         _deliver(chat_id, reply, reply_to, with_voice=_voice_on(chat_id))
