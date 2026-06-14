@@ -97,7 +97,7 @@ class BrowseTool(Tool):
         "question": {"type": "str", "required": False, "desc": "Optional question to answer from the page"},
     }
 
-    def run(self, input: dict) -> dict: # type: ignore
+    def run(self, input: dict) -> dict: # pyright: ignore[reportRedeclaration]
         from connectors.browse import browse
         url      = (input.get("url") or "").strip()
         question = (input.get("question") or "").strip() or None

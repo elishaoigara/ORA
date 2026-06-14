@@ -1,10 +1,9 @@
 ﻿"""
-ORA Telegram Bot
-- Raw requests polling (no extra deps, works on Render as-is)
-- Voice in: Groq Whisper STT (uses groq already in requirements)
-- Voice out: gTTS + pydub → OGG Opus (graceful no-op if not installed)
-- /voice on|off to toggle audio replies
-- notify() safe to call from any thread at any time
+ORA Telegram Bot — raw requests polling
+Voice in: Groq Whisper STT
+Voice out: gTTS + pydub (silent fallback if libs absent)
+Browse: fetch any URL via /browse or natural language
+Email: send/draft via /email, /draft or natural language
 """
 
 import io
@@ -15,14 +14,12 @@ import requests
 from collections import defaultdict
 from datetime import datetime
 from threading import Lock
-from typing import Optional, Dict, Any, List, Tuple
-from functools import wraps
+from typing import Optional, Dict, Any, List
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GROQ_API_KEY, GROQ_MODEL_PRIMARY
 from database import save_conversation, get_conversation_history
 from context import build_system_prompt
 from groq import Groq
-
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -33,25 +30,25 @@ BASE             = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}" if TELEGR
 groq_client      = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 ALLOWED_CHAT_ID  = int(TELEGRAM_CHAT_ID) if TELEGRAM_CHAT_ID else None
 
-_RATE       = defaultdict(list)
-RATE_WINDOW = 60
-RATE_MAX    = 20
+_RATE        = defaultdict(list)
+RATE_WINDOW  = 60
+RATE_MAX     = 20
 
-_CACHE:     Dict[str, Dict[str, Any]] = {}
-_CACHE_LOCK = Lock()
-_CACHE_TTL  = 180
-_CACHE_MAX  = 100
+_CACHE:      Dict[str, Dict[str, Any]] = {}
+_CACHE_LOCK  = Lock()
+_CACHE_TTL   = 180
+_CACHE_MAX   = 100
 
 _VOICE_PREFS: Dict[int, bool] = {}
 _VOICE_LOCK   = Lock()
 
 _start_time = time.time()
 
-print(f"[TELEGRAM] token={'set' if TELEGRAM_BOT_TOKEN else 'MISSING'} allowed_chat={ALLOWED_CHAT_ID}")
+print(f"[TELEGRAM] token={'set' if TELEGRAM_BOT_TOKEN else 'MISSING'} allowed={ALLOWED_CHAT_ID}")
 
 
 # ─────────────────────────────────────────────
-# GUARDS
+# GUARDS / CACHE / PREFS
 # ─────────────────────────────────────────────
 
 def _allowed(chat_id: int) -> bool:
@@ -82,7 +79,7 @@ def _set_cache(key: str, value: str):
 
 def _voice_on(chat_id: int) -> bool:
     with _VOICE_LOCK:
-        return _VOICE_PREFS.get(chat_id, True)   # default ON
+        return _VOICE_PREFS.get(chat_id, True)
 
 def _set_voice(chat_id: int, enabled: bool):
     with _VOICE_LOCK:
@@ -90,7 +87,7 @@ def _set_voice(chat_id: int, enabled: bool):
 
 
 # ─────────────────────────────────────────────
-# RAW TELEGRAM HTTP HELPERS
+# RAW TELEGRAM HELPERS
 # ─────────────────────────────────────────────
 
 def _tg_post(endpoint: str, **kwargs) -> Optional[dict]:
@@ -109,9 +106,8 @@ def _tg_post(endpoint: str, **kwargs) -> Optional[dict]:
 def tg_send(chat_id: int, text: str, parse_mode: Optional[str] = None,
             reply_to_message_id: Optional[int] = None) -> Optional[int]:
     payload: dict = {"chat_id": chat_id, "text": text[:4000]}
-    if parse_mode:          payload["parse_mode"] = parse_mode
+    if parse_mode:           payload["parse_mode"] = parse_mode
     if reply_to_message_id: payload["reply_to_message_id"] = reply_to_message_id
-    # retry once on failure
     for _ in range(2):
         result = _tg_post("sendMessage", json=payload, timeout=15)
         if result: return result.get("message_id")
@@ -141,8 +137,7 @@ def _tg_get_updates(offset: Optional[int], timeout: int = 25) -> List[Dict]:
         data = r.json()
         if not data.get("ok"):
             desc = data.get("description", "")
-            if "Conflict" not in desc:
-                print(f"[TG POLL] {desc}")
+            if "Conflict" not in desc: print(f"[TG POLL] {desc}")
             return []
         return data.get("result", [])
     except Exception as e:
@@ -160,31 +155,26 @@ def _tg_download_file(file_id: str) -> Optional[bytes]:
 
 
 # ─────────────────────────────────────────────
-# PUBLIC NOTIFY  (called from notifier, proactive_engine, etc.)
+# PUBLIC NOTIFY
 # ─────────────────────────────────────────────
 
 def notify(text: str, is_alert: bool = False):
-    if not TELEGRAM_ENABLED or not ALLOWED_CHAT_ID:
-        return
+    if not TELEGRAM_ENABLED or not ALLOWED_CHAT_ID: return
     prefix = "🚨 " if is_alert else "📢 "
     msg    = f"{prefix}{text}"
-    # chunk if too long
     for chunk in [msg[i:i+4000] for i in range(0, len(msg), 4000)]:
         tg_send(ALLOWED_CHAT_ID, chunk)
-        if len(msg) > 4000:
-            time.sleep(0.4)
+        if len(msg) > 4000: time.sleep(0.4)
 
 
 # ─────────────────────────────────────────────
-# STT  — Groq Whisper
+# STT — Groq Whisper
 # ─────────────────────────────────────────────
 
 def _transcribe(file_id: str, duration: int = 0) -> Optional[str]:
-    if not groq_client or duration > 300:
-        return None
+    if not groq_client or duration > 300: return None
     audio = _tg_download_file(file_id)
-    if not audio:
-        return None
+    if not audio: return None
     try:
         buf = io.BytesIO(audio); buf.name = "voice.ogg"
         result = groq_client.audio.transcriptions.create(
@@ -197,7 +187,7 @@ def _transcribe(file_id: str, duration: int = 0) -> Optional[str]:
 
 
 # ─────────────────────────────────────────────
-# TTS  — gTTS → OGG Opus  (silent no-op if libs absent)
+# TTS — gTTS → OGG Opus
 # ─────────────────────────────────────────────
 
 def _tts(text: str) -> Optional[bytes]:
@@ -213,7 +203,7 @@ def _tts(text: str) -> Optional[bytes]:
             ogg, format="ogg", codec="libopus", parameters=["-vbr", "on"])
         ogg.seek(0); return ogg.read()
     except ImportError:
-        return None          # gTTS/pydub not installed — text-only
+        return None
     except Exception as e:
         print(f"[TTS] {e}"); return None
 
@@ -223,8 +213,7 @@ def _tts(text: str) -> Optional[bytes]:
 # ─────────────────────────────────────────────
 
 def _llm_reply(text: str) -> str:
-    if not groq_client:
-        return "❌ Groq API key not set."
+    if not groq_client: return "❌ Groq API key not set."
     cached = _get_cache(text)
     if cached: return cached
     try:
@@ -241,7 +230,7 @@ def _llm_reply(text: str) -> str:
         )
         reply = (resp.choices[0].message.content or "").strip() or "No response."
         _set_cache(text, reply)
-        save_conversation("user",      text[:500])
+        save_conversation("user", text[:500])
         save_conversation("assistant", reply[:500])
         return reply
     except Exception as e:
@@ -250,7 +239,7 @@ def _llm_reply(text: str) -> str:
 
 
 # ─────────────────────────────────────────────
-# DELIVER  (text always; voice if prefs + libs allow)
+# DELIVER
 # ─────────────────────────────────────────────
 
 def _deliver(chat_id: int, reply: str, reply_to: Optional[int], with_voice: bool):
@@ -272,15 +261,16 @@ def _cmd_help(chat_id, reply_to=None):
         "*Tasks:*\n/tasks — pending tasks\n/done <id> — mark complete\n\n"
         "*Goals & Finance:*\n/goals — active goals\n/mpesa — M-Pesa summary\n/brief — full brief\n\n"
         "*Inbox:*\n/inbox — Gmail status\n/replies — smart replies\n/proactive — signals\n\n"
-        "*Browse:*\n/browse <url> [question] — read any page/PDF/YouTube\n\n"
-        "*Email:*\n/email to@x.com | Subject | Body — send email\n"
-        "/draft to@x.com | Subject | Body — save draft\n"
-        "Or just say: _email john@x.com about meeting saying Hi..._\n\n"
-        "*Voice:*\n/voice on — ORA replies with voice + text\n/voice off — text only\n"
+        "*Browse:*\n`/browse <url>` — read any page/PDF/YouTube\n"
+        "`/browse <url> <question>` — answer Q from page\n\n"
+        "*Email:*\n`/email to@x.com | Subject | Body` — send\n"
+        "`/draft to@x.com | Subject | Body` — save draft\n"
+        "Or say: _email john@x.com about X saying Y_\n\n"
+        "*Voice:*\n/voice on — voice + text replies\n/voice off — text only\n"
         "🎤 Send a voice note anytime\n\n"
-        "*Utility:*\n/ping /stats /help\n\n"
-        "Or just *type or speak* anything."
+        "*Utility:*\n/ping /stats /help"
     ), "Markdown", reply_to)
+
 
 def _cmd_tasks(chat_id, reply_to=None):
     try:
@@ -299,11 +289,12 @@ def _cmd_tasks(chat_id, reply_to=None):
     except Exception as e:
         tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
 
+
 def _cmd_done(chat_id, arg: str, reply_to=None):
     try:
         task_id = int(arg.strip())
     except ValueError:
-        tg_send(chat_id, "Usage: `/done <id>`\nGet IDs with /tasks", "Markdown", reply_to); return
+        tg_send(chat_id, "Usage: `/done <id>`", "Markdown", reply_to); return
     try:
         from database import complete_task, get_tasks
         if not any(t[0] == task_id for t in get_tasks("all")):
@@ -314,6 +305,7 @@ def _cmd_done(chat_id, arg: str, reply_to=None):
         tg_send(chat_id, f"✅ Task #{task_id} done! 🎉{extra}", reply_to_message_id=reply_to)
     except Exception as e:
         tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+
 
 def _cmd_goals(chat_id, reply_to=None):
     try:
@@ -331,6 +323,7 @@ def _cmd_goals(chat_id, reply_to=None):
     except Exception as e:
         tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
 
+
 def _cmd_mpesa(chat_id, reply_to=None):
     try:
         from mpesa_engine import get_today_spend, get_average_daily_spend
@@ -344,6 +337,7 @@ def _cmd_mpesa(chat_id, reply_to=None):
     except Exception as e:
         tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
 
+
 def _cmd_brief(chat_id, reply_to=None):
     _tg_action(chat_id)
     try:
@@ -354,6 +348,7 @@ def _cmd_brief(chat_id, reply_to=None):
             if i > 0: time.sleep(0.4)
     except Exception as e:
         tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+
 
 def _cmd_inbox(chat_id, reply_to=None):
     try:
@@ -370,6 +365,7 @@ def _cmd_inbox(chat_id, reply_to=None):
     except Exception as e:
         tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
 
+
 def _cmd_replies(chat_id, reply_to=None):
     try:
         from connectors.gmail import get_pending_replies
@@ -385,6 +381,7 @@ def _cmd_replies(chat_id, reply_to=None):
         tg_send(chat_id, "\n".join(lines), "Markdown", reply_to)
     except Exception as e:
         tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
+
 
 def _cmd_proactive(chat_id, reply_to=None):
     try:
@@ -407,6 +404,7 @@ def _cmd_proactive(chat_id, reply_to=None):
     except Exception as e:
         tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
 
+
 def _cmd_stats(chat_id, reply_to=None):
     try:
         from database import get_conversation_history, get_tasks
@@ -420,34 +418,52 @@ def _cmd_stats(chat_id, reply_to=None):
     except Exception as e:
         tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
 
+
+def _cmd_voice(chat_id, arg: str, reply_to=None):
+    arg = arg.strip().lower()
+    if arg == "on":
+        _set_voice(chat_id, True)
+        tg_send(chat_id, "🔊 Voice replies ON.", reply_to_message_id=reply_to)
+    elif arg == "off":
+        _set_voice(chat_id, False)
+        tg_send(chat_id, "🔇 Voice replies OFF — text only.", reply_to_message_id=reply_to)
+    else:
+        status = "ON 🔊" if _voice_on(chat_id) else "OFF 🔇"
+        tg_send(chat_id, f"Voice replies: *{status}*\n\n`/voice on` or `/voice off`",
+                "Markdown", reply_to)
+
+
 def _cmd_browse(chat_id: int, arg: str, reply_to=None):
     """
-    /browse <url> [question]
-    e.g. /browse https://news.ycombinator.com
-         /browse https://example.com/paper.pdf what are the conclusions?
+    /browse <url> [optional question]
+    /browse https://example.com
+    /browse https://example.com/paper.pdf what are the conclusions?
     """
     arg = arg.strip()
     if not arg:
         tg_send(chat_id,
             "🌐 *Browse any URL:*\n\n"
-            "`/browse https://example.com` — summarise page\n"
-            "`/browse https://example.com/paper.pdf what are the key findings?` — answer a question\n\n"
-            "Also works naturally:\n"
-            "_read https://techcrunch.com_\n"
-            "_summarise https://arxiv.org/abs/xxxx_",
+            "`/browse https://example.com`\n"
+            "`/browse https://site.com/paper.pdf what are the key findings?`\n\n"
+            "Works with: web pages, PDFs, YouTube videos\n"
+            "Also natural language: _read https://techcrunch.com_",
             "Markdown", reply_to)
         return
 
-    # Split URL from optional question
-    parts  = arg.split(None, 1)
-    url    = parts[0]
+    parts    = arg.split(None, 1)
+    url      = parts[0]
     question = parts[1].strip() if len(parts) > 1 else None
 
     tg_send(chat_id, f"🌐 Fetching _{url}_...", "Markdown", reply_to)
     _tg_action(chat_id)
 
-    from connectors.browse import browse
-    result = browse(url, question=question)
+    try:
+        from connectors.browse import browse
+        result = browse(url, question=question)
+    except Exception as e:
+        tg_send(chat_id, f"❌ Browse error: {str(e)[:200]}", reply_to_message_id=reply_to)
+        print(f"[BROWSE CMD] {traceback.format_exc()}")
+        return
 
     if not result.get("ok"):
         tg_send(chat_id, f"❌ {result.get('error', 'Could not load page')}",
@@ -465,86 +481,75 @@ def _cmd_browse(chat_id: int, arg: str, reply_to=None):
     body   = f"*Q: {question}*\n\n{summary}" if question else summary
     full   = header + body + footer
 
-    # Chunk if too long
     for i, chunk in enumerate([full[j:j+4000] for j in range(0, len(full), 4000)]):
         tg_send(chat_id, chunk, "Markdown", reply_to if i == 0 else None)
+        if i > 0: time.sleep(0.3)
 
 
-
+def _cmd_email(chat_id: int, arg: str, reply_to=None):
     """
-    /email <to> | <subject> | <body>
-    e.g. /email john@x.com | Meeting tomorrow | Hi John, just confirming...
-    Also handles natural language via intent parser.
+    /email to@x.com | Subject | Body
+    or natural language: /email john@x.com about meeting saying Hi...
     """
     arg = arg.strip()
     if not arg:
         tg_send(chat_id,
             "📧 *Send an email:*\n\n"
-            "Two ways:\n\n"
-            "*1. Pipe format:*\n"
-            "`/email to@example.com | Subject here | Body of the email`\n\n"
-            "*2. Natural language:*\n"
-            "`email john@gmail.com about the meeting saying Hi John, see you at 3pm`\n\n"
-            "*To save as draft instead:*\n"
-            "`draft email to john@gmail.com about Budget saying...`",
+            "*Pipe format:*\n`/email to@example.com | Subject | Body`\n\n"
+            "*Natural language:*\n`email john@gmail.com about the meeting saying Hi John`\n\n"
+            "*Save as draft:*\n`/draft to@x.com | Subject | Body`",
             "Markdown", reply_to)
         return
 
-    # Pipe format: to | subject | body
     parts = [p.strip() for p in arg.split("|")]
     if len(parts) >= 3:
         to, subject, body = parts[0], parts[1], "|".join(parts[2:])
-        from connectors.gmail import send_new_email
         tg_send(chat_id, f"📤 Sending to *{to}*...", "Markdown", reply_to)
-        result = send_new_email(to=to, subject=subject, body=body)
-        if result.get("ok"):
-            tg_send(chat_id,
-                f"✅ *Email sent!*\n\n*To:* {to}\n*Subject:* {subject}\n"
-                f"_Preview: {body[:100]}{'...' if len(body)>100 else ''}_",
-                "Markdown", reply_to)
-        else:
-            tg_send(chat_id, f"❌ Failed: {result.get('error')}", reply_to_message_id=reply_to)
+        try:
+            from connectors.gmail import send_new_email
+            result = send_new_email(to=to, subject=subject, body=body)
+            if result.get("ok"):
+                tg_send(chat_id,
+                    f"✅ *Email sent!*\n\n*To:* {to}\n*Subject:* {subject}\n"
+                    f"_Preview: {body[:100]}{'...' if len(body)>100 else ''}_",
+                    "Markdown", reply_to)
+            else:
+                tg_send(chat_id, f"❌ Failed: {result.get('error')}", reply_to_message_id=reply_to)
+        except Exception as e:
+            tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
     else:
-        # Treat whole arg as natural language
-        from Intent_parser import parse_intent, execute_intent
-        intent = parse_intent(f"email {arg}") or {"type": "send_email",
-            "payload": {"raw": arg, "to": "", "subject": "", "body": "", "needs_llm": True}}
-        tg_send(chat_id, "📤 Composing...", reply_to_message_id=reply_to)
-        reply = execute_intent(intent) or _llm_reply(f"email {arg}")
-        tg_send(chat_id, reply, "Markdown", reply_to)
+        try:
+            from Intent_parser import parse_intent, execute_intent
+            intent = parse_intent(f"email {arg}") or {
+                "type": "send_email",
+                "payload": {"raw": arg, "to": "", "subject": "", "body": "", "needs_llm": True}
+            }
+            tg_send(chat_id, "📤 Composing...", reply_to_message_id=reply_to)
+            reply_text = execute_intent(intent) or _llm_reply(f"email {arg}")
+            tg_send(chat_id, reply_text, "Markdown", reply_to)
+        except Exception as e:
+            tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
 
 
 def _cmd_draft(chat_id: int, arg: str, reply_to=None):
-    """/draft <to> | <subject> | <body>"""
-    parts = [p.strip() for p in arg.split("|")]
+    """/draft to@x.com | Subject | Body"""
+    parts = [p.strip() for p in arg.strip().split("|")]
     if len(parts) >= 3:
         to, subject, body = parts[0], parts[1], "|".join(parts[2:])
-        from connectors.gmail import create_draft
-        result = create_draft(to=to, subject=subject, body=body)
-        if result.get("ok"):
-            tg_send(chat_id,
-                f"📝 *Draft saved!*\n\n*To:* {to}\n*Subject:* {subject}\n"
-                "_Open Gmail to review and send._",
-                "Markdown", reply_to)
-        else:
-            tg_send(chat_id, f"❌ Draft failed: {result.get('error')}", reply_to_message_id=reply_to)
+        try:
+            from connectors.gmail import create_draft
+            result = create_draft(to=to, subject=subject, body=body)
+            if result.get("ok"):
+                tg_send(chat_id,
+                    f"📝 *Draft saved!*\n\n*To:* {to}\n*Subject:* {subject}\n"
+                    "_Open Gmail to review and send._",
+                    "Markdown", reply_to)
+            else:
+                tg_send(chat_id, f"❌ Draft failed: {result.get('error')}", reply_to_message_id=reply_to)
+        except Exception as e:
+            tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
     else:
-        tg_send(chat_id,
-            "Usage: `/draft to@example.com | Subject | Body`", "Markdown", reply_to)
-
-
-
-    arg = arg.strip().lower()
-    if arg == "on":
-        _set_voice(chat_id, True)
-        tg_send(chat_id, "🔊 Voice replies ON — ORA will send audio notes.", reply_to_message_id=reply_to)
-    elif arg == "off":
-        _set_voice(chat_id, False)
-        tg_send(chat_id, "🔇 Voice replies OFF — text only.", reply_to_message_id=reply_to)
-    else:
-        status = "ON 🔊" if _voice_on(chat_id) else "OFF 🔇"
-        tg_send(chat_id, f"Voice replies: *{status}*\n\n`/voice on` or `/voice off`",
-                "Markdown", reply_to)
+        tg_send(chat_id, "Usage: `/draft to@example.com | Subject | Body`", "Markdown", reply_to)
 
 
 # ─────────────────────────────────────────────
@@ -562,12 +567,12 @@ def handle_message(chat_id: int, text: str = "",
         _tg_action(chat_id)
         transcript = _transcribe(voice.get("file_id", ""), voice.get("duration", 0))
         if not transcript:
-            tg_send(chat_id, "❌ Couldn't transcribe. Try again or type your message.",
+            tg_send(chat_id, "❌ Couldn't transcribe. Try again or type.",
                     reply_to_message_id=reply_to)
             return
         tg_send(chat_id, f"🎤 _{transcript}_", "Markdown", reply_to)
         if not _rate_ok(chat_id):
-            tg_send(chat_id, "⏳ Rate limit — wait a moment.", reply_to_message_id=reply_to); return
+            tg_send(chat_id, "⏳ Rate limit.", reply_to_message_id=reply_to); return
         reply = _llm_reply(transcript)
         _deliver(chat_id, reply, reply_to, with_voice=True)
         return
@@ -577,42 +582,27 @@ def handle_message(chat_id: int, text: str = "",
     lower = text.lower()
     if not text: return
 
-    if lower.startswith("/start"):
-        tg_send(chat_id, "🤖 ORA online. /help for commands.", reply_to_message_id=reply_to)
-    elif lower.startswith("/ping"):
-        tg_send(chat_id, "🏓 pong!", reply_to_message_id=reply_to)
-    elif lower.startswith("/help"):
-        _cmd_help(chat_id, reply_to)
-    elif lower.startswith("/voice"):
-        _cmd_voice(chat_id, text[6:], reply_to)
-    elif lower.startswith("/tasks"):
-        _cmd_tasks(chat_id, reply_to)
-    elif lower.startswith("/done"):
-        _cmd_done(chat_id, text[5:], reply_to)
-    elif lower.startswith("/goals"):
-        _cmd_goals(chat_id, reply_to)
-    elif lower.startswith("/mpesa"):
-        _cmd_mpesa(chat_id, reply_to)
-    elif lower.startswith("/brief"):
-        _cmd_brief(chat_id, reply_to)
-    elif lower.startswith("/browse"):
-        _cmd_browse(chat_id, text[7:], reply_to)
-    elif lower.startswith("/email"):
-        _cmd_email(chat_id, text[6:], reply_to)
-    elif lower.startswith("/draft"):
-        _cmd_draft(chat_id, text[6:], reply_to)
-    elif lower.startswith("/inbox"):
-        _cmd_inbox(chat_id, reply_to)
-    elif lower.startswith("/replies"):
-        _cmd_replies(chat_id, reply_to)
-    elif lower.startswith("/proactive"):
-        _cmd_proactive(chat_id, reply_to)
-    elif lower.startswith("/stats"):
-        _cmd_stats(chat_id, reply_to)
+    # Commands — order matters, more specific first
+    if   lower.startswith("/start"):     tg_send(chat_id, "🤖 ORA online. /help for commands.", reply_to_message_id=reply_to)
+    elif lower.startswith("/ping"):      tg_send(chat_id, "🏓 pong!", reply_to_message_id=reply_to)
+    elif lower.startswith("/help"):      _cmd_help(chat_id, reply_to)
+    elif lower.startswith("/voice"):     _cmd_voice(chat_id, text[6:], reply_to)
+    elif lower.startswith("/tasks"):     _cmd_tasks(chat_id, reply_to)
+    elif lower.startswith("/done"):      _cmd_done(chat_id, text[5:], reply_to)
+    elif lower.startswith("/goals"):     _cmd_goals(chat_id, reply_to)
+    elif lower.startswith("/mpesa"):     _cmd_mpesa(chat_id, reply_to)
+    elif lower.startswith("/brief"):     _cmd_brief(chat_id, reply_to)
+    elif lower.startswith("/browse"):    _cmd_browse(chat_id, text[7:], reply_to)
+    elif lower.startswith("/email"):     _cmd_email(chat_id, text[6:], reply_to)
+    elif lower.startswith("/draft"):     _cmd_draft(chat_id, text[6:], reply_to)
+    elif lower.startswith("/inbox"):     _cmd_inbox(chat_id, reply_to)
+    elif lower.startswith("/replies"):   _cmd_replies(chat_id, reply_to)
+    elif lower.startswith("/proactive"): _cmd_proactive(chat_id, reply_to)
+    elif lower.startswith("/stats"):     _cmd_stats(chat_id, reply_to)
     else:
         if not _rate_ok(chat_id):
             tg_send(chat_id, "⏳ Rate limit — wait a moment.", reply_to_message_id=reply_to); return
-        # ── Intent parser first (fast, no API call) ───────────────
+        # Intent parser first (fast, zero API cost)
         try:
             from Intent_parser import parse_intent, execute_intent
             intent = parse_intent(text)
@@ -623,7 +613,7 @@ def handle_message(chat_id: int, text: str = "",
                     return
         except Exception as e:
             print(f"[INTENT] {e}")
-        # ── LLM fallback ──────────────────────────────────────────
+        # LLM fallback
         _tg_action(chat_id)
         reply = _llm_reply(text)
         _deliver(chat_id, reply, reply_to, with_voice=_voice_on(chat_id))
@@ -634,16 +624,10 @@ def handle_message(chat_id: int, text: str = "",
 # ─────────────────────────────────────────────
 
 def run_telegram_bot():
-    """
-    Long-poll loop. Called from api.py lifespan in a daemon thread.
-    Never raises — loops forever until process exits.
-    """
     if not TELEGRAM_ENABLED:
         print("[TELEGRAM] No token — bot disabled"); return
-
     print("[TELEGRAM] Starting long-poll loop")
     offset: Optional[int] = None
-
     while True:
         try:
             updates = _tg_get_updates(offset, timeout=25)
@@ -665,7 +649,7 @@ def run_telegram_bot():
             print("[TELEGRAM] Shutting down"); break
         except Exception as e:
             print(f"[TELEGRAM LOOP] {e}\n{traceback.format_exc()}")
-            time.sleep(5)   # brief pause then keep looping — don't die
+            time.sleep(5)
 
 
 if __name__ == "__main__":
