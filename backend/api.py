@@ -108,16 +108,20 @@ async def lifespan(app: FastAPI):
         print("[SCHEDULER ERROR]")
         print(traceback.format_exc())
 
-    # ── Telegram bot thread (PTB async — handles reconnects internally) ────────
+    # ── Telegram bot thread ────────────────────────────────────────────────────
     try:
         from config import TELEGRAM_BOT_TOKEN
         if TELEGRAM_BOT_TOKEN:
             def _tg():
-                try:
-                    from telegram_bot import run_telegram_bot
-                    run_telegram_bot()   # PTB run_polling — blocks until process exits
-                except Exception as e:
-                    print(f"[TELEGRAM ERROR] {e}\n{traceback.format_exc()}")
+                delay = 5
+                while True:
+                    try:
+                        from telegram_bot import run_telegram_bot
+                        run_telegram_bot()   # blocks; only returns on crash
+                    except Exception as e:
+                        print(f"[TELEGRAM ERROR] {e}\n{traceback.format_exc()}")
+                    time.sleep(delay)
+                    delay = min(delay * 2, 60)   # backoff up to 60s
             threading.Thread(target=_tg, daemon=True, name="telegram-bot").start()
     except Exception:
         print(traceback.format_exc())

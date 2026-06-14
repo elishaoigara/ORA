@@ -5,7 +5,14 @@ Render free-tier safe — no new threads, FCM is a plain HTTP call.
 
 import time
 from datetime import datetime
-from telegram_bot import notify as telegram_notify
+
+def telegram_notify(text: str, is_alert: bool = False):
+    """Lazy wrapper — imports at call time so a telegram_bot import error never kills the scheduler."""
+    try:
+        from telegram_bot import notify
+        notify(text, is_alert=is_alert)
+    except Exception as e:
+        print(f"[NOTIFIER] telegram_notify failed: {e}")
 
 _sent_today: set = set()
 _last_check: float = 0
