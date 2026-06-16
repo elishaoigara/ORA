@@ -157,7 +157,7 @@ def get_weather() -> Optional[dict]:
     # 1. Open-Meteo (free, no key)
     try:
         result = _fetch_open_meteo()
-        print(f"[WEATHER] Open-Meteo: {result['temp']}°C {result['condition']}")
+        print(f"[WEATHER] Open-Meteo: {result['temp']}°C {result['condition']}") # pyright: ignore[reportOptionalSubscript]
     except Exception as e:
         print(f"[WEATHER] Open-Meteo failed: {e}")
 
@@ -209,11 +209,20 @@ def get_weather_summary() -> str:
     )
 
 
+_forecast_cache: list = []
+_forecast_cache_ts: float = 0.0
+_FORECAST_TTL = 1800   # 30 min cache
+
+
 def get_weather_forecast(hours: int = 6) -> list[dict]:
     """
     Get hourly forecast for the next N hours.
-    Used by the weather monitor to detect incoming rain/storms.
+    Cached for 30 minutes to avoid Open-Meteo rate limits.
     """
+    global _forecast_cache, _forecast_cache_ts
+    import time as _t
+    if _forecast_cache and _t.time() - _forecast_cache_ts < _FORECAST_TTL:
+        return _forecast_cache
     try:
         resp = requests.get(
             f"https://api.open-meteo.com/v1/forecast"
@@ -253,10 +262,12 @@ def get_weather_forecast(hours: int = 6) -> list[dict]:
                 })
             except Exception:
                 continue
+        _forecast_cache    = result
+        _forecast_cache_ts = _t.time()
         return result
     except Exception as e:
         print(f"[WEATHER] forecast failed: {e}")
-        return []
+        return _forecast_cache   # return stale cache on failure rather than empty
 
     """
     Multi-line detail for /weather command.

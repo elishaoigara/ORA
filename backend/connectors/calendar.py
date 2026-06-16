@@ -83,6 +83,11 @@ def _headers() -> dict:
             "Content-Type": "application/json"}
 
 
+def _safe_cal_id(cid: str) -> str:
+    from urllib.parse import quote
+    return quote(cid, safe="")
+
+
 def _cal_get(path: str, params: dict | None = None) -> dict:
     r = requests.get(f"{CALENDAR_BASE}/{path}",
                      headers=_headers(), params=params or {}, timeout=10)
@@ -178,7 +183,8 @@ def get_upcoming_events(
 
         for cid in cal_ids:
             try:
-                data   = _cal_get(f"calendars/{cid}/events", params)
+                safe_cid = _safe_cal_id(cid)
+                data   = _cal_get(f"calendars/{safe_cid}/events", params)
                 events = [_parse_event(i) for i in data.get("items", [])]
                 for ev in events:
                     eid = ev.get("id", "")
@@ -290,7 +296,7 @@ def create_event(
         else:
             body["reminders"] = {"useDefault": True}
 
-        result = _cal_post(f"calendars/{calendar_id}/events", body)
+        result = _cal_post(f"calendars/{_safe_cal_id(calendar_id)}/events", body)
         event  = _parse_event(result)
         print(f"[CALENDAR] Created: {title} @ {start}")
         return {"ok": True, "event": event}
@@ -332,7 +338,7 @@ def update_event(
         if not patch:
             return {"ok": False, "error": "No fields to update"}
 
-        result = _cal_patch(f"calendars/{calendar_id}/events/{event_id}", patch)
+        result = _cal_patch(f"calendars/{_safe_cal_id(calendar_id)}/events/{event_id}", patch)
         event  = _parse_event(result)
         print(f"[CALENDAR] Updated event {event_id}")
         return {"ok": True, "event": event}
@@ -350,7 +356,7 @@ def delete_event(
     if not is_authorized():
         return {"ok": False, "error": "Google not authorized"}
     try:
-        ok = _cal_delete(f"calendars/{calendar_id}/events/{event_id}")
+        ok = _cal_delete(f"calendars/{_safe_cal_id(calendar_id)}/events/{event_id}")
         print(f"[CALENDAR] Deleted event {event_id}: {ok}")
         return {"ok": ok}
     except Exception as e:
