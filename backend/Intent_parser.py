@@ -82,6 +82,19 @@ _INTENTS = [
          r"|catch me up|what's going on|morning brief|evening brief)\b",
          re.I
      )),
+    ("whatsapp",
+     re.compile(
+         r"\b(whatsapp|watsapp)\b"
+         r"|\b(send.*message|message.*to)\s+\w+"
+         r"|\b(open|read|show|check)\s+(message|msg|chat)\s*(from|by)?\s*\w+"
+         r"|\bwho\s*(messaged|texted|chatted|sent)\b"
+         r"|\bany\s*(messages?|texts?|chats?)\b"
+         r"|\b(my\s*)?(inbox|messages?|texts?)\b.{0,20}\b(unread|new|latest|recent)\b"
+         r"|\b(unread|new)\b.{0,20}\b(messages?|texts?|chats?)\b"
+         r"|\breply\s+to\s+\w+"
+         r"|\btext\s+\w+\s+saying\b",
+         re.I
+     )),
     ("schedule_event",
      re.compile(
          r"\b(schedule|create|add|book|set up|block|put|remind me)\b.{0,40}"
@@ -184,6 +197,7 @@ def execute_intent(intent: dict) -> str:
     payload = intent["payload"]
     try:
         dispatch = {
+            "whatsapp":       lambda: _do_whatsapp(payload),
             "schedule_event": lambda: _do_schedule_event(payload),
             "delete_event":   lambda: _do_delete_event(payload),
             "free_slot":      lambda: _do_free_slot(payload),
@@ -275,6 +289,41 @@ def _extract_payload(intent_name: str, text: str) -> dict:
             content_type = "thread"
             
         return {"topic": topic or text[:150], "type": content_type}
+
+    if intent_name == "whatsapp":
+        tl = text.lower()
+
+        # Send patterns: "text/message/whatsapp <name> saying <msg>"
+        send_match = re.search(
+            r"\b(?:send|text|message|whatsapp)\s+([\w\s]{1,30?})\s+saying\s+(.+)$"
+            r"|\b(?:tell|let)\s+([\w\s]{1,20?})\s+(?:that|to)\s+(.+)$",
+            text, re.I
+        )
+        if send_match:
+            to  = (send_match.group(1) or send_match.group(3) or "").strip()
+            msg = (send_match.group(2) or send_match.group(4) or "").strip()
+            return {"action": "send", "to": to, "message": msg, "raw": text[:300]}
+
+        # Read patterns: "open/read/show message from <name>"
+        read_match = re.search(
+            r"\b(?:open|read|show|check)\s+(?:message|msg|chat)s?\s+(?:from|by|with)\s+([\w\s]{1,25})",
+            text, re.I
+        )
+        if read_match:
+            contact = read_match.group(1).strip()
+            return {"action": "read", "contact": contact, "raw": text[:300]}
+
+        # "reply to <name>"
+        reply_match = re.search(r"\breply\s+(?:to\s+)?([\w\s]{1,25})", text, re.I)
+        if reply_match:
+            contact = reply_match.group(1).strip()
+            return {"action": "reply", "contact": contact, "raw": text[:300]}
+
+        # Unread check
+        if any(w in tl for w in ["unread", "new message", "who messaged", "any message", "check message"]):
+            return {"action": "unread", "contact": "", "raw": text[:300]}
+
+        return {"action": "read", "contact": "", "raw": text[:300]}
 
     if intent_name == "schedule_event":
         return {"raw": text[:300]}
@@ -638,6 +687,49 @@ def _do_create_content(payload: dict) -> str:
 
 
 # ── NEW: Gmail Reply Executor ─────────────────────────────
+def _do_whatsapp(payload: dict) -> str:
+    action  = payload.get("action", "read")
+    contact = payload.get("contact", "").strip()
+    try:
+        from connectors.whatsapp import (
+            get_messages, send_message, format_messages_summary,
+            is_connected, format_unread_summary, draft_reply
+        )
+        if action == "send":
+            to  = payload.get("to", "").strip()
+            msg = payload.get("message", "").strip()
+            if not to or not msg:
+                return "❌ Who should I message and what should I say? Try: _text Wanjiku saying hey!_"
+            if not is_connected():
+                return "❌ WhatsApp not connected. Check /wa status."
+            result = send_message(to, msg)
+            return f"✅ WhatsApp sent to *{to}*" if result.get("ok") else f"❌ Failed: {result.get('error')}"
+
+        if action == "unread":
+            summary = format_unread_summary()
+            return summary or "✅ No unread WhatsApp messages."
+
+        if action == "reply":
+            msgs = get_messages(limit=3, contact=contact).get("messages", [])
+            if not msgs:
+                return f"❌ No recent messages from *{contact}*."
+            draft = draft_reply(msgs[0], tone="friendly")
+            if not draft:
+                return "❌ Could not draft a reply."
+            return (f"📝 *Draft reply to {msgs[0].get('fromName', contact)}:*\n\n_{draft}_\n\n"
+                    f"To send: `/wa send {contact} | {draft[:60]}...`")
+
+        # read action
+        result = get_messages(limit=10, contact=contact)
+        msgs   = result.get("messages", [])
+        header = f"from *{contact}*" if contact else "recent"
+        if not msgs:
+            return f"📱 No WhatsApp messages {header}."
+        return f"📱 *WhatsApp {header}:*\n\n{format_messages_summary(msgs)}"
+    except Exception as e:
+        return f"❌ WhatsApp error: {str(e)[:100]}"
+
+
 def _do_schedule_event(payload: dict) -> str:
     """Natural language → create Google Calendar event via quick_event()."""
     raw = payload.get("raw", "").strip()
@@ -741,7 +833,7 @@ def _do_free_slot(payload: dict) -> str:
             except Exception:
                 target = today
 
-        slots = find_free_slot(target_date=target) # pyright: ignore[reportCallIssue]
+        slots = find_free_slot(target_date=target)
         if not slots:
             return f"📅 No free slots found on {target.strftime('%A %d %B')}."
 
