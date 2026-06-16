@@ -174,6 +174,16 @@ async def lifespan(app: FastAPI):
             except Exception:
                 print(f"[WA MORNING] {traceback.format_exc()}")
 
+        def wa_ping():
+            """Ping WhatsApp sidecar every 10 min to prevent Render free tier sleep."""
+            try:
+                import os as _os
+                wa_url = _os.getenv("WA_SIDECAR_URL", "")
+                if wa_url:
+                    requests.get(f"{wa_url}/health", timeout=5)
+            except Exception:
+                pass
+
         start_scheduler([
             # Core agent loop
             {"trigger": "interval", "minutes": 10,  "fn": run_agent_cycle,             "name": "agent_loop"},
@@ -190,6 +200,7 @@ async def lifespan(app: FastAPI):
             {"trigger": "interval", "minutes": 30, "fn": sync_drive,                   "name": "drive_sync"},
             {"trigger": "interval", "minutes": 15, "fn": sync_gmail,                   "name": "gmail_sync"},
             {"trigger": "interval", "minutes": 30, "fn": weather_monitor,              "name": "weather_monitor"},
+            {"trigger": "interval", "minutes": 10, "fn": wa_ping,                       "name": "wa_ping"},
             {"trigger": "cron",     "hour": 8, "minute": 30, "fn": wa_morning_summary, "name": "wa_morning_summary"},
         ])
         print("[ORA] Scheduler started")
