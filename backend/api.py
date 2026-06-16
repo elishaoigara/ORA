@@ -236,24 +236,15 @@ async def wa_incoming(request: Request):
 
     try:
         msg  = await request.json()
-        body = (msg.get("body") or "").lower()
         name = msg.get("fromName") or msg.get("from", "?")
-        text = msg.get("body", "")
-        grp  = f"[{msg['groupName']}] " if msg.get("isGroup") else ""
 
-        # Check importance
-        is_important = any(kw in body for kw in _WA_IMPORTANT_KEYWORDS)
-
-        # Always notify for DMs; notify groups only if important
-        should_notify = (not msg.get("isGroup")) or is_important
-
-        if should_notify:
-            try:
-                from telegram_bot import notify
-                flag = "🚨" if is_important else "📱"
-                notify(f"{flag} *WhatsApp* from {grp}*{name}*:\n{text[:300]}")
-            except Exception as e:
-                print(f"[WA WEBHOOK] Telegram notify failed: {e}")
+        # Privacy mode — never show message content in Telegram notification
+        # Just alert that someone messaged, user can /wa read to see content
+        try:
+            from telegram_bot import notify
+            notify(f"📱 *WhatsApp* from *{name}*\n_Use /wa messages to read_")
+        except Exception as e:
+            print(f"[WA WEBHOOK] Telegram notify failed: {e}")
 
         return JSONResponse({"ok": True})
     except Exception as e:
