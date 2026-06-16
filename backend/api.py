@@ -19,6 +19,7 @@ from typing import Any, Optional
 import psutil
 import requests
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
@@ -157,6 +158,22 @@ async def lifespan(app: FastAPI):
             except Exception:
                 print(f"[WEATHER MONITOR] {traceback.format_exc()}")
 
+        def wa_morning_summary():
+            """
+            Runs at 8:30am EAT. Sends a WhatsApp unread summary to Telegram.
+            Only fires if there are unread messages.
+            """
+            try:
+                from connectors.whatsapp import format_unread_summary, is_connected
+                from intelligence.notifier import dual_notify
+                if not is_connected():
+                    return
+                summary = format_unread_summary()
+                if summary:
+                    dual_notify(title="", body=summary)
+            except Exception:
+                print(f"[WA MORNING] {traceback.format_exc()}")
+
         start_scheduler([
             # Core agent loop
             {"trigger": "interval", "minutes": 10,  "fn": run_agent_cycle,             "name": "agent_loop"},
@@ -173,6 +190,7 @@ async def lifespan(app: FastAPI):
             {"trigger": "interval", "minutes": 30, "fn": sync_drive,                   "name": "drive_sync"},
             {"trigger": "interval", "minutes": 15, "fn": sync_gmail,                   "name": "gmail_sync"},
             {"trigger": "interval", "minutes": 30, "fn": weather_monitor,              "name": "weather_monitor"},
+            {"trigger": "cron",     "hour": 8, "minute": 30, "fn": wa_morning_summary, "name": "wa_morning_summary"},
         ])
         print("[ORA] Scheduler started")
     except Exception:
@@ -200,6 +218,49 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ORA Backend", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
+
+# ── WhatsApp incoming webhook (called by Baileys sidecar) ─────────────────────
+_WA_INTERNAL_TOKEN = os.getenv("ORA_INTERNAL_TOKEN", "ora-internal-change-me")
+
+# Keywords that make a WA message "important" — triggers Telegram alert
+_WA_IMPORTANT_KEYWORDS = [
+    "urgent", "emergency", "asap", "help", "call me", "important",
+    "haraka", "saidia", "piga simu",   # Swahili
+]
+
+@app.post("/api/whatsapp/incoming")
+async def wa_incoming(request: Request):
+    token = request.headers.get("X-ORA-Token", "")
+    if token != _WA_INTERNAL_TOKEN:
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+
+    try:
+        msg  = await request.json()
+        body = (msg.get("body") or "").lower()
+        name = msg.get("fromName") or msg.get("from", "?")
+        text = msg.get("body", "")
+        grp  = f"[{msg['groupName']}] " if msg.get("isGroup") else ""
+
+        # Check importance
+        is_important = any(kw in body for kw in _WA_IMPORTANT_KEYWORDS)
+
+        # Always notify for DMs; notify groups only if important
+        should_notify = (not msg.get("isGroup")) or is_important
+
+        if should_notify:
+            try:
+                from telegram_bot import notify
+                flag = "🚨" if is_important else "📱"
+                notify(f"{flag} *WhatsApp* from {grp}*{name}*:\n{text[:300]}")
+            except Exception as e:
+                print(f"[WA WEBHOOK] Telegram notify failed: {e}")
+
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        print(f"[WA WEBHOOK] Error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 
 try:
     from api_calendar_routes import router as calendar_router

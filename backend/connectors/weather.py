@@ -150,14 +150,14 @@ def get_weather() -> Optional[dict]:
 
     now = time.time()
     if _cache and now - _cache.get("_ts", 0) < CACHE_TTL:
-        return _cache
+        return {k: v for k, v in _cache.items() if not k.startswith("_")}
 
     result = None
 
     # 1. Open-Meteo (free, no key)
     try:
         result = _fetch_open_meteo()
-        print(f"[WEATHER] Open-Meteo: {result['temp']}°C {result['condition']}") # type: ignore
+        print(f"[WEATHER] Open-Meteo: {result['temp']}°C {result['condition']}")
     except Exception as e:
         print(f"[WEATHER] Open-Meteo failed: {e}")
 
@@ -173,6 +173,8 @@ def get_weather() -> Optional[dict]:
     if result:
         result["_ts"] = now
         _cache = result
+        # Return a clean copy without internal cache keys
+        return {k: v for k, v in result.items() if not k.startswith("_")}
 
     return result
 
