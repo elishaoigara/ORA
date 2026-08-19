@@ -19,7 +19,9 @@ npm install
 npm run dev
 ```
 
-The deployment definition in `render.yaml` starts the backend with `uvicorn api:app` and serves the Vite build as a static site.
+The legacy deployment definition in `render.yaml` starts the backend with `uvicorn api:app` and serves the Vite build as a static site. The recommended production layout keeps the frontend on Vercel and runs the backend from `Dockerfile` with `docker-compose.prod.yml`, using a persistent `ora-data` volume.
+
+For a zero-monthly-cost cloud deployment, see [`deploy/oci/README.md`](deploy/oci/README.md) for the Oracle Cloud Always Free workflow. The root [`Dockerfile`](Dockerfile) and [`docker-compose.prod.yml`](docker-compose.prod.yml) are also portable to a VPS or managed container platform.
 
 ## Environment configuration
 
@@ -52,4 +54,4 @@ npm --prefix frontend run lint
 npm --prefix frontend run build
 ```
 
-The repository ignores environment files, generated SQLite/Chroma data, Python caches, frontend dependencies, and build output. The local copies of previously tracked runtime artifacts are preserved on disk but are no longer part of the source tree.
+The repository ignores environment files, generated SQLite/Chroma data, Python caches, frontend dependencies, and build output. The local copies of previously tracked runtime artifacts are preserved on disk but are no longer part of the source tree. Use `.env.production.example` for the backend host and `frontend/.env.example` for Vercel.

@@ -1,0 +1,50 @@
+services:
+  ora-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ora-backend:latest
+    container_name: ora-backend
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      PORT: "8000"
+      ORA_DATA_DIR: /opt/ora-data
+      TZ: Africa/Nairobi
+    volumes:
+      - ora-data:/opt/ora-data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: ora-caddy
+    restart: unless-stopped
+    profiles: ["https"]
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      ora-backend:
+        condition: service_healthy
+
+volumes:
+  ora-data:
+    name: ora-data
+  caddy-data:
+    name: ora-caddy-data
+  caddy-config:
+    name: ora-caddy-config
