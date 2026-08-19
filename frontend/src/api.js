@@ -1,6 +1,17 @@
 const BASE_URL =
   import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
   "https://ora-oovf.onrender.com";
+const API_TOKEN = import.meta.env.VITE_ORA_API_TOKEN || "";
+
+export function apiFetch(path, options = {}) {
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  const headers = {
+    ...(API_TOKEN ? { "X-ORA-Token": API_TOKEN } : {}),
+    ...(options.headers || {}),
+  };
+
+  return fetch(`${BASE_URL}${cleanPath}`, { ...options, headers });
+}
 
 /* =========================
    CORE REQUEST HELPER
@@ -8,7 +19,7 @@ const BASE_URL =
 async function request(path, options = {}) {
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
 
-  const res = await fetch(`${BASE_URL}/api${cleanPath}`, {
+  const res = await apiFetch(`/api${cleanPath}`, {
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
@@ -36,15 +47,17 @@ export const getGoals = () => request("/goals");
 export const getCalendarToday = () => request("/calendar/today");
 
 export const getMpesaSummary = () => request("/mpesa/summary");
-export const getConversations = () => request("/conversations");
+export const getConversations = (limit = 40, sessionId = null) =>
+  request(`/conversations?limit=${limit}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ""}`);
+export const getRecentSessions = (limit = 10) => request(`/sessions?limit=${limit}`);
 
 /* =========================
    CHAT
    ========================= */
-export const sendMessage = (message) =>
+export const sendMessage = (message, sessionId = null) =>
   request("/chat", {
     method: "POST",
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, session_id: sessionId }),
   });
 
 /* =========================
@@ -166,7 +179,7 @@ export const uploadDocument = async (file, tags = "") => {
   const formData = new FormData();
   formData.append("file", file);
   if (tags) formData.append("tags", tags);
-  const res = await fetch(`${BASE_URL}/api/knowledge/upload`, {
+  const res = await apiFetch("/api/knowledge/upload", {
     method: "POST",
     body: formData,
   });

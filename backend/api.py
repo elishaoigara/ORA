@@ -8,6 +8,7 @@ ORA Backend API — v4 (Cleaned)
 - Scheduler now only references files that exist
 """
 
+import hmac
 import os
 import traceback
 import threading
@@ -23,6 +24,8 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
+
+from security import auth_middleware
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 try:
@@ -226,12 +229,33 @@ async def lifespan(app: FastAPI):
     print("[ORA] Shutdown")
 
 
-app = FastAPI(title="ORA Backend", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-                   allow_methods=["*"], allow_headers=["*"])
+_APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        os.getenv("FRONTEND_URL", "http://localhost:5173"),
+    ).split(",")
+    if origin.strip()
+]
+
+app = FastAPI(
+    title="ORA Backend",
+    lifespan=lifespan,
+    docs_url=None if _APP_ENV == "production" else "/docs",
+    redoc_url=None if _APP_ENV == "production" else "/redoc",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_ALLOWED_ORIGINS or ["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.middleware("http")(auth_middleware)
 
 # ── WhatsApp incoming webhook (called by Baileys sidecar) ─────────────────────
-_WA_INTERNAL_TOKEN = os.getenv("ORA_INTERNAL_TOKEN", "ora-internal-change-me")
+_WA_INTERNAL_TOKEN = os.getenv("ORA_INTERNAL_TOKEN", "").strip()
 
 # Keywords that make a WA message "important" — triggers Telegram alert
 _WA_IMPORTANT_KEYWORDS = [
@@ -242,7 +266,7 @@ _WA_IMPORTANT_KEYWORDS = [
 @app.post("/api/whatsapp/incoming")
 async def wa_incoming(request: Request):
     token = request.headers.get("X-ORA-Token", "")
-    if token != _WA_INTERNAL_TOKEN:
+    if not _WA_INTERNAL_TOKEN or not hmac.compare_digest(token, _WA_INTERNAL_TOKEN):
         return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
 
     try:
@@ -370,6 +394,9 @@ async def chat(payload: ChatRequest):
         except Exception:
             pass
 
+        from conversation_history import conversation_history as _ch
+        _ch.add(session_id, "user", text)
+
         # Fast-path: regex intent
         try:
             from Intent_parser import parse_intent, execute_intent
@@ -377,25 +404,31 @@ async def chat(payload: ChatRequest):
             if intent_obj:
                 result = execute_intent(intent_obj)
                 if result:
-                    from database import save_conversation
-                    save_conversation("user",      text)
-                    save_conversation("assistant", result)
+                    _ch.add(session_id, "assistant", result, intent=intent_obj["type"])
                     try:
                         from intelligence.learning_engine import extract_explicit_facts
                         extract_explicit_facts(text)
                     except Exception:
                         pass
-                    return {"reply": result, "intent": intent_obj["type"], "query_type": "action"}
+                    return {
+                        "reply": result,
+                        "intent": intent_obj["type"],
+                        "query_type": "action",
+                        "session_id": session_id,
+                    }
         except Exception as e:
             print(f"[INTENT] {e}")
 
-        # Correction detection
+        # Correction detection against the current canonical session.
         try:
             from intelligence.learning_engine import detect_correction, log_correction
-            from database import get_conversation_history
-            history_check = get_conversation_history(limit=2)
+            history_check = _ch.get_latest(session_id, limit=4)
             if history_check and detect_correction(text):
-                last_ora = history_check[-1][1] if history_check else ""
+                last_ora = next(
+                    (item["content"] for item in reversed(history_check[:-1])
+                     if item["role"] == "assistant"),
+                    "",
+                )
                 log_correction(text, last_ora, text)
         except Exception:
             pass
@@ -414,10 +447,8 @@ async def chat(payload: ChatRequest):
         except Exception:
             pass
 
-        # Persist
-        from database import save_conversation
-        save_conversation("user",      text)
-        save_conversation("assistant", reply)
+        # Persist the assistant turn in the same canonical session store.
+        _ch.add(session_id, "assistant", reply, intent=result.get("intent"))
 
         # Background learning
         try:
@@ -451,8 +482,19 @@ async def chat(payload: ChatRequest):
 # ── Conversations ─────────────────────────────────────────────────────────────
 
 @app.get("/api/conversations")
-def get_conversations(limit: int = 40):
+def get_conversations(limit: int = 40, session_id: Optional[str] = None):
     try:
+        if session_id:
+            from conversation_history import conversation_history as _ch
+            return [
+                {
+                    "role": item["role"],
+                    "content": item["content"],
+                    "timestamp": item["created_at"],
+                    "intent": item.get("intent"),
+                }
+                for item in _ch.get_latest(session_id, limit=min(limit, 100))
+            ]
         from database import get_conversation_history
         rows = get_conversation_history(limit=limit)
         return [{"role": r[0], "content": r[1], "timestamp": r[2]} for r in rows]
@@ -1298,18 +1340,6 @@ def proactive_status():
         }
     except Exception as e:
         raise HTTPException(500, str(e))
-
-
-# ── Agent status ──────────────────────────────────────────────────────────────
-
-@app.post("/api/agent/run")
-def agent_run_now_post():
-    try:
-        from agent import run_agent_cycle
-        run_agent_cycle()
-        return {"status": "cycle complete"}
-    except Exception:
-        raise HTTPException(500, "Agent cycle failed")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

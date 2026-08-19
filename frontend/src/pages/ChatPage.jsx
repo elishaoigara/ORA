@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { sendMessage, getConversations } from "../api";
-import BASE_URL from "../api";
+import { getConversations, getRecentSessions, sendMessage } from "../api";
 
 let _id = 0;
 const uid = () => String(++_id);
@@ -138,12 +137,8 @@ export default function ChatPage() {
   const [loading,      setLoading]      = useState(false);
   const [chipSet,      setChipSet]      = useState("default");
   const [toast,        setToast]        = useState(null);
-  const [voiceActive,  setVoiceActive]  = useState(false);
-  const [voiceStatus,  setVoiceStatus]  = useState("");
   const [rows,         setRows]         = useState(1); // textarea auto-grow
-
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef   = useRef([]);
+  const [sessionId,     setSessionId]   = useState(() => localStorage.getItem("ora_session_id") || "");
   const listRef          = useRef(null);
   const inputRef         = useRef("");
   const textareaRef      = useRef(null);
@@ -162,13 +157,27 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
-    getConversations(40)
+    if (sessionId) return;
+    getRecentSessions(1)
+      .then(data => {
+        const latest = data?.sessions?.[0]?.session_id;
+        if (latest) {
+          localStorage.setItem("ora_session_id", latest);
+          setSessionId(latest);
+        }
+      })
+      .catch(() => {});
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    getConversations(40, sessionId)
       .then(data => {
         if (!Array.isArray(data) || !data.length) return;
         setMessages(data.map(m => ({ ...m, id: uid(), ts: fmtTs(m.timestamp) })));
       })
       .catch(() => {});
-  }, []);
+  }, [sessionId]);
 
   const scrollBottom = useCallback(() => {
     setTimeout(() => listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }), 60);
@@ -219,7 +228,11 @@ export default function ChatPage() {
     startThinking(tId);
 
     try {
-      const res   = await sendMessage(text);
+      const res   = await sendMessage(text, sessionId || null);
+      if (res?.session_id && res.session_id !== sessionId) {
+        localStorage.setItem("ora_session_id", res.session_id);
+        setSessionId(res.session_id);
+      }
       const reply = res?.reply || "No response";
       const intent = res?.intent || null;
       stopThinking();
@@ -243,55 +256,10 @@ export default function ChatPage() {
       setLoading(false);
       scrollBottom();
     }
-  }, [loading, scrollBottom, startThinking, stopThinking]);
-
-  const startVoice = useCallback(async () => {
-    if (voiceActive) return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioChunksRef.current = [];
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-      recorder.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        setVoiceStatus("transcribing");
-        try {
-          const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-          const form = new FormData();
-          form.append("file", blob, "voice.webm");
-          const res = await fetch(`${BASE_URL}/api/voice/transcribe`, { method: "POST", body: form });
-          if (!res.ok) throw new Error("fail");
-          const data = await res.json();
-          if (data.transcript) {
-            setMessages(prev => [...prev,
-              { id: uid(), role: "user",      content: `🎙️ ${data.transcript}`, ts: ts() },
-              { id: uid(), role: "assistant", content: data.reply || "Got it.", ts: ts() },
-            ]);
-            scrollBottom();
-          } else {
-            showToast("Couldn't understand audio", "error");
-          }
-        } catch { showToast("Voice transcription failed", "error"); }
-        finally { setVoiceActive(false); setVoiceStatus(""); }
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setVoiceActive(true);
-      setVoiceStatus("recording");
-    } catch { showToast("Microphone access denied", "error"); }
-  }, [voiceActive, scrollBottom]);
-
-  const stopVoice = useCallback(() => {
-    if (mediaRecorderRef.current?.state !== "inactive") mediaRecorderRef.current.stop();
-  }, []);
+  }, [loading, scrollBottom, sessionId, startThinking, stopThinking]);
 
   const chips    = CHIP_SETS[chipSet] || CHIP_SETS.default;
   const greeting = getGreeting();
-
-  const voicePlaceholder =
-    voiceStatus === "recording"    ? "🔴 Recording — tap mic to stop..." :
-    voiceStatus === "transcribing" ? "Transcribing..." :
-    "Message ORA...";
 
   return (
     <div className="chat-page">
@@ -325,28 +293,11 @@ export default function ChatPage() {
 
       {/* ── Input bar — works on both mobile and desktop ── */}
       <div className="chat-input-bar">
-        {/* Voice button */}
-        <button
-          className="chat-voice-btn"
-          title={voiceActive ? "Stop recording" : "Voice input"}
-          onClick={voiceActive ? stopVoice : startVoice}
-          disabled={loading || voiceStatus === "transcribing"}
-          style={{
-            background:   voiceActive ? "rgba(255,68,68,0.15)" : "transparent",
-            border:       voiceActive ? "1px solid rgba(255,68,68,0.5)" : "1px solid var(--border-2)",
-            color:        voiceActive ? "#ff4444" : "var(--text-3)",
-            animation:    voiceActive ? "pulse 1.2s ease-in-out infinite" : "none",
-          }}
-          aria-label="Voice input"
-        >
-          {voiceStatus === "transcribing" ? "⋯" : "🎙"}
-        </button>
-
         {/* Auto-growing textarea */}
         <textarea
           ref={textareaRef}
           className="chat-textarea"
-          placeholder={voicePlaceholder}
+          placeholder="Message ORA..."
           value={input}
           rows={rows}
           onChange={handleInputChange}
@@ -358,7 +309,7 @@ export default function ChatPage() {
               send();
             }
           }}
-          disabled={loading || voiceActive}
+          disabled={loading}
           aria-label="Message input"
         />
 

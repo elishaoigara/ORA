@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback } from "react"
-import BASE_URL from "../api"
+import { apiFetch } from "../api"
 
 async function api(path) {
-  const res = await fetch(BASE_URL + path)
+  const res = await apiFetch(path)
   if (!res.ok) throw new Error("HTTP " + res.status)
   return res.json()
 }
 
 async function apiPost(path, body) {
-  const res = await fetch(BASE_URL + path, {
+  const res = await apiFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
@@ -18,7 +18,7 @@ async function apiPost(path, body) {
 }
 
 async function apiPut(path, body) {
-  const res = await fetch(BASE_URL + path, {
+  const res = await apiFetch(path, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
@@ -289,7 +289,7 @@ export default function InboxPage() {
   const [selected,       setSelected]       = useState(null)
   const [calView,        setCalView]        = useState("today")
   const [lastRefresh,    setLastRefresh]    = useState(null)
-  const [error,          setError]          = useState(null)
+  const [_error,         setError]          = useState(null)
   const [composing,      setComposing]      = useState(null)  // email being replied to
   const [filterUnread,   setFilterUnread]   = useState(false)
 

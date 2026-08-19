@@ -76,16 +76,13 @@ class WebSearchTool(Tool):
     description = "Search the web via Tavily. Input: {query: str, max_results?: int}"
 
     def run(self, input: dict) -> dict:
-        from research_agent import deep_research
-        query = input.get("query", "")
+        query = (input.get("query") or "").strip()
         if not query:
             return {"ok": False, "error": "query required"}
-        result = deep_research(query)
         return {
-            "ok": True,
-            "content": result.get("content") or result.get("result", ""),
-            "sources": result.get("sources", []),
-            "title": result.get("title", ""),
+            "ok": False,
+            "error": "Web search is not configured in this deployment. Use browse with a direct URL.",
+            "query": query,
         }
 
 
@@ -106,7 +103,7 @@ class BrowseTool(Tool):
         return browse(url, question=question)
 
 
-
+class WeatherTool(Tool):
     name = "weather"
     description = "Get current weather summary (Nairobi default). Input: {}"
 
@@ -156,9 +153,10 @@ class GitHubSummaryTool(Tool):
     description = "Get GitHub activity summary. Input: {}"
 
     def run(self, input: dict) -> dict:
-        from connectors.github import get_github_summary
-        summary = get_github_summary()
-        return {"ok": True, "summary": summary}
+        return {
+            "ok": False,
+            "error": "GitHub integration is not configured in this deployment.",
+        }
 
 
 class MpesaSpendTool(Tool):
@@ -540,9 +538,8 @@ class ToolRegistry:
 
     def _register_defaults(self):
         defaults = [
-            WebSearchTool(),
             BrowseTool(),
-            WeatherTool(), # type: ignore
+            WeatherTool(),
             CalendarTodayTool(),
             CalendarImminentTool(),
             CalendarCreateTool(),
@@ -556,7 +553,6 @@ class ToolRegistry:
             SheetsReadTool(),
             SheetsWriteTool(),
             MpesaSyncSheetTool(),
-            GitHubSummaryTool(),
             MpesaSpendTool(),
             KnowledgeSearchTool(),
             MemoryReadTool(),

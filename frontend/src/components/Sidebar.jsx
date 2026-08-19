@@ -1,6 +1,5 @@
 ﻿import { useState, useEffect } from "react";
-import { health, getAlerts } from "../api";
-import BASE_URL from "../api";
+import { apiFetch, health, getAlerts } from "../api";
 
 const navItems = [
   { id: "dashboard", icon: "◈", label: "DASHBOARD" },
@@ -10,10 +9,6 @@ const navItems = [
   { id: "alerts",    icon: "△", label: "ALERTS" },
   { id: "knowledge", icon: "◆", label: "KNOWLEDGE" },
   { id: "memory",    icon: "◌", label: "MEMORY" },
-  { id: "research",  icon: "⊕", label: "RESEARCH" },
-  { id: "news",      icon: "📰", label: "NEWS" },
-  { id: "content",   icon: "✍️", label: "CONTENT" },     // ← Content Studio
-  { id: "code",      icon: "⌥",  label: "CODE" },          // ← Code Agent
 ];
 
 function fmtTime(d) {
@@ -30,7 +25,6 @@ export default function Sidebar({ current, onNavigate }) {
   const [latency, setLatency] = useState(null);
   const [unreadAlerts, setUnreadAlerts] = useState(0);
   const [unreadEmails, setUnreadEmails] = useState(0);
-  const [unreadNews, setUnreadNews] = useState(0);
 
   useEffect(() => {
     const tick = () => { 
@@ -75,7 +69,7 @@ export default function Sidebar({ current, onNavigate }) {
   useEffect(() => {
     const checkGmail = async () => {
       try {
-        const res = await fetch(BASE_URL + "/api/gmail/summary");
+        const res = await apiFetch("/api/gmail/summary");
         if (res.ok) {
           const data = await res.json();
           setUnreadEmails(data?.unread_count || 0);
@@ -84,22 +78,6 @@ export default function Sidebar({ current, onNavigate }) {
     };
     checkGmail();
     const id = setInterval(checkGmail, 5 * 60 * 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  // ── Unread news badge ─────────────────────────────────────────
-  useEffect(() => {
-    const checkNews = async () => {
-      try {
-        const res = await fetch(BASE_URL + "/api/news/unread/count");
-        if (res.ok) {
-          const data = await res.json();
-          setUnreadNews(data?.count || 0);
-        }
-      } catch {}
-    };
-    checkNews();
-    const id = setInterval(checkNews, 2 * 60 * 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -131,11 +109,6 @@ export default function Sidebar({ current, onNavigate }) {
             )}
             {item.id === "inbox" && unreadEmails > 0 && (
               <span className="nav-badge" style={{ background: "#ff9900" }}>{unreadEmails}</span>
-            )}
-            {item.id === "news" && unreadNews > 0 && (
-              <span className="nav-badge" style={{ background: "#00d4ff" }}>
-                {unreadNews > 9 ? "9+" : unreadNews}
-              </span>
             )}
           </button>
         ))}

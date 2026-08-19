@@ -636,15 +636,7 @@ def _do_calendar() -> str:
 
 
 def _do_github() -> str:
-    try:
-        from connectors.github import get_github_summary
-        result = get_github_summary()
-        if result:
-            return str(result)[:500]
-        return "No recent GitHub activity."
-    except Exception as e:
-        print(f"[INTENT] github failed: {e}")
-        return "GitHub connector not available."
+    return "GitHub integration is not currently deployed in ORA."
 
 
 def _do_weather() -> str:
@@ -661,29 +653,7 @@ def _do_weather() -> str:
 
 # ── Content Creation Executor ─────────────────────────────
 def _do_create_content(payload: dict) -> str:
-    try:
-        from agents.content_agent import create_draft
-        topic = payload.get("topic", "general update")
-        content_type = payload.get("type", "post")
-        
-        result = create_draft(topic=topic, content_type=content_type)
-        
-        if result.get("status") == "success":
-            draft_preview = result["draft"][:450]
-            if len(result["draft"]) > 450:
-                draft_preview += "..."
-            return f"""✅ **Content Draft Created** (ID: {result['id']})
-
-**Type:** {content_type.title()}
-**Topic:** {topic}
-
-{draft_preview}
-"""
-        else:
-            return f"❌ Content draft failed: {result.get('error', 'Unknown error')}"
-    except Exception as e:
-        print(f"[INTENT] _do_create_content failed: {e}")
-        return "Content creation agent is currently unavailable. Please try again later."
+    return "Content creation is currently paused while ORA's tool layer is being consolidated."
 
 
 # ── NEW: Gmail Reply Executor ─────────────────────────────

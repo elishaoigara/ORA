@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react"
-import { uploadDocument, deleteDocument, searchKnowledge } from "../api"
-import BASE_URL from "../api"
+import { apiFetch, uploadDocument, deleteDocument, searchKnowledge } from "../api"
 
 const TYPE_ICON = { pdf: "◈", image: "◉", text: "◻", docx: "◆" }
 
@@ -24,7 +23,7 @@ export default function KnowledgePage() {
 
   const loadDocs = useCallback(async () => {
     try {
-      const res = await fetch(BASE_URL + "/api/knowledge/documents")
+      const res = await apiFetch("/api/knowledge/documents")
       if (!res.ok) throw new Error()
       setDocs((await res.json()) || [])
     } catch { setDocs([]) }

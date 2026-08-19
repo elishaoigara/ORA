@@ -8,14 +8,9 @@ import TasksPage     from "./pages/TasksPage";
 import AlertsPage    from "./pages/AlertsPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import MemoryPage    from "./pages/MemoryPage";
-import ResearchPage  from "./pages/ResearchPage";
 import InboxPage     from "./pages/InboxPage";
-import ContentPage   from "./pages/ContentPage";
-import CodePage      from "./pages/CodePage";
-import NewsPage      from "./pages/NewsPage";
 
-import { health, getAlerts } from "./api";
-import BASE_URL from "./api";
+import { apiFetch, getAlerts } from "./api";
 
 const pages = {
   dashboard: DashboardPage,
@@ -24,11 +19,7 @@ const pages = {
   alerts:    AlertsPage,
   knowledge: KnowledgePage,
   memory:    MemoryPage,
-  research:  ResearchPage,
   inbox:     InboxPage,
-  content:   ContentPage,
-  code:      CodePage,
-  news:      NewsPage,
 };
 
 // Primary nav items shown in bottom nav on mobile (most used first)
@@ -40,10 +31,6 @@ const PRIMARY_NAV = [
   { id: "alerts",    icon: "△", label: "ALERTS" },
   { id: "knowledge", icon: "◆", label: "DOCS" },
   { id: "memory",    icon: "◌", label: "MEMORY" },
-  { id: "research",  icon: "⊕", label: "SEARCH" },
-  { id: "news",      icon: "📰", label: "NEWS" },
-  { id: "content",   icon: "✍️", label: "CONTENT" },
-  { id: "code",      icon: "⌥",  label: "CODE" },
 ];
 
 export default function App() {
@@ -51,7 +38,6 @@ export default function App() {
   const [authBanner, setAuthBanner] = useState(null);
   const [unreadAlerts, setUnreadAlerts] = useState(0);
   const [unreadEmails, setUnreadEmails] = useState(0);
-  const [unreadNews, setUnreadNews] = useState(0);
 
   // ── Handle Google OAuth redirect ──────────────────────────────
   useEffect(() => {
@@ -85,7 +71,7 @@ export default function App() {
   useEffect(() => {
     const check = async () => {
       try {
-        const res = await fetch(BASE_URL + "/api/gmail/summary");
+          const res = await apiFetch("/api/gmail/summary");
         if (res.ok) {
           const data = await res.json();
           setUnreadEmails(data?.unread_count || 0);
@@ -94,22 +80,6 @@ export default function App() {
     };
     check();
     const id = setInterval(check, 5 * 60 * 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  // ── Unread news badge ─────────────────────────────────────────
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const res = await fetch(BASE_URL + "/api/news/unread/count");
-        if (res.ok) {
-          const data = await res.json();
-          setUnreadNews(data?.count || 0);
-        }
-      } catch {}
-    };
-    check();
-    const id = setInterval(check, 2 * 60 * 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -127,7 +97,6 @@ export default function App() {
   const getBadge = (id) => {
     if (id === "alerts" && unreadAlerts > 0) return unreadAlerts;
     if (id === "inbox"  && unreadEmails > 0) return unreadEmails;
-    if (id === "news"   && unreadNews > 0)   return unreadNews > 9 ? "9+" : unreadNews;
     return null;
   };
 

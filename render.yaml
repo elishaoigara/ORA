@@ -30,6 +30,12 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ORA_API_TOKEN
+        sync: false
+      - key: APP_ENV
+        value: production
 
       # ── Google OAuth (set these in Render dashboard) ───
       - key: GOOGLE_CLIENT_ID
@@ -91,4 +97,6 @@ services:
     envVars:
       # Set to your ora-backend Render URL e.g. https://ora-backend.onrender.com
       - key: VITE_API_URL
+        sync: false
+      - key: VITE_ORA_API_TOKEN
         sync: false

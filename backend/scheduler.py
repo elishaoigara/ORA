@@ -21,7 +21,12 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from intelligence.pattern_engine import run_pattern_analysis
 from intelligence.proactive_engine import run_proactive_checks
-from intelligence.planner_engine import generate_daily_brief
+from briefing import generate_briefing
+
+
+def generate_daily_brief() -> str:
+    """Compatibility wrapper around ORA's supported briefing generator."""
+    return generate_briefing()
 from intelligence.notifier import run_autonomous_notifications
 
 

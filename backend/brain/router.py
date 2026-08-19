@@ -72,9 +72,9 @@ def build_pipeline(intent):
     r=M.get(intent,["chat"]); _pcache.set(intent,r); return r
 
 class MessageBus:
-    __slots__=("_lock","query","intent","started_at","context","reply","chain_log","memory_ctx","kb_ctx","research_result","content_draft","code_result","task_result","goal_result","memory_result")
-    def __init__(self,query,intent):
-        self._lock=threading.Lock(); self.query=query; self.intent=intent; self.started_at=datetime.now().isoformat()
+    __slots__=("_lock","query","intent","session_id","started_at","context","reply","chain_log","memory_ctx","kb_ctx","research_result","content_draft","code_result","task_result","goal_result","memory_result")
+    def __init__(self,query,intent,session_id=None):
+        self._lock=threading.Lock(); self.query=query; self.intent=intent; self.session_id=session_id; self.started_at=datetime.now().isoformat()
         self.context=[]; self.reply=""; self.chain_log=[]; self.memory_ctx=""; self.kb_ctx=""
         self.research_result=None; self.content_draft=None; self.code_result=None
         self.task_result=None; self.goal_result=None; self.memory_result=None
@@ -142,16 +142,14 @@ def _run_knowledge_agent(bus):
     bus.chain_log.append({"agent":"KnowledgeAgent","key":"kb_ctx","duration_ms":_ms()-t0,"ts":datetime.now().isoformat()})
 
 def _run_research_agent(bus):
-    t0=_ms()
-    try:
-        from research_agent import deep_research
-        result=_run_with_timeout(deep_research,bus.query,timeout=10)
-        synthesis=result.get("content") or result.get("result","")
-        bus.post("ResearchAgent","research_result",result,_ms()-t0)
-        if synthesis: bus.add_context("ResearchAgent",synthesis[:900])
-        if bus.intent=="research": bus.reply=synthesis[:600] or "Research complete."
-    except AgentTimeoutError: bus.reply="Research timed out."; bus.add_context("ResearchAgent","Timed out.")
-    except Exception as e: print(f"[RESEARCH_AGENT] {e}"); bus.add_context("ResearchAgent",f"Failed: {str(e)[:100]}")
+    t0 = _ms()
+    message = (
+        "Web research is currently disabled while ORA's tool layer is being "
+        "consolidated. I can still answer from the model or your uploaded knowledge base."
+    )
+    bus.reply = message
+    bus.post("ResearchAgent", "research_result", {"ok": False, "message": message}, _ms() - t0)
+    bus.add_context("ResearchAgent", "Research tool unavailable.")
 
 def _detect_content_type(q):
     ql=q.lower()
@@ -169,18 +167,14 @@ def _detect_tone(q):
     return "professional"
 
 def _run_content_agent(bus):
-    t0=_ms()
-    try:
-        from agents.content_agent import create_draft
-        extra=""
-        if bus.research_result: extra=(bus.research_result.get("content") or bus.research_result.get("result",""))[:800]
-        elif bus.kb_ctx: extra=bus.kb_ctx[:500]
-        draft=create_draft(topic=bus.query,content_type=_detect_content_type(bus.query),tone=_detect_tone(bus.query),length="medium",extra_context=extra)
-        draft_text=draft.get("draft") or draft.get("draft_text","")
-        bus.post("ContentAgent","content_draft",draft,_ms()-t0)
-        bus.reply=draft_text
-        bus.add_context("ContentAgent",f"Draft: {draft_text[:150]}")
-    except Exception as e: print(f"[CONTENT_AGENT] {e}"); traceback.print_exc()
+    t0 = _ms()
+    message = (
+        "Content Studio is currently paused while ORA's tool layer is being "
+        "consolidated. Use the main chat for a simple draft request."
+    )
+    bus.reply = message
+    bus.post("ContentAgent", "content_draft", {"ok": False, "message": message}, _ms() - t0)
+    bus.add_context("ContentAgent", "Content tool unavailable.")
 
 def _build_code_summary(result):
     if "answer" in result: return str(result["answer"])[:500]
@@ -189,20 +183,14 @@ def _build_code_summary(result):
     return str(result)[:300]
 
 def _run_code_agent(bus):
-    t0=_ms()
-    try:
-        from agents.code_agent import scan_all_repos,scan_repo,ask_code_agent
-        ql=bus.query.lower()
-        def _work():
-            if re.search(r"\b(scan all|all repos)\b",ql): return scan_all_repos()
-            m=re.search(r"\b(scan|check|review)\s+([a-zA-Z0-9_\-\.]+)\b",bus.query,re.I)
-            if m: return scan_repo(m.group(2))
-            return {"answer":ask_code_agent(bus.query)}
-        result=_run_with_timeout(_work,timeout=10)
-        summary=_build_code_summary(result)
-        bus.post("CodeAgent","code_result",result,_ms()-t0); bus.reply=summary; bus.add_context("CodeAgent",summary[:400])
-    except AgentTimeoutError: bus.reply="Code scan timed out."
-    except Exception as e: print(f"[CODE_AGENT] {e}"); traceback.print_exc()
+    t0 = _ms()
+    message = (
+        "The Code Agent is currently paused because its backend connector is not "
+        "deployed. I will not claim that a repository was scanned."
+    )
+    bus.reply = message
+    bus.post("CodeAgent", "code_result", {"ok": False, "message": message}, _ms() - t0)
+    bus.add_context("CodeAgent", "Code tool unavailable.")
 
 def _run_briefing_agent(bus):
     t0=_ms(); parts=["Here's your status:\n"]
@@ -247,11 +235,7 @@ def _run_briefing_agent(bus):
         w=get_weather_summary()
         if w: parts.append(f"?? **Weather** — {w}")
     except: pass
-    try:
-        from agents.code_agent import get_code_stats
-        s=get_code_stats()
-        if s.get("total_runs",0)>0: parts.append(f"? **Code** — {s.get('open',0)} open findings, avg health {s.get('avg_health',0)}/100"+(f", ? {s['critical']} critical" if s.get('critical') else ""))
-    except: pass
+    # Code Agent statistics are intentionally omitted until its backend is deployed.
     bus.reply="\n\n".join(parts); bus.post("BriefingAgent","task_result",{"briefing":bus.reply},_ms()-t0)
 
 def _run_chat_agent(bus):
@@ -262,6 +246,7 @@ def _run_chat_agent(bus):
         from groq import Groq
         from context import build_system_prompt
         from database import get_conversation_history
+        from conversation_history import conversation_history
         client=Groq(api_key=GROQ_API_KEY)
         system=build_system_prompt(query=bus.query)
         ctx=bus.full_context()
@@ -269,8 +254,19 @@ def _run_chat_agent(bus):
         if bus.memory_ctx: system+=f"\n\n## MEMORY\n{bus.memory_ctx[:500]}"
         if bus.kb_ctx: system+=f"\n\n## KNOWLEDGE BASE\n{bus.kb_ctx[:500]}"
         messages=[{"role":"system","content":system}]
-        for role,content,_ in get_conversation_history(limit=4):
-            if role in ("user","assistant"): messages.append({"role":role,"content":content[:250]})
+        if bus.session_id:
+            history = conversation_history.get_for_llm(
+                bus.session_id,
+                max_chars=1200,
+                limit=20,
+            )[:-1]
+        else:
+            history = [
+                {"role": role, "content": content[:250]}
+                for role, content, _ in get_conversation_history(limit=4)
+                if role in ("user", "assistant")
+            ]
+        messages.extend(history)
         messages.append({"role":"user","content":bus.query})
         model=GROQ_MODEL_FALLBACK if bus.intent=="simple" else GROQ_MODEL_PRIMARY
         max_tok=160 if bus.intent=="simple" else 520
@@ -301,7 +297,7 @@ _AGENT_FN={"intent":_run_intent_agent,"memory":_run_memory_agent,"knowledge":_ru
 class Coordinator:
     @staticmethod
     def run(query,save_history=True,session_id=None):
-        intent=classify_intent(query); pipeline=build_pipeline(intent); bus=MessageBus(query=query,intent=intent)
+        intent=classify_intent(query); pipeline=build_pipeline(intent); bus=MessageBus(query=query,intent=intent,session_id=session_id)
         for name in pipeline:
             fn=_AGENT_FN.get(name)
             if fn is None: print(f"[COORDINATOR] Unknown agent '{name}'"); continue
@@ -311,7 +307,8 @@ class Coordinator:
         if save_history and bus.reply:
             try:
                 from database import save_conversation
-                save_conversation("user",query[:300]); save_conversation("assistant",bus.reply[:300])
+                if not session_id:
+                    save_conversation("user",query[:300]); save_conversation("assistant",bus.reply[:300])
             except: pass
             try:
                 from intelligence.learning_engine import extract_facts_from_exchange,extract_explicit_facts

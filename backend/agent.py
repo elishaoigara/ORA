@@ -129,13 +129,8 @@ def gather_context() -> dict[str, Any]:
         print("[AGENT] gather_context: weather failed")
         ctx["weather"] = ""
 
-    # ── Phase 4: GitHub ──────────────────────────────────────
-    try:
-        from connectors.github import get_github_summary
-        ctx["github"] = get_github_summary()
-    except Exception:
-        print("[AGENT] gather_context: github failed")
-        ctx["github"] = {}
+    # GitHub context is intentionally omitted until its connector is deployed.
+    ctx["github"] = {}
 
     return ctx
 
