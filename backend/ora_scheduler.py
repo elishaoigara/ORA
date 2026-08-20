@@ -37,9 +37,11 @@ def get_scheduler() -> BackgroundScheduler:
     return _scheduler
 
 
-def _safe_run(job_fn, job_name: str) -> None:
-    """Wrap every job so one failure never crashes the scheduler thread."""
+def _safe_run(job_fn, job_name: str, enabled_if=None) -> None:
+    """Run a job only when its optional integration is ready."""
     try:
+        if enabled_if is not None and not enabled_if():
+            return
         print(f"[ORA Scheduler] Running: {job_name}")
         job_fn()
     except Exception:
@@ -56,6 +58,7 @@ def start_scheduler(jobs: list[dict]) -> None:
         trigger = job.get("trigger", "cron")
         name    = job["name"]
         fn      = job["fn"]
+        enabled_if = job.get("enabled_if")
 
         if trigger == "cron":
             _scheduler.add_job(
@@ -63,7 +66,7 @@ def start_scheduler(jobs: list[dict]) -> None:
                 trigger="cron",
                 hour=job.get("hour", 0),
                 minute=job.get("minute", 0),
-                args=[fn, name],
+                args=[fn, name, enabled_if],
                 id=name,
                 replace_existing=True,
             )
@@ -76,7 +79,7 @@ def start_scheduler(jobs: list[dict]) -> None:
                 _safe_run,
                 trigger="interval",
                 **interval_kwargs,
-                args=[fn, name],
+                args=[fn, name, enabled_if],
                 id=name,
                 replace_existing=True,
             )

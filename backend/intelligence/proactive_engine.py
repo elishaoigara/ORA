@@ -194,17 +194,19 @@ def _check_evening_wrap(hour, today, notify, can_fire, mark_fired) -> None:
         else:
             lines.append("\n✅ All tasks complete. Great day!")
 
-        # Tomorrow's calendar
+        # Tomorrow's calendar (optional Google integration)
         try:
-            from connectors.calendar import get_upcoming_events
-            tomorrow_events = get_upcoming_events(hours_ahead=24, max_results=3)
-            tomorrow = [e for e in tomorrow_events
-                        if e.get("start", "") > datetime.now().isoformat()]
-            if tomorrow:
-                lines.append(f"\n📅 Tomorrow: {len(tomorrow)} event(s) scheduled")
-                for ev in tomorrow[:2]:
-                    t = ev.get("start", "")[:16].replace("T", " ")
-                    lines.append(f"  • {t} — {ev.get('title','')}")
+            from connectors.google_auth import is_authorized
+            if is_authorized("primary"):
+                from connectors.calendar import get_upcoming_events
+                tomorrow_events = get_upcoming_events(hours_ahead=24, max_results=3)
+                tomorrow = [e for e in tomorrow_events
+                            if e.get("start", "") > datetime.now().isoformat()]
+                if tomorrow:
+                    lines.append(f"\n📅 Tomorrow: {len(tomorrow)} event(s) scheduled")
+                    for ev in tomorrow[:2]:
+                        t = ev.get("start", "")[:16].replace("T", " ")
+                        lines.append(f"  • {t} — {ev.get('title','')}")
         except Exception:
             pass
 
@@ -321,6 +323,9 @@ def _check_empty_day(hour, today, notify, can_fire, mark_fired) -> None:
     if not can_fire(key):
         return
     try:
+        from connectors.google_auth import is_authorized
+        if not is_authorized("primary"):
+            return
         from connectors.calendar import get_upcoming_events
         events = get_upcoming_events(hours_ahead=10, max_results=10)
         if events:

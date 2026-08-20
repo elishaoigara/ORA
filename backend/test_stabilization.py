@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -22,6 +22,24 @@ class SecurityTests(unittest.TestCase):
         with patch("security._API_TOKEN", "secret-token"):
             self.assertTrue(is_authorized("secret-token"))
             self.assertFalse(is_authorized("wrong-token"))
+
+
+class SchedulerTests(unittest.TestCase):
+    def test_disabled_optional_job_is_skipped(self):
+        from ora_scheduler import _safe_run
+        callback = Mock()
+
+        _safe_run(callback, "google_sync", lambda: False)
+
+        callback.assert_not_called()
+
+    def test_enabled_optional_job_runs(self):
+        from ora_scheduler import _safe_run
+        callback = Mock()
+
+        _safe_run(callback, "google_sync", lambda: True)
+
+        callback.assert_called_once_with()
 
 
 class ConversationTests(unittest.TestCase):

@@ -102,23 +102,37 @@ def gather_context() -> dict[str, Any]:
     except Exception:
         ctx["profile"] = {}
 
-    # ── Phase 2: Google Calendar ─────────────────────────────
+    # ── Google Calendar ───────────────────────────────────────
+    # Google is optional: keep the core agent useful when OAuth is absent.
     try:
-        from connectors.calendar import get_events_today, get_imminent_events
-        ctx["calendar_today"] = get_events_today()
-        ctx["calendar_imminent"] = get_imminent_events(30)
+        from connectors.google_auth import is_authorized
+        google_ready = is_authorized("primary")
     except Exception:
-        print("[AGENT] gather_context: calendar failed")
-        print(traceback.format_exc())
+        google_ready = False
+
+    if google_ready:
+        try:
+            from connectors.calendar import get_events_today, get_imminent_events
+            ctx["calendar_today"] = get_events_today()
+            ctx["calendar_imminent"] = get_imminent_events(30)
+        except Exception:
+            print("[AGENT] gather_context: calendar failed")
+            print(traceback.format_exc())
+            ctx["calendar_today"] = []
+            ctx["calendar_imminent"] = []
+    else:
         ctx["calendar_today"] = []
         ctx["calendar_imminent"] = []
 
-    # ── Phase 4: Gmail summary ───────────────────────────────
-    try:
-        from connectors.gmail import get_gmail_summary
-        ctx["gmail"] = get_gmail_summary()
-    except Exception:
-        print("[AGENT] gather_context: gmail failed")
+    # ── Gmail summary ─────────────────────────────────────────
+    if google_ready:
+        try:
+            from connectors.gmail import get_gmail_summary
+            ctx["gmail"] = get_gmail_summary()
+        except Exception:
+            print("[AGENT] gather_context: gmail failed")
+            ctx["gmail"] = {}
+    else:
         ctx["gmail"] = {}
 
     # ── Phase 4: Weather ─────────────────────────────────────

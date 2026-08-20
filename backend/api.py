@@ -37,6 +37,15 @@ ALLOWED_UPLOAD_TYPES = {".pdf", ".docx", ".txt", ".md"}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
+def _google_is_authorized() -> bool:
+    """Return whether the primary Google account is ready for background sync."""
+    try:
+        from connectors.google_auth import is_authorized
+        return is_authorized("primary")
+    except Exception:
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("[ORA] Starting...")
@@ -200,8 +209,8 @@ async def lifespan(app: FastAPI):
             {"trigger": "interval", "minutes": 15, "fn": run_proactive_checks,         "name": "proactive_checks"},
             {"trigger": "interval", "minutes": 15, "fn": run_autonomous_notifications, "name": "auto_notify"},
             # Data connectors
-            {"trigger": "interval", "minutes": 30, "fn": sync_drive,                   "name": "drive_sync"},
-            {"trigger": "interval", "minutes": 15, "fn": sync_gmail,                   "name": "gmail_sync"},
+            {"trigger": "interval", "minutes": 30, "fn": sync_drive,                   "name": "drive_sync",   "enabled_if": _google_is_authorized},
+            {"trigger": "interval", "minutes": 15, "fn": sync_gmail,                   "name": "gmail_sync",   "enabled_if": _google_is_authorized},
             {"trigger": "interval", "minutes": 30, "fn": weather_monitor,              "name": "weather_monitor"},
             {"trigger": "interval", "minutes": 10, "fn": wa_ping,                       "name": "wa_ping"},
             {"trigger": "cron",     "hour": 8, "minute": 30, "fn": wa_morning_summary, "name": "wa_morning_summary"},
