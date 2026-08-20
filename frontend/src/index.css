@@ -631,3 +631,76 @@ html, body, #root {
 @media (max-width: 480px) {
   .research-mode-row { flex-direction: column; }
 }
+
+/* ══════════════════════════════════════════════════════
+   FINAL MOBILE OVERRIDES
+   These rules intentionally come after the desktop declarations above so
+   mobile sizing is not overwritten by the original desktop cascade.
+══════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  html, body, #root { height: 100%; min-height: 100%; overflow: hidden; }
+  .app-shell { height: 100dvh; min-height: 0; }
+  .app-main { height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
+  .sidebar { display: none; }
+  .mobile-nav { display: flex; }
+
+  .page {
+    width: 100%;
+    min-width: 0;
+    padding: 14px 12px calc(var(--mobile-nav-h) + 14px);
+  }
+  .page-header { flex-direction: column; gap: 10px; margin-bottom: 14px; }
+  .page-header > * { max-width: 100%; }
+  .card { width: 100%; }
+  .card-body { min-width: 0; }
+  .metrics-row { flex-wrap: wrap; }
+  .metric-card { min-width: calc(50% - 5px); flex: 1 1 calc(50% - 5px); padding: 11px 8px; }
+  .task-row { min-width: 0; }
+  .task-title { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+  .filter-tabs { max-width: 100%; overflow-x: auto; flex-wrap: nowrap; }
+  .btn { min-height: 36px; }
+
+  .chat-page {
+    height: calc(100dvh - var(--mobile-nav-h));
+    min-height: 0;
+    overflow: hidden;
+  }
+  .chat-messages {
+    min-height: 0;
+    padding: 12px 10px;
+    gap: 10px;
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+  }
+  .msg-row { min-width: 0; gap: 6px; }
+  .msg-avatar { width: 24px; height: 24px; font-size: 10px; }
+  .msg-bubble {
+    max-width: calc(100vw - 46px);
+    min-width: 0;
+    padding: 9px 11px;
+    overflow-wrap: anywhere;
+  }
+  .msg-text, .md-text { font-size: 14px; overflow-wrap: anywhere; }
+  .md-code-block, .md-inline-code { max-width: 100%; overflow-x: auto; }
+  .chips-bar { flex-shrink: 0; padding: 7px 10px; gap: 6px; }
+  .chip { min-height: 34px; padding: 6px 11px; }
+  .chat-note { flex-shrink: 0; padding: 3px 10px; }
+  .chat-input-bar {
+    flex-shrink: 0;
+    min-height: 58px;
+    align-items: flex-end;
+    gap: 6px;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  }
+  .chat-textarea { min-width: 0; max-height: 112px; font-size: 16px; padding: 9px 12px; }
+  .chat-voice-btn, .chat-send-btn { width: 44px; height: 44px; flex: 0 0 44px; }
+  .toast { left: 12px; right: 12px; bottom: calc(var(--mobile-nav-h) + 12px); text-align: center; }
+}
+
+@media (max-width: 420px) {
+  .page { padding-left: 10px; padding-right: 10px; }
+  .metric-card { min-width: 100%; flex-basis: 100%; }
+  .mobile-nav-inner { width: 100%; min-width: 0; justify-content: space-around; gap: 0; }
+  .mobile-nav-item { min-width: 0; flex: 1 1 0; padding-left: 5px; padding-right: 5px; font-size: 7px; }
+  .mobile-nav-item-icon { font-size: 16px; }
+}
