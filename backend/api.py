@@ -4,7 +4,7 @@ ORA Backend API — v4 (Cleaned)
 - Removed deleted connectors: rss, github, youtube
 - Removed deleted modules: research_agent, agent_scratchpad, dynamic_scheduler,
   tool_registry, task_engine, voice_handler
-- Added /api/ping for keep-alive (set up cron-job.org to hit this every 10min)
+- Added /api/ping for diagnostics only; no external keep-alive traffic is required
 - Scheduler now only references files that exist
 """
 
@@ -82,24 +82,57 @@ async def lifespan(app: FastAPI):
         from connectors.drive import sync_drive
         from connectors.gmail import run_gmail_reply_checks as sync_gmail
 
-        def morning_brief():
+        def _send_context_summary(title: str, evening: bool = False):
+            """Send one deterministic, approval-free summary from the canonical context."""
             try:
                 from intelligence.notifier import dual_notify
-                from database import get_tasks
-                from connectors.weather import get_weather_summary
-                tasks = get_tasks("pending")
-                high  = [t for t in tasks if t[2] == "high"]
-                lines = [f"Good morning Elisha. {len(tasks)} tasks pending."]
-                if high:
-                    lines.append(f"High priority: {high[0][1][:60]}")
-                try:
-                    w = get_weather_summary()
-                    if w: lines.append(f"Weather: {w}")
-                except Exception:
-                    pass
-                dual_notify(title="ORA Morning Brief", body="\n".join(lines))
+                from personal_context import build_personal_context
+
+                context = build_personal_context(force=True)
+                summary = context.get("summary", {})
+                tasks = context.get("tasks", [])
+                overdue = context.get("overdue", [])
+                goals = context.get("goals", [])
+                google = context.get("google", {}) or {}
+                lines = ["Good morning, Elisha." if not evening else "Here is your end-of-day ORA summary."]
+
+                if context.get("focus"):
+                    lines.append(f"Focus: {context['focus']}")
+                lines.append(f"Pending tasks: {summary.get('pending_tasks', len(tasks))}")
+                if overdue:
+                    lines.append(f"Overdue: {len(overdue)}")
+                    lines.extend(f"  • {task.get('title', 'Untitled')[:70]}" for task in overdue[:3])
+                elif tasks:
+                    lines.append("Next tasks:")
+                    lines.extend(f"  • {task.get('title', 'Untitled')[:70]}" for task in tasks[:3])
+                else:
+                    lines.append("No pending tasks.")
+
+                calendar_events = google.get("calendar_today", [])
+                if calendar_events:
+                    lines.append(f"Calendar today: {len(calendar_events)} event(s)")
+                    for event in calendar_events[:3]:
+                        start = str(event.get("start", ""))[:16].replace("T", " ")
+                        lines.append(f"  • {start} — {event.get('title', 'Untitled')}")
+                if google.get("gmail", {}).get("authorized"):
+                    lines.append(f"Unread email: {summary.get('unread_emails', 0)}")
+                if context.get("weather_summary"):
+                    lines.append(f"Weather: {context['weather_summary']}")
+                spending = context.get("spending", {})
+                if spending.get("today"):
+                    lines.append(f"M-Pesa today: KES {spending['today']:.0f} (average KES {spending.get('average_daily', 0):.0f})")
+                if goals:
+                    lines.append(f"Active goals: {len(goals)}")
+
+                dual_notify(title=title, body="\\n".join(lines))
             except Exception:
                 print(traceback.format_exc())
+
+        def morning_brief():
+            _send_context_summary("ORA Morning Brief")
+
+        def daily_summary():
+            _send_context_summary("ORA Daily Summary", evening=True)
 
         def weather_monitor():
             """
@@ -187,16 +220,6 @@ async def lifespan(app: FastAPI):
             except Exception:
                 print(f"[WA MORNING] {traceback.format_exc()}")
 
-        def wa_ping():
-            """Ping WhatsApp sidecar every 10 min to prevent Render free tier sleep."""
-            try:
-                import os as _os
-                wa_url = _os.getenv("WA_SIDECAR_URL", "")
-                if wa_url:
-                    requests.get(f"{wa_url}/health", timeout=5)
-            except Exception:
-                pass
-
         start_scheduler([
             # Core agent loop
             {"trigger": "interval", "minutes": 10,  "fn": run_agent_cycle,             "name": "agent_loop"},
@@ -206,6 +229,7 @@ async def lifespan(app: FastAPI):
             {"trigger": "cron",    "hour": 2,  "minute": 30, "fn": run_pattern_analysis, "name": "daily_patterns"},
             {"trigger": "cron",    "hour": 8,  "minute": 30, "fn": run_goal_checkin,  "name": "goal_checkin"},
             {"trigger": "cron",    "hour": 7,  "minute": 5,  "fn": morning_brief,     "name": "morning_brief"},
+            {"trigger": "cron",    "hour": 18, "minute": 30, "fn": daily_summary,      "name": "daily_summary"},
             # Proactive + notifications
             {"trigger": "interval", "minutes": 15, "fn": run_proactive_checks,         "name": "proactive_checks"},
             {"trigger": "interval", "minutes": 15, "fn": run_autonomous_notifications, "name": "auto_notify"},
@@ -213,7 +237,6 @@ async def lifespan(app: FastAPI):
             {"trigger": "interval", "minutes": 30, "fn": sync_drive,                   "name": "drive_sync",   "enabled_if": _google_is_authorized},
             {"trigger": "interval", "minutes": 15, "fn": sync_gmail,                   "name": "gmail_sync",   "enabled_if": _google_is_authorized},
             {"trigger": "interval", "minutes": 30, "fn": weather_monitor,              "name": "weather_monitor"},
-            {"trigger": "interval", "minutes": 10, "fn": wa_ping,                       "name": "wa_ping"},
             {"trigger": "cron",     "hour": 8, "minute": 30, "fn": wa_morning_summary, "name": "wa_morning_summary"},
         ])
         print("[ORA] Scheduler started")
@@ -667,6 +690,20 @@ def approve_action_ep(action_id: int):
     return action
 
 
+@app.post("/api/actions/{action_id}/execute")
+def execute_action_ep(action_id: int):
+    try:
+        from action_ledger import execute_action
+        action = execute_action(action_id)
+        if not action:
+            raise HTTPException(404, "Action not found")
+        return action
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, "Action execution failed")
+
+
 @app.post("/api/actions/{action_id}/reject")
 def reject_action_ep(action_id: int):
     from action_ledger import reject_action
@@ -1046,17 +1083,78 @@ def memory_events(limit: int = 30):
     except Exception:
         return []
 
+@app.get("/api/memory/learned")
+def memory_learned_facts(status: Optional[str] = "candidate", limit: int = 50):
+    try:
+        from intelligence.learning_engine import get_learned_facts
+        allowed = {"candidate", "confirmed", "verified", "rejected", "all"}
+        if status not in allowed:
+            raise HTTPException(400, "Invalid memory status")
+        return get_learned_facts(status=None if status == "all" else status, limit=limit)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, "Learned memory unavailable")
+
+
+@app.post("/api/memory/learned/{fact_id}/confirm")
+def confirm_learned_fact(fact_id: int):
+    try:
+        from intelligence.learning_engine import confirm_fact, get_learned_facts
+        if not confirm_fact(fact_id):
+            raise HTTPException(404, "Memory fact not found")
+        return next((f for f in get_learned_facts(status="confirmed", limit=200) if f["id"] == fact_id), {"id": fact_id, "status": "confirmed"})
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, "Memory confirmation failed")
+
+
+@app.post("/api/memory/learned/{fact_id}/reject")
+def reject_learned_fact(fact_id: int):
+    try:
+        from intelligence.learning_engine import reject_fact
+        if not reject_fact(fact_id):
+            raise HTTPException(404, "Memory fact not found")
+        return {"id": fact_id, "status": "rejected"}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, "Memory rejection failed")
+
+
+@app.patch("/api/memory/learned/{fact_id}")
+def edit_learned_fact(fact_id: int, body: dict):
+    try:
+        from intelligence.learning_engine import update_fact, get_learned_facts
+        obj = body.get("object")
+        confidence = body.get("confidence")
+        if obj is None and confidence is None:
+            raise HTTPException(400, "object or confidence is required")
+        if confidence is not None:
+            confidence = float(confidence)
+        if not update_fact(fact_id, obj=obj, confidence=confidence):
+            raise HTTPException(404, "Memory fact not found")
+        return next((f for f in get_learned_facts(status="candidate", limit=200) if f["id"] == fact_id), {"id": fact_id, "status": "candidate"})
+    except HTTPException:
+        raise
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Invalid confidence")
+    except Exception:
+        raise HTTPException(500, "Memory update failed")
+
+
 @app.delete("/api/memory/learned/{fact_id}")
 def delete_learned_fact(fact_id: int):
     try:
-        from database import get_conn, close_conn
-        conn = get_conn()
-        conn.cursor().execute("DELETE FROM learned_facts WHERE id=?", (fact_id,))
-        conn.commit()
-        close_conn()
-        return {"ok": True}
+        from intelligence.learning_engine import forget_fact
+        if not forget_fact(fact_id):
+            raise HTTPException(404, "Memory fact not found")
+        return {"ok": True, "forgotten": True, "id": fact_id}
+    except HTTPException:
+        raise
     except Exception:
-        raise HTTPException(500, "Delete failed")
+        raise HTTPException(500, "Forget failed")
 
 
 # ── Knowledge ─────────────────────────────────────────────────────────────────
@@ -1305,9 +1403,32 @@ def gmail_regenerate_reply(reply_id: int, payload: RegenerateReplyRequest):
 
 @app.post("/api/gmail/replies/{reply_id}/approve")
 def gmail_approve_reply(reply_id: int):
+    """Create a ledger proposal; sending remains a separate explicit execution step."""
     try:
-        from connectors.gmail import approve_and_send_reply
-        return approve_and_send_reply(reply_id)
+        from connectors.gmail import get_suggested_reply
+        from action_ledger import create_action
+        reply = get_suggested_reply(reply_id)
+        if not reply:
+            raise HTTPException(404, "Reply not found")
+        action = create_action(
+            action_key=f"gmail.reply:{reply_id}",
+            action_type="gmail.send_new",
+            title=f"Send reply to {reply.get('sender', 'email contact')}",
+            description=reply.get("subject", ""),
+            payload={
+                "to": reply.get("sender", ""),
+                "subject": reply.get("subject", ""),
+                "body": reply.get("suggested_text", ""),
+                "account": reply.get("account", "primary"),
+            },
+            risk="external_communication",
+            requires_approval=True,
+            source="gmail_reply",
+            idempotency_key=f"gmail.reply:{reply_id}:{reply.get('updated_at', reply.get('created_at', ''))}",
+        )
+        return {"ok": True, "status": "action_proposed", "action": action}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
 

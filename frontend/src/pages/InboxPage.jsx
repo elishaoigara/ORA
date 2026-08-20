@@ -113,7 +113,7 @@ function ComposeModal({ email, onClose, onSent }) {
     if (!text.trim()) return showToast("Write a reply first", "error")
     setSending(true)
     try {
-      // Save then immediately approve+send
+      // Save the reply, then create an approval-ledger action; execution is separate.
       const saved = await apiPost("/api/gmail/replies/generate-single", {
         email_id:       email.id,
         thread_id:      email.thread_id,
@@ -126,11 +126,11 @@ function ComposeModal({ email, onClose, onSent }) {
       })
       if (saved.reply_id) {
         const result = await apiPost(`/api/gmail/replies/${saved.reply_id}/approve`)
-        if (result.sent) {
-          showToast("Reply sent ✓")
+        if (result.action) {
+          showToast(`Approval queued — action #${result.action.id}`)
           setTimeout(() => { onSent && onSent(); onClose() }, 1200)
         } else {
-          showToast("Approved but not sent — check Gmail auth", "error")
+          showToast("Could not create approval action", "error")
         }
       } else {
         showToast("Failed to queue reply", "error")
@@ -265,8 +265,8 @@ function ComposeModal({ email, onClose, onSent }) {
               disabled={sending || !text.trim()}
             >
               {sending
-                ? <><span className="spinner" style={{ width: 12, height: 12 }} /> SENDING...</>
-                : "✓ SEND REPLY"}
+                ? <><span className="spinner" style={{ width: 12, height: 12 }} /> QUEUING...</>
+                : "✓ REQUEST APPROVAL"}
             </button>
             <button className="btn" onClick={onClose} disabled={sending}>
               CANCEL
@@ -756,13 +756,13 @@ export default function InboxPage() {
                                 setReplyLoading(true)
                                 try {
                                   const r = await apiPost(`/api/gmail/replies/${reply.id}/approve`)
-                                  showReplyToast(r.sent ? "Reply sent ✓" : "Approved — copy to send manually")
+                                  showReplyToast(r.action ? `Approval queued — action #${r.action.id}` : "Approval action created")
                                   loadReplies()
                                 } catch { showReplyToast("Failed", "error") }
                                 finally { setReplyLoading(false) }
                               }}
                             >
-                              {replyLoading ? "⋯" : "✓ APPROVE & SEND"}
+                              {replyLoading ? "⋯" : "✓ REQUEST SEND APPROVAL"}
                             </button>
                             <button
                               className="btn btn-sm"

@@ -247,6 +247,14 @@ export const createAction = (payload) =>
 export const approveAction = (id) => request(`/actions/${id}/approve`, { method: "POST" });
 export const rejectAction = (id) => request(`/actions/${id}/reject`, { method: "POST" });
 export const cancelAction = (id) => request(`/actions/${id}/cancel`, { method: "POST" });
+export const executeAction = (id) => request(`/actions/${id}/execute`, { method: "POST" });
+export const getLearnedFacts = (status = "candidate", limit = 50) =>
+  request(`/memory/learned?status=${encodeURIComponent(status)}&limit=${limit}`);
+export const confirmLearnedFact = (id) => request(`/memory/learned/${id}/confirm`, { method: "POST" });
+export const rejectLearnedFact = (id) => request(`/memory/learned/${id}/reject`, { method: "POST" });
+export const updateLearnedFact = (id, payload) =>
+  request(`/memory/learned/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+export const forgetLearnedFact = (id) => request(`/memory/learned/${id}`, { method: "DELETE" });
 export const getGoalTasks = (goalId, status = "") =>
   request(`/goals/${goalId}/tasks${status ? `?status=${encodeURIComponent(status)}` : ""}`);
 export const syncGoal = (goalId) => request(`/goals/${goalId}/sync`, { method: "POST" });

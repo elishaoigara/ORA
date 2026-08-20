@@ -35,15 +35,7 @@ def predict_needs() -> list[dict]:
     now = datetime.now()
     hour = now.hour
 
-    # Time-based
-    if 6 <= hour <= 8:
-        predictions.append({
-            "type": "morning_brief",
-            "message": "Good morning Elisha. Ready for your daily briefing?",
-            "confidence": 0.9,
-            "action": "brief",
-        })
-
+    # Time-based. The structured morning brief is emitted by the dedicated scheduler job.
     if 21 <= hour <= 23:
         predictions.append({
             "type": "night_work",

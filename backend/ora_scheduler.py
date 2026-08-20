@@ -25,11 +25,12 @@ Job dict format:
 from __future__ import annotations
 
 import traceback
+from zoneinfo import ZoneInfo
 from apscheduler.schedulers.background import BackgroundScheduler
 
 __all__ = ["start_scheduler", "stop_scheduler", "get_scheduler"]
 
-_scheduler = BackgroundScheduler()
+_scheduler = BackgroundScheduler(timezone=ZoneInfo("Africa/Nairobi"))
 
 
 def get_scheduler() -> BackgroundScheduler:

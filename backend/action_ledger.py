@@ -88,7 +88,7 @@ def create_action(
     """Create or return an action without duplicating an idempotent proposal."""
     init_action_ledger()
     idem = idempotency_key or f"{action_key}:{uuid.uuid4().hex}"
-    approval_required = requires_approval or risk in {"external_communication", "irreversible", "financial"}
+    approval_required = requires_approval or risk in {"external_communication", "external_write", "irreversible", "financial"}
     now = _now()
     conn = get_conn()
     existing = conn.execute(
@@ -171,6 +171,68 @@ def transition_action(
     row = conn.execute("SELECT * FROM action_ledger WHERE id=?", (action_id,)).fetchone()
     close_conn()
     return _decode(row)
+
+
+def _parse_datetime(value: str | None):
+    if not value:
+        return None
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def _execute_payload(action: dict[str, Any]) -> dict[str, Any]:
+    payload = action.get("payload") or {}
+    action_type = action.get("action_type")
+    if action_type == "gmail.create_draft":
+        from connectors.gmail import create_draft
+        return create_draft(
+            to=payload["to"], subject=payload["subject"], body=payload["body"],
+            account=payload.get("account", "primary"),
+        )
+    if action_type == "gmail.send_new":
+        from connectors.gmail import send_new_email
+        return send_new_email(
+            to=payload["to"], subject=payload["subject"], body=payload["body"],
+            account=payload.get("account", "primary"), cc=payload.get("cc"),
+        )
+    if action_type == "calendar.create":
+        from connectors.calendar import create_event
+        return create_event(
+            title=payload["title"], start=_parse_datetime(payload["start"]),
+            end=_parse_datetime(payload["end"]), description=payload.get("description", ""),
+            location=payload.get("location", ""), calendar_id=payload.get("calendar_id", "primary"),
+            reminders=payload.get("reminders", [10]),
+        )
+    if action_type == "calendar.update":
+        from connectors.calendar import update_event
+        return update_event(
+            event_id=payload["event_id"], title=payload.get("title"),
+            start=_parse_datetime(payload.get("start")), end=_parse_datetime(payload.get("end")),
+            description=payload.get("description"), location=payload.get("location"),
+            calendar_id=payload.get("calendar_id", "primary"),
+        )
+    if action_type == "calendar.delete":
+        from connectors.calendar import delete_event
+        return delete_event(event_id=payload["event_id"], calendar_id=payload.get("calendar_id", "primary"))
+    raise ValueError(f"unsupported action type: {action_type}")
+
+
+def execute_action(action_id: int) -> dict[str, Any] | None:
+    """Execute one approved external action exactly once and record its result."""
+    action = get_action(action_id)
+    if not action:
+        return None
+    if action["status"] != "approved":
+        return {**action, "execution_blocked": True, "execution_reason": "Action must be approved first"}
+    executing = transition_action(action_id, "executing")
+    if not executing:
+        return None
+    try:
+        result = _execute_payload(executing)
+        if not result.get("ok"):
+            return transition_action(action_id, "failed", result=result, error=result.get("error", "Connector failed"))
+        return transition_action(action_id, "completed", result=result)
+    except Exception as exc:
+        return transition_action(action_id, "failed", error=str(exc))
 
 
 def approve_action(action_id: int) -> dict[str, Any] | None:

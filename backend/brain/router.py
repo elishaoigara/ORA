@@ -109,9 +109,10 @@ def _run_memory_agent(bus):
         f=get_facts_as_context(limit=15)
         if f: parts.append(f[:500])
         if bus.intent=="memory_write":
-            extract_explicit_facts(bus.query); bus.reply="Got it — I've remembered that."
-            bus.memory_ctx="\n\n".join(parts); bus.add_context("MemoryAgent","Stored new fact.")
-            bus.post("MemoryAgent","memory_result",{"action":"stored","from":bus.query},_ms()-t0); return
+            extract_explicit_facts(bus.query)
+            bus.reply="I’ve prepared that as a memory candidate. Please review and confirm it in Memory before I rely on it."
+            bus.memory_ctx="\n\n".join(parts); bus.add_context("MemoryAgent","Created a reviewable memory candidate.")
+            bus.post("MemoryAgent","memory_result",{"action":"candidate","from":bus.query},_ms()-t0); return
     except Exception as e: print(f"[MEMORY_AGENT] facts: {e}")
     try:
         from memory.profile import get_all_profile

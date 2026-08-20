@@ -228,32 +228,42 @@ def gmail_emails_route(limit: int = 10):
 
 @router.post("/api/calendar/create")
 def calendar_create(body: dict):
-    """
-    Create a calendar event from natural language.
-    Body: {"text": "Team meeting tomorrow at 3pm for 1 hour"}
-    """
+    """Propose a Calendar event; no mutation occurs until the action is executed."""
     try:
-        from connectors.calendar import quick_event
+        from connectors.calendar import parse_event_request
+        from action_ledger import create_action
         text = (body.get("text") or "").strip()
         if not text:
             raise HTTPException(400, "text is required")
-        return quick_event(text)
+        parsed = parse_event_request(text, calendar_id=body.get("calendar_id", "primary"))
+        if not parsed.get("ok"):
+            return parsed
+        event = parsed["event"]
+        action = create_action(
+            action_key=f"calendar.create:{event['title']}",
+            action_type="calendar.create",
+            title=f"Add calendar event: {event['title']}",
+            description=event.get("description", ""),
+            payload=event,
+            risk="external_write",
+            requires_approval=True,
+            source="calendar_api",
+            idempotency_key=f"calendar.create:{event['title']}:{event['start']}",
+        )
+        return {"ok": True, "status": "action_proposed", "preview": event, "action": action}
     except HTTPException:
         raise
     except Exception:
         print(traceback.format_exc())
-        raise HTTPException(500, "Calendar create failed")
+        raise HTTPException(500, "Calendar proposal failed")
 
 
 @router.patch("/api/calendar/update/{event_id}")
 def calendar_update(event_id: str, body: dict):
-    """
-    Update an existing event.
-    Body: {title?, start? (ISO), end? (ISO), location?, description?}
-    """
+    """Propose an event update; no mutation occurs until the action is executed."""
     try:
-        from connectors.calendar import update_event
         from datetime import datetime, timezone
+        from action_ledger import create_action
 
         def _dt(s):
             if not s:
@@ -261,28 +271,46 @@ def calendar_update(event_id: str, body: dict):
             dt = datetime.fromisoformat(s)
             return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
-        return update_event(
-            event_id    = event_id,
-            title       = body.get("title"),
-            start       = _dt(body.get("start")),
-            end         = _dt(body.get("end")),
-            description = body.get("description"),
-            location    = body.get("location"),
+        payload = {
+            "event_id": event_id,
+            "title": body.get("title"),
+            "start": _dt(body.get("start")).isoformat() if body.get("start") else None,
+            "end": _dt(body.get("end")).isoformat() if body.get("end") else None,
+            "description": body.get("description"),
+            "location": body.get("location"),
+            "calendar_id": body.get("calendar_id", "primary"),
+        }
+        if not any(payload.get(key) is not None for key in ("title", "start", "end", "description", "location")):
+            raise HTTPException(400, "At least one event field is required")
+        action = create_action(
+            action_key=f"calendar.update:{event_id}", action_type="calendar.update",
+            title=f"Update calendar event {event_id}", payload=payload,
+            risk="external_write", requires_approval=True, source="calendar_api",
+            idempotency_key=f"calendar.update:{event_id}:{body}",
         )
+        return {"ok": True, "status": "action_proposed", "action": action}
+    except HTTPException:
+        raise
     except Exception:
         print(traceback.format_exc())
-        raise HTTPException(500, "Calendar update failed")
+        raise HTTPException(500, "Calendar update proposal failed")
 
 
 @router.delete("/api/calendar/delete/{event_id}")
 def calendar_delete(event_id: str):
-    """Delete a calendar event by ID."""
+    """Propose deleting a Calendar event; deletion requires explicit approval."""
     try:
-        from connectors.calendar import delete_event
-        return delete_event(event_id)
+        from action_ledger import create_action
+        action = create_action(
+            action_key=f"calendar.delete:{event_id}", action_type="calendar.delete",
+            title=f"Delete calendar event {event_id}",
+            payload={"event_id": event_id}, risk="irreversible", requires_approval=True,
+            source="calendar_api", idempotency_key=f"calendar.delete:{event_id}",
+        )
+        return {"ok": True, "status": "action_proposed", "action": action}
     except Exception:
         print(traceback.format_exc())
-        raise HTTPException(500, "Calendar delete failed")
+        raise HTTPException(500, "Calendar delete proposal failed")
 
 
 @router.get("/api/calendar/free-slot")

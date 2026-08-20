@@ -125,6 +125,12 @@ def _build_uncached_context() -> dict[str, Any]:
         memory = []
 
     try:
+        from intelligence.learning_engine import get_learned_facts
+        learned_facts = get_learned_facts(status="confirmed", limit=20)
+    except Exception:
+        learned_facts = []
+
+    try:
         from database import get_recent_alerts
         alerts = [_alert_dict(row) for row in (get_recent_alerts(limit=20) or [])]
     except Exception:
@@ -196,6 +202,7 @@ def _build_uncached_context() -> dict[str, Any]:
         "profile": profile,
         "preferences": preferences,
         "memory": memory,
+        "learned_facts": learned_facts,
         "alerts": alerts,
         "tasks": tasks,
         "overdue": overdue,
@@ -217,10 +224,12 @@ def _build_uncached_context() -> dict[str, Any]:
             "calendar_events": len(google["calendar_today"]),
             "unread_emails": google.get("gmail", {}).get("unread_count", 0),
             "unread_alerts": sum(1 for alert in alerts if not alert["acknowledged"]),
+            "confirmed_memories": len(learned_facts),
         },
         "sources": {
             "profile": bool(profile),
-            "memory": bool(memory),
+            "memory": bool(memory) or bool(learned_facts),
+            "confirmed_memory": bool(learned_facts),
             "google": google["connected"],
             "weather": bool(weather or weather_summary),
             "tasks": True,

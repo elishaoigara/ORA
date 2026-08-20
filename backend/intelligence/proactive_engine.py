@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import List
+
+_EAT = ZoneInfo("Africa/Nairobi")
 
 LAST_RUN: float = 0
 COOLDOWN: int   = 300  # 5-min minimum between full checks
@@ -35,11 +38,12 @@ def run_proactive_checks() -> None:
         from intelligence.notifier import dual_notify
         from agent_guard import can_fire, mark_fired
 
-        hour = datetime.now().hour
-        today = datetime.now().date().isoformat()
+        now_eat = datetime.now(_EAT)
+        hour = now_eat.hour
+        today = now_eat.date().isoformat()
 
-        # Run each check independently — one failing won't block the others
-        _check_morning_focus(hour, today, dual_notify, can_fire, mark_fired)
+        # The canonical morning brief is sent by the dedicated 07:05 job.
+        # Run the remaining context-aware checks independently.
         _check_imminent_meetings(today, dual_notify, can_fire, mark_fired)
         _check_overdue_tasks(today, dual_notify, can_fire, mark_fired)
         _check_high_priority_backlog(hour, today, dual_notify, can_fire, mark_fired)

@@ -436,6 +436,61 @@ def find_free_slot(
         return {"ok": False, "error": str(e)}
 
 
+def parse_event_request(
+    natural_text: str,
+    calendar_id: str = PRIMARY_CALENDAR,
+) -> dict:
+    """Parse a natural-language request without creating a calendar event."""
+    if not is_authorized():
+        return {"ok": False, "error": "Google not authorized"}
+    try:
+        from ai_brain import ask_groq
+        now_eat = _now_nairobi()
+        prompt = f"""Today is {now_eat.strftime('%A %d %B %Y, %H:%M')} EAT (Africa/Nairobi).
+
+The user wants to create a calendar event. Extract the details from this request:
+"{natural_text}"
+
+Respond ONLY with a valid JSON object — no markdown, no explanation:
+{{
+  "title": "event title",
+  "date": "YYYY-MM-DD",
+  "start_time": "HH:MM",
+  "end_time": "HH:MM",
+  "location": "",
+  "description": ""
+}}
+
+Rules:
+- "tomorrow" = {(now_eat + timedelta(days=1)).strftime('%Y-%m-%d')}
+- Default duration 1 hour if not specified
+- Default time 09:00 if not specified
+- 24-hour format for times
+- Empty string for missing location/description"""
+        raw = ask_groq(prompt)
+        text = raw.get("reply") or raw.get("raw") or raw.get("text") if isinstance(raw, dict) else str(raw)
+        parsed = json.loads(re.sub(r"```(?:json)?|```", "", str(text)).strip())
+        eat = zoneinfo.ZoneInfo(NAIROBI_TZ)
+        date_str = parsed.get("date", now_eat.strftime("%Y-%m-%d"))
+        start_dt = datetime.strptime(f"{date_str} {parsed.get('start_time', '09:00')}", "%Y-%m-%d %H:%M").replace(tzinfo=eat)
+        end_dt = datetime.strptime(f"{date_str} {parsed.get('end_time', '10:00')}", "%Y-%m-%d %H:%M").replace(tzinfo=eat)
+        event = {
+            "title": parsed.get("title", natural_text[:60]),
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "location": parsed.get("location", ""),
+            "description": parsed.get("description", ""),
+            "calendar_id": calendar_id,
+            "reminders": [10],
+        }
+        return {"ok": True, "event": event}
+    except json.JSONDecodeError as exc:
+        return {"ok": False, "error": f"Could not parse event details: {exc}"}
+    except Exception as exc:
+        print(f"[CALENDAR] parse_event_request failed: {exc}")
+        return {"ok": False, "error": str(exc)}
+
+
 def quick_event(
     natural_text: str,
     calendar_id:  str = PRIMARY_CALENDAR,

@@ -52,6 +52,16 @@ def init_learning_tables() -> None:
         )
     """)
 
+    columns = {row[1] for row in c.execute("PRAGMA table_info(learned_facts)").fetchall()}
+    migrations = {
+        "status": "TEXT DEFAULT 'candidate'",
+        "confirmed_at": "TEXT DEFAULT NULL",
+        "expires_at": "TEXT DEFAULT NULL",
+    }
+    for name, definition in migrations.items():
+        if name not in columns:
+            c.execute(f"ALTER TABLE learned_facts ADD COLUMN {name} {definition}")
+
     conn.commit()
     close_conn()
     print("[Learning] Tables initialized")
@@ -61,49 +71,121 @@ def init_learning_tables() -> None:
 # FACT STORAGE
 # ─────────────────────────────────────────────
 def store_fact(category: str, subject: str, predicate: str, obj: str,
-               confidence: float = 0.7, source: str = "conversation") -> None:
+               confidence: float = 0.7, source: str = "conversation",
+               status: str = "candidate") -> int:
+    """Store a candidate without overwriting a user-confirmed fact."""
+    if status not in {"candidate", "confirmed", "verified", "rejected"}:
+        raise ValueError(f"invalid memory status: {status}")
     conn = get_conn()
     c = conn.cursor()
     now = datetime.now().isoformat()
-    c.execute("""
-        INSERT INTO learned_facts
-            (category, subject, predicate, object, confidence, source, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(category, subject, predicate) DO UPDATE SET
-            object=excluded.object,
-            confidence=MAX(confidence, excluded.confidence),
-            updated_at=excluded.updated_at
-    """, (category, subject, predicate, obj, confidence, source, now, now))
+    existing = c.execute(
+        "SELECT id, status FROM learned_facts WHERE category=? AND subject=? AND predicate=?",
+        (category, subject, predicate),
+    ).fetchone()
+    if existing and existing[1] in {"confirmed", "verified"} and status == "candidate":
+        close_conn()
+        return existing[0]
+    if existing:
+        c.execute("""UPDATE learned_facts SET object=?, confidence=?, source=?,
+                   status=?, verified=?, updated_at=? WHERE id=?""",
+                  (obj, confidence, source, status, int(status in {"confirmed", "verified"}), now, existing[0]))
+        fact_id = existing[0]
+    else:
+        c.execute("""INSERT INTO learned_facts
+            (category, subject, predicate, object, confidence, source, status,
+             verified, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (category, subject, predicate, obj, confidence, source, status,
+             int(status in {"confirmed", "verified"}), now, now))
+        fact_id = c.lastrowid
     conn.commit()
     close_conn()
+    return int(fact_id or 0)
 
 
-def get_learned_facts(category: str | None = None, limit: int = 30) -> list[dict]:
+def get_learned_facts(category: str | None = None, status: str | None = None,
+                      limit: int = 30) -> list[dict]:
     conn = get_conn()
     c = conn.cursor()
+    filters = []
+    params: list = []
     if category:
-        c.execute("""
-            SELECT id, category, subject, predicate, object, confidence, updated_at
-            FROM learned_facts WHERE category=?
-            ORDER BY confidence DESC, updated_at DESC LIMIT ?
-        """, (category, limit))
-    else:
-        c.execute("""
-            SELECT id, category, subject, predicate, object, confidence, updated_at
-            FROM learned_facts
-            ORDER BY confidence DESC, updated_at DESC LIMIT ?
-        """, (limit,))
+        filters.append("category=?")
+        params.append(category)
+    if status:
+        filters.append("status=?")
+        params.append(status)
+    where = " WHERE " + " AND ".join(filters) if filters else ""
+    params.append(min(limit, 200))
+    c.execute(f"""
+        SELECT id, category, subject, predicate, object, confidence,
+               status, source, verified, created_at, updated_at, confirmed_at, expires_at
+        FROM learned_facts{where}
+        ORDER BY confidence DESC, updated_at DESC LIMIT ?
+    """, params)
     rows = c.fetchall()
     close_conn()
     return [
         {"id": r[0], "category": r[1], "subject": r[2], "predicate": r[3],
-         "object": r[4], "confidence": r[5], "updated_at": r[6]}
+         "object": r[4], "confidence": r[5], "status": r[6], "source": r[7],
+         "verified": bool(r[8]), "created_at": r[9], "updated_at": r[10],
+         "confirmed_at": r[11], "expires_at": r[12]}
         for r in rows
     ]
 
 
+def confirm_fact(fact_id: int) -> bool:
+    conn = get_conn()
+    cur = conn.execute("""UPDATE learned_facts SET status='confirmed', verified=1,
+                         confirmed_at=?, updated_at=? WHERE id=?""",
+                       (datetime.now().isoformat(), datetime.now().isoformat(), fact_id))
+    conn.commit()
+    close_conn()
+    return cur.rowcount > 0
+
+
+def reject_fact(fact_id: int) -> bool:
+    conn = get_conn()
+    cur = conn.execute("UPDATE learned_facts SET status='rejected', updated_at=? WHERE id=?",
+                       (datetime.now().isoformat(), fact_id))
+    conn.commit()
+    close_conn()
+    return cur.rowcount > 0
+
+
+def update_fact(fact_id: int, obj: str | None = None, confidence: float | None = None) -> bool:
+    updates = []
+    params = []
+    if obj is not None:
+        updates.append("object=?")
+        params.append(obj.strip())
+    if confidence is not None:
+        updates.append("confidence=?")
+        params.append(max(0.0, min(1.0, confidence)))
+    if not updates:
+        return False
+    updates.append("status='candidate'")
+    updates.append("verified=0")
+    updates.append("updated_at=?")
+    params.extend([datetime.now().isoformat(), fact_id])
+    conn = get_conn()
+    cur = conn.execute(f"UPDATE learned_facts SET {', '.join(updates)} WHERE id=?", params)
+    conn.commit()
+    close_conn()
+    return cur.rowcount > 0
+
+
+def forget_fact(fact_id: int) -> bool:
+    conn = get_conn()
+    cur = conn.execute("DELETE FROM learned_facts WHERE id=?", (fact_id,))
+    conn.commit()
+    close_conn()
+    return cur.rowcount > 0
+
+
 def get_facts_as_context(limit: int = 20) -> str:
-    facts = get_learned_facts(limit=limit)
+    facts = get_learned_facts(status="confirmed", limit=limit)
     if not facts:
         return ""
     return "\n".join(f"- {f['subject']} {f['predicate']}: {f['object']}" for f in facts)

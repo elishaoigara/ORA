@@ -23,6 +23,7 @@ def build_context(query: str | None = None) -> str:
         "profile": snapshot.get("profile", {}),
         "preferences": snapshot.get("preferences", []),
         "memory": snapshot.get("memory", []),
+        "learned_facts": snapshot.get("learned_facts", []),
         "tasks": snapshot.get("tasks", []),
         "overdue": snapshot.get("overdue", []),
         "goals": snapshot.get("goals", []),

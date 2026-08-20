@@ -25,6 +25,26 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 
+def _propose_external_action(action_key: str, action_type: str, title: str,
+                             payload: dict, risk: str = "external_write") -> str:
+    from action_ledger import create_action
+    action = create_action(
+        action_key=action_key,
+        action_type=action_type,
+        title=title,
+        payload=payload,
+        risk=risk,
+        requires_approval=True,
+        source="chat_intent",
+        idempotency_key=f"{action_key}:{datetime.now().isoformat(timespec='minutes')}:{payload}",
+    )
+    return (
+        f"🛡️ *Approval required*\n\n{title}\n"
+        f"Action ID: `{action['id']}`\n\n"
+        "Review it in the Action Approvals panel before ORA changes an external service."
+    )
+
+
 # ── Intent registry (order = priority) ───────────────────────
 _INTENTS = [
     # Actions first (highest specificity)
@@ -701,29 +721,20 @@ def _do_whatsapp(payload: dict) -> str:
 
 
 def _do_schedule_event(payload: dict) -> str:
-    """Natural language → create Google Calendar event via quick_event()."""
+    """Natural language → Calendar proposal; execution requires approval."""
     raw = payload.get("raw", "").strip()
     if not raw:
         return "❌ What should I schedule? Try: _schedule a meeting with John tomorrow at 3pm_"
     try:
-        from connectors.calendar import quick_event
-        result = quick_event(raw)
-        if result.get("ok"):
-            ev    = result["event"]
-            title = ev.get("title", "Event")
-            start = ev.get("start", "")
-            end   = ev.get("end", "")
-            loc   = ev.get("location", "")
-            loc_s = f"\n📍 {loc}" if loc else ""
-            link  = ev.get("link", "")
-            link_s = f"\n🔗 {link}" if link else ""
-            return (
-                f"✅ *Event created!*\n\n"
-                f"📅 *{title}*\n"
-                f"🕐 {start} → {end}"
-                f"{loc_s}{link_s}"
-            )
-        return f"❌ Could not create event: {result.get('error', 'unknown error')}"
+        from connectors.calendar import parse_event_request
+        result = parse_event_request(raw)
+        if not result.get("ok"):
+            return f"❌ Could not parse event: {result.get('error', 'unknown error')}"
+        ev = result["event"]
+        return _propose_external_action(
+            action_key=f"calendar.create:{ev['title']}", action_type="calendar.create",
+            title=f"Add calendar event: {ev['title']}", payload=ev,
+        )
     except Exception as e:
         return f"❌ Calendar error: {str(e)[:100]}"
 
@@ -732,7 +743,7 @@ def _do_delete_event(payload: dict) -> str:
     """Find and delete a calendar event by title/description."""
     raw = payload.get("raw", "").strip()
     try:
-        from connectors.calendar import get_upcoming_events, delete_event
+        from connectors.calendar import get_upcoming_events
         from groq import Groq
         from config import GROQ_API_KEY, GROQ_MODEL_PRIMARY
         import json as _json
@@ -769,8 +780,11 @@ def _do_delete_event(payload: dict) -> str:
             return "❌ I couldn't find a matching event. Use /cal to list events and try again."
 
         title = parsed.get("title", "Event")
-        ok    = delete_event(event_id)
-        return f"✅ *{title}* has been cancelled." if ok else f"❌ Could not delete *{title}*."
+        return _propose_external_action(
+            action_key=f"calendar.delete:{event_id}", action_type="calendar.delete",
+            title=f"Delete calendar event: {title}", payload={"event_id": event_id},
+            risk="irreversible",
+        )
     except Exception as e:
         return f"❌ Calendar error: {str(e)[:100]}"
 
@@ -887,16 +901,12 @@ def _do_send_email(payload: dict) -> str:
     if not body:
         return f"❌ What should I say? Try: *email {to} about {subject} saying [your message]*"
 
-    from connectors.gmail import send_new_email
-    result = send_new_email(to=to, subject=subject, body=body)
-    if result.get("ok"):
-        return (
-            f"✅ Email sent!\n\n"
-            f"*To:* {to}\n"
-            f"*Subject:* {subject}\n"
-            f"*Preview:* _{body[:120]}{'...' if len(body) > 120 else ''}_"
-        )
-    return f"❌ Failed to send email: {result.get('error', 'unknown error')}"
+    return _propose_external_action(
+        action_key=f"gmail.send:{to}:{subject}", action_type="gmail.send_new",
+        title=f"Send email to {to}",
+        payload={"to": to, "subject": subject, "body": body},
+        risk="external_communication",
+    )
 
 
 def _do_draft_email(payload: dict) -> str:
@@ -933,16 +943,12 @@ def _do_draft_email(payload: dict) -> str:
     if not to or not subject or not body:
         return "❌ Need recipient, subject and body to save a draft."
 
-    from connectors.gmail import create_draft
-    result = create_draft(to=to, subject=subject, body=body)
-    if result.get("ok"):
-        return (
-            f"📝 Draft saved!\n\n"
-            f"*To:* {to}\n"
-            f"*Subject:* {subject}\n"
-            f"_Open Gmail to review and send._"
-        )
-    return f"❌ Draft failed: {result.get('error', 'unknown error')}"
+    return _propose_external_action(
+        action_key=f"gmail.draft:{to}:{subject}", action_type="gmail.create_draft",
+        title=f"Create Gmail draft to {to}",
+        payload={"to": to, "subject": subject, "body": body},
+        risk="external_write",
+    )
 
 
 def _do_reply_email(payload: dict) -> str:

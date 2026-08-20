@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
-import { connectGoogle, getProfile, getPreferences, getMemoryEvents, getGoals, getGoogleAuthStatus } from "../api"
+import { connectGoogle, getProfile, getPreferences, getMemoryEvents, getGoals, getGoogleAuthStatus,
+  getLearnedFacts, confirmLearnedFact, rejectLearnedFact, updateLearnedFact, forgetLearnedFact } from "../api"
 
 async function safe(fn, fb) {
   try { return (await fn()) ?? fb } catch { return fb }
@@ -20,6 +21,7 @@ export default function MemoryPage() {
   const [prefs,      setPrefs]      = useState([])
   const [goals,      setGoals]      = useState([])
   const [googleAuth, setGoogleAuth] = useState(null)
+  const [facts,      setFacts]      = useState([])
   const [filter,     setFilter]     = useState("all")
   const [loading,    setLoading]    = useState(true)
   const [tab,        setTab]        = useState("overview")
@@ -27,18 +29,20 @@ export default function MemoryPage() {
   useEffect(() => {
     const load = async () => {
       setLoading(true)
-      const [p, e, pr, g, ga] = await Promise.all([
+      const [p, e, pr, g, ga, lf] = await Promise.all([
         safe(getProfile,                {}),
         safe(() => getMemoryEvents(50), []),
         safe(getPreferences,            []),
         safe(() => getGoals("active"),  []),
         safe(getGoogleAuthStatus,       null),
+        safe(() => getLearnedFacts("candidate", 100), []),
       ])
       setProfile(typeof p === "object" && !Array.isArray(p) ? p : {})
       setEvents(Array.isArray(e) ? e : [])
       setPrefs(Array.isArray(pr) ? pr : [])
       setGoals(Array.isArray(g) ? g : [])
       setGoogleAuth(ga)
+      setFacts(Array.isArray(lf) ? lf : [])
       setLoading(false)
     }
     load()
@@ -51,9 +55,30 @@ export default function MemoryPage() {
   const tabs = [
     { id: "overview",  label: "OVERVIEW" },
     { id: "events",    label: "EVENTS (" + events.length + ")" },
+    { id: "learned",   label: "REVIEW (" + facts.length + ")" },
     { id: "goals",     label: "GOALS (" + goals.length + ")" },
     { id: "settings",  label: "SETTINGS" },
   ]
+
+  const refreshFacts = async () => {
+    const next = await safe(() => getLearnedFacts("candidate", 100), [])
+    setFacts(Array.isArray(next) ? next : [])
+  }
+  const confirmFact = async (id) => { await confirmLearnedFact(id); await refreshFacts() }
+  const rejectFact = async (id) => { await rejectLearnedFact(id); await refreshFacts() }
+  const editFact = async (fact) => {
+    const next = window.prompt("Correct this memory:", fact.object)
+    if (next && next.trim() && next.trim() !== fact.object) {
+      await updateLearnedFact(fact.id, { object: next.trim() })
+      await refreshFacts()
+    }
+  }
+  const forgetFact = async (id) => {
+    if (window.confirm("Forget this memory permanently?")) {
+      await forgetLearnedFact(id)
+      await refreshFacts()
+    }
+  }
 
   return (
     <div className="page">
@@ -77,6 +102,10 @@ export default function MemoryPage() {
         <div className="metric-card">
           <div className="metric-label">GOALS</div>
           <div className="metric-value" style={{ color: "#4488ff" }}>{goals.length}</div>
+        </div>
+        <div className="metric-card">
+          <div className="metric-label">REVIEW</div>
+          <div className="metric-value" style={{ color: facts.length ? "#ff9900" : "#00ff9d" }}>{facts.length}</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">GOOGLE</div>
@@ -171,6 +200,42 @@ export default function MemoryPage() {
                 </div>
               )}
             </>
+          )}
+
+          {tab === "learned" && (
+            <div className="card">
+              <div className="card-header">
+                <span className="card-title">MEMORY REVIEW QUEUE</span>
+                <span className="card-badge">{facts.length} CANDIDATES</span>
+              </div>
+              <div className="card-body">
+                <div className="mono text-xs text-dimmer" style={{ marginBottom: 14, lineHeight: 1.6 }}>
+                  ORA will not use these learned facts as trusted context until you confirm them.
+                </div>
+                {facts.length === 0 ? (
+                  <div className="empty-state"><div className="empty-icon">✓</div><div className="empty-title">No memory candidates</div><div className="empty-body">New explicit memories will appear here for review.</div></div>
+                ) : facts.map(fact => (
+                  <div key={fact.id} style={{ borderBottom: "1px solid var(--border)", padding: "12px 0" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
+                          <strong>{fact.subject}</strong> {fact.predicate}: {fact.object}
+                        </div>
+                        <div className="mono text-xs text-dimmer" style={{ marginTop: 5 }}>
+                          {fact.source || "unknown source"} · {Math.round((fact.confidence || 0) * 100)}% confidence · {fact.status}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                        <button className="btn btn-sm btn-green" onClick={() => confirmFact(fact.id)}>CONFIRM</button>
+                        <button className="btn btn-sm" onClick={() => editFact(fact)}>CORRECT</button>
+                        <button className="btn btn-sm btn-red" onClick={() => rejectFact(fact.id)}>REJECT</button>
+                        <button className="btn btn-sm btn-red" onClick={() => forgetFact(fact.id)}>FORGET</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
 
           {tab === "events" && (

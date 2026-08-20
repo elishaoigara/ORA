@@ -486,6 +486,27 @@ def get_pending_replies(limit: int = 15) -> List[dict]:
         return []
 
 
+def get_suggested_reply(reply_id: int) -> Optional[dict]:
+    try:
+        conn = get_conn()
+        row = conn.execute("""SELECT id, email_id, thread_id, subject, sender,
+                   email_body, suggested_text, tone, status, created_at,
+                   COALESCE(account, 'primary') FROM suggested_replies WHERE id=?""",
+                          (reply_id,)).fetchone()
+        close_conn()
+        if not row:
+            return None
+        return {
+            "id": row[0], "email_id": row[1], "thread_id": row[2],
+            "subject": row[3], "sender": row[4], "email_body": row[5],
+            "suggested_text": row[6], "tone": row[7], "status": row[8],
+            "created_at": row[9], "account": row[10],
+        }
+    except Exception as e:
+        print(f"[GMAIL_REPLY] get_suggested failed: {e}")
+        return None
+
+
 def update_reply_text(reply_id: int, new_text: str) -> bool:
     try:
         conn = get_conn()
