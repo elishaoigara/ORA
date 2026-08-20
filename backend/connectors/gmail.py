@@ -554,48 +554,13 @@ def regenerate_reply(reply_id: int, tone: str = "professional") -> dict:
 
 
 def approve_and_send_reply(reply_id: int) -> dict:
-    try:
-        conn = get_conn()
-        row = conn.execute("""
-            SELECT email_id, thread_id, subject, sender, suggested_text,
-                   COALESCE(account, 'primary')
-            FROM suggested_replies WHERE id=?
-        """, (reply_id,)).fetchone()
-        close_conn()
+    """Legacy guard: direct smart-reply sending is disabled in Phase 6."""
+    return {
+        "ok": False,
+        "error": "Direct reply sending is disabled; use the typed approval gateway.",
+        "reply_id": reply_id,
+    }
 
-        if not row:
-            return {"ok": False, "error": "Reply not found"}
-
-        email_id, thread_id, subject, sender, text, account = row
-        sent      = False
-        error_msg = None
-
-        if is_authorized(account):
-            try:
-                _send_gmail_reply(to=sender, subject=subject,
-                                  thread_id=thread_id, body=text,
-                                  account=account)
-                sent = True
-            except Exception as e:
-                error_msg = str(e)
-                print(f"[GMAIL_REPLY:{account}] send failed: {e}")
-
-        new_status = "sent" if sent else "approved"
-        conn = get_conn()
-        conn.execute("""
-            UPDATE suggested_replies
-            SET status=?, updated_at=datetime('now')
-            WHERE id=?
-        """, (new_status, reply_id))
-        conn.commit()
-        close_conn()
-
-        return {"ok": True, "sent": sent, "status": new_status,
-                "error": error_msg, "account": account}
-
-    except Exception as e:
-        print(f"[GMAIL_REPLY] approve_and_send failed: {e}")
-        return {"ok": False, "error": str(e)}
 
 
 def _send_gmail_reply(to: str, subject: str, thread_id: Optional[str],
@@ -609,6 +574,21 @@ def _send_gmail_reply(to: str, subject: str, thread_id: Optional[str],
     if thread_id:
         payload["threadId"] = thread_id
     _gmail_post("messages/send", payload, account=account)
+
+
+def send_reply(reply_id: int, to: str, subject: str, body: str,
+               thread_id: Optional[str] = None, account: str = "primary") -> dict:
+    """Send one approved smart reply and update its local lifecycle state."""
+    try:
+        _send_gmail_reply(to=to, subject=subject, thread_id=thread_id, body=body, account=account)
+        conn = get_conn()
+        conn.execute("UPDATE suggested_replies SET status='sent', updated_at=datetime('now') WHERE id=?", (reply_id,))
+        conn.commit()
+        close_conn()
+        return {"ok": True, "reply_id": reply_id, "to": to, "subject": subject, "status": "sent"}
+    except Exception as exc:
+        print(f"[GMAIL_REPLY:{account}] send failed: {exc}")
+        return {"ok": False, "reply_id": reply_id, "error": str(exc)}
 
 
 def send_new_email(

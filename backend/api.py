@@ -81,6 +81,7 @@ async def lifespan(app: FastAPI):
         from intelligence.notifier import run_autonomous_notifications
         from connectors.drive import sync_drive
         from connectors.gmail import run_gmail_reply_checks as sync_gmail
+        from action_ledger import expire_actions
 
         def _send_context_summary(title: str, evening: bool = False):
             """Send one deterministic, approval-free summary from the canonical context."""
@@ -233,6 +234,7 @@ async def lifespan(app: FastAPI):
             # Proactive + notifications
             {"trigger": "interval", "minutes": 15, "fn": run_proactive_checks,         "name": "proactive_checks"},
             {"trigger": "interval", "minutes": 15, "fn": run_autonomous_notifications, "name": "auto_notify"},
+            {"trigger": "interval", "minutes": 15, "fn": expire_actions,                 "name": "action_expiry"},
             # Data connectors
             {"trigger": "interval", "minutes": 30, "fn": sync_drive,                   "name": "drive_sync",   "enabled_if": _google_is_authorized},
             {"trigger": "interval", "minutes": 15, "fn": sync_gmail,                   "name": "gmail_sync",   "enabled_if": _google_is_authorized},
@@ -376,6 +378,8 @@ def personal_context(force: bool = False):
 
 @app.get("/api/capabilities")
 def capabilities():
+    from tool_contracts import APPROVAL_REQUIRED_RISKS
+    from tool_registry import registry
     return {
         "release": os.getenv("ORA_RELEASE", "unknown"),
         "pages": ["dashboard", "chat", "inbox", "tasks", "alerts", "knowledge", "memory"],
@@ -386,8 +390,50 @@ def capabilities():
             "telegram": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
         },
         "action_ledger": True,
-        "approval_required_for": ["external_communication", "irreversible", "financial"],
+        "typed_tools": True,
+        "tool_count": len(registry.list_tools()),
+        "approval_required_for": sorted(APPROVAL_REQUIRED_RISKS),
     }
+
+
+@app.get("/api/tools")
+def list_tools_ep():
+    """Return typed tool contracts without exposing credentials or payload data."""
+    from tool_registry import registry
+    return registry.list_tools()
+
+
+@app.post("/api/tools/{tool_name}/run")
+def run_tool_ep(tool_name: str, payload: dict):
+    """Run one typed tool through validation and the central approval gateway."""
+    from tool_registry import registry
+    return registry.run(tool_name, payload)
+
+@app.get("/api/diagnostics")
+def diagnostics():
+    """Token-protected operational status without secrets or personal payloads."""
+    from action_ledger import list_actions
+    from ora_scheduler import get_scheduler
+    scheduler = get_scheduler()
+    jobs = []
+    for job in scheduler.get_jobs():
+        jobs.append({
+            "id": job.id,
+            "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+            "trigger": str(job.trigger),
+        })
+    actions = list_actions(limit=200)
+    counts = {status: sum(1 for action in actions if action["status"] == status)
+              for status in ("proposed", "approved", "executing", "completed", "failed", "cancelled", "rejected")}
+    return {
+        "release": os.getenv("ORA_RELEASE", "unknown"),
+        "service": "ora-backend",
+        "scheduler": {"running": bool(scheduler.running), "jobs": jobs},
+        "actions": counts,
+        "pending_approvals": counts["proposed"],
+        "typed_tools": True,
+    }
+
 
 @app.get("/api/cache/stats")
 def cache_stats():
@@ -640,6 +686,9 @@ class ActionCreate(BaseModel):
     requires_approval: bool = False
     source: str = "api"
     idempotency_key: Optional[str] = None
+    max_retries: int = 0
+    expires_at: Optional[str] = None
+    verification_required: bool = False
 
 
 @app.get("/api/actions")
@@ -667,6 +716,9 @@ def create_action_ep(payload: ActionCreate):
             requires_approval=payload.requires_approval,
             source=payload.source,
             idempotency_key=payload.idempotency_key,
+            max_retries=payload.max_retries,
+            expires_at=payload.expires_at,
+            verification_required=payload.verification_required,
         )
     except Exception:
         raise HTTPException(500, "Action could not be created")
@@ -702,6 +754,20 @@ def execute_action_ep(action_id: int):
         raise
     except Exception:
         raise HTTPException(500, "Action execution failed")
+
+
+@app.post("/api/actions/{action_id}/retry")
+def retry_action_ep(action_id: int):
+    try:
+        from action_ledger import retry_action
+        action = retry_action(action_id)
+        if not action:
+            raise HTTPException(404, "Action not found")
+        return action
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, "Action retry failed")
 
 
 @app.post("/api/actions/{action_id}/reject")
@@ -1403,30 +1469,13 @@ def gmail_regenerate_reply(reply_id: int, payload: RegenerateReplyRequest):
 
 @app.post("/api/gmail/replies/{reply_id}/approve")
 def gmail_approve_reply(reply_id: int):
-    """Create a ledger proposal; sending remains a separate explicit execution step."""
+    """Create a thread-aware ledger proposal; execution remains a separate approval step."""
     try:
-        from connectors.gmail import get_suggested_reply
-        from action_ledger import create_action
-        reply = get_suggested_reply(reply_id)
-        if not reply:
-            raise HTTPException(404, "Reply not found")
-        action = create_action(
-            action_key=f"gmail.reply:{reply_id}",
-            action_type="gmail.send_new",
-            title=f"Send reply to {reply.get('sender', 'email contact')}",
-            description=reply.get("subject", ""),
-            payload={
-                "to": reply.get("sender", ""),
-                "subject": reply.get("subject", ""),
-                "body": reply.get("suggested_text", ""),
-                "account": reply.get("account", "primary"),
-            },
-            risk="external_communication",
-            requires_approval=True,
-            source="gmail_reply",
-            idempotency_key=f"gmail.reply:{reply_id}:{reply.get('updated_at', reply.get('created_at', ''))}",
-        )
-        return {"ok": True, "status": "action_proposed", "action": action}
+        from tool_registry import registry
+        result = registry.run("gmail_reply", {"reply_id": reply_id}, source="gmail_reply")
+        if result.get("status") == "invalid_input" or result.get("status") == "preparation_failed":
+            raise HTTPException(404, result.get("error", "Reply not found"))
+        return result
     except HTTPException:
         raise
     except Exception as e:

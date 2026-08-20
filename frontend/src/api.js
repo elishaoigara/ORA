@@ -248,6 +248,10 @@ export const approveAction = (id) => request(`/actions/${id}/approve`, { method:
 export const rejectAction = (id) => request(`/actions/${id}/reject`, { method: "POST" });
 export const cancelAction = (id) => request(`/actions/${id}/cancel`, { method: "POST" });
 export const executeAction = (id) => request(`/actions/${id}/execute`, { method: "POST" });
+export const retryAction = (id) => request(`/actions/${id}/retry`, { method: "POST" });
+export const getTools = () => request("/tools");
+export const runTool = (name, payload) => request(`/tools/${encodeURIComponent(name)}/run`, { method: "POST", body: JSON.stringify(payload) });
+export const getDiagnostics = () => request("/diagnostics");
 export const getLearnedFacts = (status = "candidate", limit = 50) =>
   request(`/memory/learned?status=${encodeURIComponent(status)}&limit=${limit}`);
 export const confirmLearnedFact = (id) => request(`/memory/learned/${id}/confirm`, { method: "POST" });

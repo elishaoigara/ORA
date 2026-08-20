@@ -28,15 +28,19 @@ from typing import Optional
 def _propose_external_action(action_key: str, action_type: str, title: str,
                              payload: dict, risk: str = "external_write") -> str:
     from action_ledger import create_action
+    from tool_registry import registry
+    spec = registry.get_spec_for_action_type(action_type)
+    effective_risk = spec.risk if spec else risk
+    idempotency_key = spec.idempotency_key(payload) if spec else f"{action_key}:{payload}"
     action = create_action(
         action_key=action_key,
         action_type=action_type,
         title=title,
         payload=payload,
-        risk=risk,
-        requires_approval=True,
+        risk=effective_risk,
+        requires_approval=spec.needs_approval if spec else True,
         source="chat_intent",
-        idempotency_key=f"{action_key}:{datetime.now().isoformat(timespec='minutes')}:{payload}",
+        idempotency_key=idempotency_key,
     )
     return (
         f"🛡️ *Approval required*\n\n{title}\n"
@@ -952,29 +956,25 @@ def _do_draft_email(payload: dict) -> str:
 
 
 def _do_reply_email(payload: dict) -> str:
-    """Handle /reply or approve reply commands."""
+    """Prepare the newest smart reply as an explicit Gmail send proposal."""
     try:
-        from connectors.gmail import get_pending_replies, approve_and_send_reply
-        
+        from connectors.gmail import get_pending_replies
+        from tool_registry import registry
+
         pending = get_pending_replies()
-        
         if not pending:
             return "✅ No pending email replies at the moment."
 
-        # For simplicity, approve the most recent suggested reply
         latest = pending[0]
-        success = approve_and_send_reply(latest["id"])
-        
-        if success:
-            return f"""✅ **Reply Approved**
-
-Subject: {latest['subject'][:90]}...
-
-The reply has been marked as approved. 
-(Actual sending via Gmail will be added in the next phase.)"""
-        else:
-            return "❌ Failed to approve the reply. Please try again."
-            
+        result = registry.run("gmail_reply", {"reply_id": latest["id"]}, source="chat_intent")
+        if result.get("status") == "action_proposed":
+            action = result.get("action", {})
+            return (
+                f"🛡️ *Approval required*\n\n{action.get('title', 'Send email reply')}\n"
+                f"Action ID: `{action.get('id')}`\n\n"
+                "Review it in the Action Approvals panel before ORA sends the reply."
+            )
+        return f"❌ {result.get('error', 'Reply proposal failed')}"
     except Exception as e:
         print(f"[INTENT] _do_reply_email failed: {e}")
         return "Reply system is temporarily unavailable."

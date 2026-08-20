@@ -37,7 +37,7 @@ services:
       - key: APP_ENV
         value: production
       - key: ORA_RELEASE
-        value: phase5
+        value: phase6
 
       # ── Google OAuth (set these in Render dashboard) ───
       - key: GOOGLE_CLIENT_ID

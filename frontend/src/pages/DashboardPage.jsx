@@ -2,7 +2,7 @@
 import {
   getStatus, getAlerts, getTasks, getTheNumber,
   getMpesaSummary, getGoals, getPersonalContext, getActions,
-  approveAction, rejectAction,
+  approveAction, rejectAction, executeAction,
 } from "../api";
 
 const PRI_COLOR = { high: "#ff4444", medium: "#ff9900", low: "#4488ff" };
@@ -136,10 +136,16 @@ export default function DashboardPage() {
               <div key={action.id} className="task-row" style={{ alignItems: "flex-start" }}>
                 <div style={{ flex: 1 }}>
                   <div className="task-title">{action.title}</div>
-                  <div className="text-dimmer mono text-xs">{action.risk} · {action.source}</div>
+                  <div className="text-dimmer mono text-xs">{action.risk} · {action.source} · ID {action.id}</div>
+                  {action.description && <div className="text-dimmer text-xs" style={{ marginTop: 4 }}>{action.description}</div>}
+                  {action.expires_at && <div className="text-dimmer mono text-xs" style={{ marginTop: 4 }}>EXPIRES {action.expires_at}</div>}
                 </div>
-                <button className="btn" onClick={async () => { await approveAction(action.id); loadAll(); }}>APPROVE</button>
-                <button className="btn" onClick={async () => { await rejectAction(action.id); loadAll(); }}>REJECT</button>
+                <button className="btn btn-green" onClick={async () => {
+                  const approved = await approveAction(action.id);
+                  if (approved?.status === "approved") await executeAction(action.id);
+                  loadAll();
+                }}>APPROVE & EXECUTE</button>
+                <button className="btn btn-red" onClick={async () => { await rejectAction(action.id); loadAll(); }}>REJECT</button>
               </div>
             ))}
           </div>

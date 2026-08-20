@@ -48,12 +48,28 @@ import traceback
 from abc import ABC, abstractmethod
 from typing import Any
 
+from tool_contracts import ToolContractError, ToolSpec
+
 
 # ─── Base Tool ────────────────────────────────────────────────────────────────
 
 class Tool(ABC):
     name: str = ""
     description: str = ""
+    tool_spec: ToolSpec | None = None
+
+    def get_spec(self) -> ToolSpec:
+        if self.tool_spec is not None:
+            return self.tool_spec
+        return ToolSpec(
+            name=self.name,
+            description=self.description,
+            input_schema=getattr(self, "schema", {}),
+        )
+
+    def prepare_action(self, input: dict) -> dict[str, Any]:
+        """Return action metadata for side-effecting tools; read tools return empty."""
+        return {}
 
     @abstractmethod
     def run(self, input: dict) -> dict:
@@ -295,6 +311,25 @@ class CalendarCreateTool(Tool):
         "Create a new Google Calendar event from a natural-language description. "
         "Input: {text: str}  e.g. {\"text\": \"Team meeting tomorrow at 3pm for 1 hour\"}"
     )
+    tool_spec = ToolSpec(
+        name=name, description=description,
+        input_schema={"text": {"type": "str", "required": True}},
+        risk="external_write", side_effect="calendar.create",
+        action_type="calendar.create", timeout_seconds=30, max_retries=1,
+    )
+
+    def prepare_action(self, input: dict) -> dict[str, Any]:
+        from connectors.calendar import parse_event_request
+        result = parse_event_request(input["text"])
+        if not result.get("ok"):
+            raise ToolContractError(result.get("error", "Could not parse calendar event"))
+        event = result["event"]
+        return {
+            "payload": event,
+            "title": f"Add calendar event: {event['title']}",
+            "description": event.get("description", ""),
+            "action_key": f"calendar.create:{event['title']}",
+        }
 
     def run(self, input: dict) -> dict:
         from connectors.calendar import quick_event
@@ -319,6 +354,34 @@ class CalendarUpdateTool(Tool):
         "Input: {event_id: str, title?: str, start?: ISO str, end?: ISO str, "
         "location?: str, description?: str}"
     )
+    tool_spec = ToolSpec(
+        name=name, description=description,
+        input_schema={
+            "event_id": {"type": "str", "required": True},
+            "title": {"type": "str", "required": False},
+            "start": {"type": "str", "required": False},
+            "end": {"type": "str", "required": False},
+            "location": {"type": "str", "required": False},
+            "description": {"type": "str", "required": False},
+        },
+        risk="external_write", side_effect="calendar.update",
+        action_type="calendar.update", timeout_seconds=30, max_retries=1,
+    )
+
+    def prepare_action(self, input: dict[str, Any]) -> dict[str, Any]:
+        from datetime import datetime, timezone
+        payload = dict(input)
+        for key in ("start", "end"):
+            if payload.get(key):
+                dt = datetime.fromisoformat(payload[key])
+                payload[key] = (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).isoformat()
+        if not any(payload.get(key) is not None for key in ("title", "start", "end", "location", "description")):
+            raise ToolContractError("At least one event field is required")
+        return {
+            "payload": payload,
+            "title": f"Update calendar event {input['event_id']}",
+            "action_key": f"calendar.update:{input['event_id']}",
+        }
 
     def run(self, input: dict) -> dict:
         from connectors.calendar import update_event
@@ -356,6 +419,19 @@ class CalendarUpdateTool(Tool):
 class CalendarDeleteTool(Tool):
     name = "calendar_delete"
     description = "Delete a calendar event by ID. Input: {event_id: str}"
+    tool_spec = ToolSpec(
+        name=name, description=description,
+        input_schema={"event_id": {"type": "str", "required": True}},
+        risk="irreversible", side_effect="calendar.delete",
+        action_type="calendar.delete", timeout_seconds=30, max_retries=0,
+    )
+
+    def prepare_action(self, input: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "payload": {"event_id": input["event_id"]},
+            "title": f"Delete calendar event {input['event_id']}",
+            "action_key": f"calendar.delete:{input['event_id']}",
+        }
 
     def run(self, input: dict) -> dict:
         from connectors.calendar import delete_event
@@ -477,6 +553,18 @@ class MpesaSyncSheetTool(Tool):
 class GmailSendTool(Tool):
     name        = "gmail_send"
     description = "Send a new email via Gmail"
+    tool_spec  = ToolSpec(
+        name=name, description=description,
+        input_schema={
+            "to": {"type": "str", "required": True},
+            "subject": {"type": "str", "required": True},
+            "body": {"type": "str", "required": True},
+            "cc": {"type": "str", "required": False},
+            "account": {"type": "str", "required": False},
+        },
+        risk="external_communication", side_effect="gmail.send",
+        action_type="gmail.send_new", timeout_seconds=30, max_retries=0,
+    )
     schema      = {
         "to":      {"type": "str",  "required": True,  "desc": "Recipient email address"},
         "subject": {"type": "str",  "required": True,  "desc": "Email subject line"},
@@ -484,6 +572,17 @@ class GmailSendTool(Tool):
         "cc":      {"type": "str",  "required": False, "desc": "CC address (optional)"},
         "account": {"type": "str",  "required": False, "desc": "primary or secondary (default: primary)"},
     }
+
+    def prepare_action(self, input: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "payload": {
+                "to": input["to"].strip(), "subject": input["subject"].strip(),
+                "body": input["body"].strip(), "cc": input.get("cc", ""),
+                "account": input.get("account", "primary"),
+            },
+            "title": f"Send email to {input['to']}",
+            "action_key": f"gmail.send:{input['to']}:{input['subject']}",
+        }
 
     def run(self, input: dict) -> dict:
         from connectors.gmail import send_new_email
@@ -504,12 +603,33 @@ class GmailSendTool(Tool):
 class GmailDraftTool(Tool):
     name        = "gmail_draft"
     description = "Save an email as a Gmail draft without sending"
+    tool_spec  = ToolSpec(
+        name=name, description=description,
+        input_schema={
+            "to": {"type": "str", "required": True},
+            "subject": {"type": "str", "required": True},
+            "body": {"type": "str", "required": True},
+            "account": {"type": "str", "required": False},
+        },
+        risk="external_write", side_effect="gmail.create_draft",
+        action_type="gmail.create_draft", timeout_seconds=30, max_retries=1,
+    )
     schema      = {
         "to":      {"type": "str", "required": True,  "desc": "Recipient email address"},
         "subject": {"type": "str", "required": True,  "desc": "Email subject line"},
         "body":    {"type": "str", "required": True,  "desc": "Email body (plain text)"},
         "account": {"type": "str", "required": False, "desc": "primary or secondary"},
     }
+
+    def prepare_action(self, input: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "payload": {
+                "to": input["to"].strip(), "subject": input["subject"].strip(),
+                "body": input["body"].strip(), "account": input.get("account", "primary"),
+            },
+            "title": f"Create Gmail draft for {input['to']}",
+            "action_key": f"gmail.draft:{input['to']}:{input['subject']}",
+        }
 
     def run(self, input: dict) -> dict:
         from connectors.gmail import create_draft
@@ -524,6 +644,41 @@ class GmailDraftTool(Tool):
             body=body,
             account=input.get("account", "primary"),
         )
+
+
+class GmailReplyTool(Tool):
+    name        = "gmail_reply"
+    description = "Send a saved Gmail smart reply after explicit approval"
+    tool_spec  = ToolSpec(
+        name=name, description=description,
+        input_schema={"reply_id": {"type": "int", "required": True}},
+        risk="external_communication", side_effect="gmail.send_reply",
+        action_type="gmail.send_reply", timeout_seconds=30, max_retries=0,
+    )
+
+    def prepare_action(self, input: dict[str, Any]) -> dict[str, Any]:
+        from connectors.gmail import get_suggested_reply
+        reply = get_suggested_reply(input["reply_id"])
+        if not reply:
+            raise ToolContractError("Reply not found")
+        payload = {
+            "reply_id": input["reply_id"],
+            "to": reply.get("sender", ""),
+            "subject": reply.get("subject", ""),
+            "body": reply.get("suggested_text", ""),
+            "thread_id": reply.get("thread_id"),
+            "account": reply.get("account", "primary"),
+        }
+        return {
+            "payload": payload,
+            "title": f"Send reply to {reply.get('sender', 'email contact')}",
+            "description": reply.get("subject", ""),
+            "action_key": f"gmail.reply:{input['reply_id']}",
+            "idempotency_key": f"gmail.reply:{input['reply_id']}:{reply.get('updated_at', reply.get('created_at', ''))}",
+        }
+
+    def run(self, input: dict) -> dict:
+        return {"ok": False, "error": "Gmail replies must use the approval gateway"}
 
 
 class ToolRegistry:
@@ -549,6 +704,7 @@ class ToolRegistry:
             GmailSummaryTool(),
             GmailSendTool(),
             GmailDraftTool(),
+            GmailReplyTool(),
             SheetsCreateTool(),
             SheetsReadTool(),
             SheetsWriteTool(),
@@ -568,24 +724,27 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         self._tools[tool.name] = tool
 
-    def run(self, name: str, input: dict | None = None) -> dict:
-        """
-        Run a tool by name. Returns {"ok": False, "error": ...} if not found.
-        """
+    def run(self, name: str, input: dict | None = None, source: str = "tool_registry") -> dict:
+        """Run one tool through typed validation and the central safety gateway."""
         tool = self._tools.get(name)
         if not tool:
             return {"ok": False, "error": f"Unknown tool: '{name}'"}
-        return tool.safe_run(input or {})
+        from tool_gateway import submit_tool_call
+        return submit_tool_call(tool, input or {}, source=source)
 
     def list_tools(self) -> list[dict]:
-        """Return all registered tools with name and description."""
-        return [
-            {"name": t.name, "description": t.description}
-            for t in self._tools.values()
-        ]
+        """Return the complete typed contract for every registered tool."""
+        return [t.get_spec().as_dict() for t in self._tools.values()]
 
     def has(self, name: str) -> bool:
         return name in self._tools
+
+    def get_spec_for_action_type(self, action_type: str) -> ToolSpec | None:
+        for tool in self._tools.values():
+            spec = tool.get_spec()
+            if spec.action_type == action_type:
+                return spec
+        return None
 
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)

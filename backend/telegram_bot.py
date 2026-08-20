@@ -390,12 +390,17 @@ def _cmd_email(chat_id, arg, reply_to=None):
     parts = [p.strip() for p in arg.split("|")]
     if len(parts) >= 3:
         to, subject, body = parts[0], parts[1], "|".join(parts[2:])
-        tg_send(chat_id, f"📤 Sending to *{to}*...", "Markdown", reply_to)
+        tg_send(chat_id, f"📤 Preparing email to *{to}*...", "Markdown", reply_to)
         try:
-            from connectors.gmail import send_new_email
-            result = send_new_email(to=to, subject=subject, body=body)
-            if result.get("ok"): tg_send(chat_id, f"✅ *Email sent!*\n\n*To:* {to}\n*Subject:* {subject}\n_{body[:100]}_", "Markdown", reply_to)
-            else: tg_send(chat_id, f"❌ Failed: {result.get('error')}", reply_to_message_id=reply_to)
+            from tool_registry import registry
+            result = registry.run("gmail_send", {"to": to, "subject": subject, "body": body}, source="telegram")
+            if result.get("status") == "action_proposed":
+                action = result.get("action", {})
+                tg_send(chat_id, f"⏳ *Approval requested*\n\n{action.get('title', 'Send email')}\nAction ID: `{action.get('id')}`\n\nReview and approve it in ORA before sending.", "Markdown", reply_to)
+            elif result.get("ok"):
+                tg_send(chat_id, f"✅ *Email sent!*\n\n*To:* {to}\n*Subject:* {subject}\n_{body[:100]}_", "Markdown", reply_to)
+            else:
+                tg_send(chat_id, f"❌ Failed: {result.get('error')}", reply_to_message_id=reply_to)
         except Exception as e: tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
     else:
         try:
@@ -411,9 +416,13 @@ def _cmd_draft(chat_id, arg, reply_to=None):
     if len(parts) >= 3:
         to, subject, body = parts[0], parts[1], "|".join(parts[2:])
         try:
-            from connectors.gmail import create_draft
-            result = create_draft(to=to, subject=subject, body=body)
-            if result.get("ok"): tg_send(chat_id, f"📝 *Draft saved!*\n\n*To:* {to}\n*Subject:* {subject}\n_Open Gmail to send._", "Markdown", reply_to)
+            from tool_registry import registry
+            result = registry.run("gmail_draft", {"to": to, "subject": subject, "body": body}, source="telegram")
+            if result.get("status") == "action_proposed":
+                action = result.get("action", {})
+                tg_send(chat_id, f"⏳ *Draft approval requested*\nAction ID: `{action.get('id')}`", "Markdown", reply_to)
+            elif result.get("ok"):
+                tg_send(chat_id, f"📝 *Draft saved!*\n\n*To:* {to}\n*Subject:* {subject}\n_Open Gmail to send._", "Markdown", reply_to)
             else: tg_send(chat_id, f"❌ {result.get('error')}", reply_to_message_id=reply_to)
         except Exception as e: tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
     else: tg_send(chat_id, "Usage: `/draft to@x.com | Subject | Body`", "Markdown", reply_to)
@@ -436,13 +445,15 @@ def _cmd_cal(chat_id, arg, reply_to=None):
         return
     if lower.startswith(("add ","schedule ","create ")):
         text = re.sub(r"^(add|schedule|create)\s+", "", arg, flags=re.I)
-        tg_send(chat_id, "📅 Creating event...", reply_to_message_id=reply_to)
+        tg_send(chat_id, "📅 Preparing event...", reply_to_message_id=reply_to)
         try:
-            from connectors.calendar import quick_event
-            result = quick_event(text)
-            if result.get("ok"):
-                ev = result["event"]; loc_s = f"\n📍 {ev.get('location')}" if ev.get("location") else ""
-                tg_send(chat_id, f"✅ *Event created!*\n\n📅 *{ev.get('title','Event')}*\n🕐 {ev.get('start','')} → {ev.get('end','')}{loc_s}", "Markdown", reply_to)
+            from tool_registry import registry
+            result = registry.run("calendar_create", {"text": text}, source="telegram")
+            if result.get("status") == "action_proposed":
+                action = result.get("action", {})
+                tg_send(chat_id, f"⏳ *Approval requested*\n\n{action.get('title', 'Create calendar event')}\nAction ID: `{action.get('id')}`\n\nReview and approve it in ORA before changing Calendar.", "Markdown", reply_to)
+            elif result.get("ok"):
+                tg_send(chat_id, "✅ Calendar event created.", "Markdown", reply_to)
             else: tg_send(chat_id, f"❌ {result.get('error')}", reply_to_message_id=reply_to)
         except Exception as e: tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
         return
@@ -461,14 +472,16 @@ def _cmd_cal(chat_id, arg, reply_to=None):
             tg_send(chat_id, _do_delete_event({"raw": text}), "Markdown", reply_to)
         except Exception as e: tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
         return
-    # Fallback: treat as quick event
-    tg_send(chat_id, "📅 Creating event...", reply_to_message_id=reply_to)
+    # Fallback: treat as a typed calendar proposal
+    tg_send(chat_id, "📅 Preparing event...", reply_to_message_id=reply_to)
     try:
-        from connectors.calendar import quick_event
-        result = quick_event(arg)
-        if result.get("ok"):
-            ev = result["event"]
-            tg_send(chat_id, f"✅ *{ev.get('title','Event')}* scheduled for {ev.get('start','')}", "Markdown", reply_to)
+        from tool_registry import registry
+        result = registry.run("calendar_create", {"text": arg}, source="telegram")
+        if result.get("status") == "action_proposed":
+            action = result.get("action", {})
+            tg_send(chat_id, f"⏳ *Approval requested*\n\n{action.get('title', 'Create calendar event')}\nAction ID: `{action.get('id')}`", "Markdown", reply_to)
+        elif result.get("ok"):
+            tg_send(chat_id, "✅ Calendar event created.", "Markdown", reply_to)
         else: tg_send(chat_id, f"❌ {result.get('error')}\n\nTry `/cal` for help.", "Markdown", reply_to)
     except Exception as e: tg_send(chat_id, f"❌ {e}", reply_to_message_id=reply_to)
 
