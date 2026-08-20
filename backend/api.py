@@ -59,6 +59,7 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('intelligence.goals_engine', fromlist=['init_goals_table']).init_goals_table(), "Goals"),
         (lambda: __import__('action_ledger', fromlist=['init_action_ledger']).init_action_ledger(), "Action Ledger"),
         (lambda: __import__('fcm').init_fcm_table(), "FCM Tokens"),
+        (lambda: __import__('device_registry', fromlist=['init_device_tables']).init_device_tables(), "Device Registry"),
         (lambda: __import__('intelligence.learning_engine', fromlist=['init_learning_tables']).init_learning_tables(), "Learning"),
         (lambda: __import__('connectors.gmail', fromlist=['init_gmail_tables']).init_gmail_tables(), "Gmail"),
         (lambda: __import__('conversation_history', fromlist=['conversation_history']).conversation_history, "Conv History"),
@@ -1045,6 +1046,106 @@ async def mpesa_sms_test():
         "message": "ORA M-Pesa SMS endpoint is live.",
         "endpoint": "POST /api/mpesa/sms",
     }
+
+
+# ── Android Companion devices ──────────────────────────────────────────────────
+class DevicePairingCodeCreate(BaseModel):
+    label_hint: str = "Android phone"
+    platform: str = "android"
+    expires_in_minutes: int = 10
+
+
+class DevicePairRequest(BaseModel):
+    pairing_code: str
+    device_name: str
+    platform: str = "android"
+    app_version: Optional[str] = None
+
+
+@app.post("/api/devices/pairing-codes")
+def create_device_pairing_code(payload: DevicePairingCodeCreate):
+    """Create a short-lived, one-time Android companion code for the ORA owner."""
+    try:
+        from device_registry import create_pairing_code
+        return {"ok": True, **create_pairing_code(
+            label_hint=payload.label_hint,
+            platform=payload.platform,
+            ttl_minutes=payload.expires_in_minutes,
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/pair")
+def pair_device(payload: DevicePairRequest):
+    """Public only for possession of a high-entropy, short-lived pairing code."""
+    try:
+        from device_registry import DeviceRegistryError, redeem_pairing_code
+        device, device_token = redeem_pairing_code(
+            pairing_code=payload.pairing_code,
+            device_name=payload.device_name,
+            platform=payload.platform,
+            app_version=payload.app_version,
+        )
+        return {
+            "ok": True,
+            "device": device,
+            "device_token": device_token,
+            "token_notice": "Store this device token securely. It is shown only once.",
+        }
+    except DeviceRegistryError as exc:
+        raise HTTPException(status_code=400, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+@app.get("/api/devices")
+def get_devices():
+    try:
+        from device_registry import list_devices
+        return {"ok": True, "devices": list_devices()}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Unable to load devices") from exc
+
+
+@app.get("/api/devices/self")
+def get_current_device(request: Request):
+    device = getattr(request.state, "ora_device", None)
+    if not device:
+        raise HTTPException(status_code=401, detail="Device credential required")
+    return {"ok": True, "device": device}
+
+
+@app.post("/api/devices/self/check-in")
+def check_in_current_device(request: Request):
+    device = getattr(request.state, "ora_device", None)
+    if not device:
+        raise HTTPException(status_code=401, detail="Device credential required")
+    try:
+        from device_registry import check_in_device
+        return {"ok": True, "device": check_in_device(device["id"])}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/self/revoke")
+def revoke_current_device(request: Request):
+    """Allow a paired phone to invalidate only its own credential."""
+    device = getattr(request.state, "ora_device", None)
+    if not device:
+        raise HTTPException(status_code=401, detail="Device credential required")
+    try:
+        from device_registry import revoke_device
+        return {"ok": True, "device": revoke_device(device["id"])}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/{device_id}/revoke")
+def revoke_registered_device(device_id: str):
+    try:
+        from device_registry import DeviceRegistryError, revoke_device
+        return {"ok": True, "device": revoke_device(device_id)}
+    except DeviceRegistryError as exc:
+        raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
 
 
 # ── Location ──────────────────────────────────────────────────────────────────

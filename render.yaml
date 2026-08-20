@@ -37,7 +37,7 @@ services:
       - key: APP_ENV
         value: production
       - key: ORA_RELEASE
-        value: phase8
+        value: android-companion-mvp
 
       # ── Google OAuth (set these in Render dashboard) ───
       - key: GOOGLE_CLIENT_ID

@@ -27,6 +27,12 @@ _PUBLIC_EXACT_PATHS = {
     "/redoc",
     "/openapi.json",
     "/api/whatsapp/incoming",
+    "/api/devices/pair",
+}
+_DEVICE_AUTH_PATHS = {
+    "/api/devices/self",
+    "/api/devices/self/check-in",
+    "/api/devices/self/revoke",
 }
 _PUBLIC_PREFIXES = (
     "/api/auth/google",
@@ -51,6 +57,23 @@ async def auth_middleware(
 ):
     if request.method == "OPTIONS" or is_public_path(request.url.path):
         return await call_next(request)
+
+    if is_authorized(request.headers.get("X-ORA-Token")):
+        return await call_next(request)
+
+    if request.url.path in _DEVICE_AUTH_PATHS:
+        try:
+            from device_registry import authenticate_device
+
+            device = authenticate_device(
+                request.headers.get("X-ORA-Device-ID"),
+                request.headers.get("X-ORA-Device-Token"),
+            )
+        except Exception:
+            device = None
+        if device:
+            request.state.ora_device = device
+            return await call_next(request)
 
     if not is_authorized(request.headers.get("X-ORA-Token")):
         status = 503 if not _API_TOKEN else 401
