@@ -21,6 +21,7 @@ _APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 _PUBLIC_EXACT_PATHS = {
     "/",
     "/api/health",
+    "/api/ready",
     "/api/ping",
     "/docs",
     "/redoc",

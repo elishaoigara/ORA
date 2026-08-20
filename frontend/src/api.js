@@ -252,6 +252,7 @@ export const retryAction = (id) => request(`/actions/${id}/retry`, { method: "PO
 export const getTools = () => request("/tools");
 export const runTool = (name, payload) => request(`/tools/${encodeURIComponent(name)}/run`, { method: "POST", body: JSON.stringify(payload) });
 export const getDiagnostics = () => request("/diagnostics");
+export const getReady = () => request("/ready");
 export const getLearnedFacts = (status = "candidate", limit = 50) =>
   request(`/memory/learned?status=${encodeURIComponent(status)}&limit=${limit}`);
 export const confirmLearnedFact = (id) => request(`/memory/learned/${id}/confirm`, { method: "POST" });
@@ -304,4 +305,31 @@ export const runProactiveChecks   = ()      => request("/proactive/run", { metho
    PHASE 2 — VOICE
    ========================= */
 
-// Voice transcription is called with raw FormData (not JSON) — done inline in ChatPage.
+export const getVoiceConfig = () => request("/voice/config");
+
+export async function speakText(text, voice = null) {
+  const response = await apiFetch("/api/voice/speak", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, voice }),
+  });
+  if (!response.ok) throw new Error("Voice playback is unavailable");
+  return response.blob();
+}
+
+export async function sendVoiceCommand(audioBlob, sessionId = "", language = "auto") {
+  const form = new FormData();
+  form.append("audio", audioBlob, audioBlob.name || "ora-voice.webm");
+  form.append("session_id", sessionId || "");
+  form.append("language", language || "auto");
+  const response = await apiFetch("/api/voice/command", {
+    method: "POST",
+    body: form,
+  });
+  if (!response.ok) {
+    let message = `Voice request failed (${response.status})`;
+    try { message = (await response.json()).detail || message; } catch {}
+    throw new Error(message);
+  }
+  return response.json();
+}

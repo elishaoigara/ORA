@@ -564,6 +564,13 @@ html, body, #root {
   transition: all 0.15s;
 }
 .chat-voice-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.chat-voice-btn.recording {
+  background: rgba(255, 68, 68, 0.16);
+  border-color: var(--red);
+  color: var(--red);
+  box-shadow: 0 0 0 4px rgba(255, 68, 68, 0.08);
+}
+.chat-voice-btn:not(:disabled):hover { border-color: var(--green); color: var(--green); }
 
 /* Send button stays circular */
 .chat-send-btn {

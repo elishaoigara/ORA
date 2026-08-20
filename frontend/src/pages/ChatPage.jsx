@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { getConversations, getRecentSessions, sendMessage } from "../api";
+import { getConversations, getRecentSessions, sendMessage, getVoiceConfig, sendVoiceCommand, speakText } from "../api";
 
 let _id = 0;
 const uid = () => String(++_id);
@@ -144,12 +144,141 @@ export default function ChatPage() {
   const textareaRef      = useRef(null);
   const thinkId          = useRef(null);
   const thinkTimer       = useRef(null);
-  const thinkIdx         = useRef(0);
+  const thinkIdx          = useRef(0);
+  const mediaRecorderRef  = useRef(null);
+  const audioChunksRef    = useRef([]);
+  const voiceTimerRef     = useRef(null);
+  const voiceHoldRef      = useRef(false);
+  const [voiceState,      setVoiceState] = useState("idle");
+  const [voiceSeconds,    setVoiceSeconds] = useState(0);
+  const [voiceSupported,  setVoiceSupported] = useState(false);
+  const [voiceConfig,     setVoiceConfig] = useState(null);
+  const voiceReady = voiceSupported && voiceConfig?.enabled === true;
 
-  const showToast = (msg, type = "info") => {
+  const showToast = useCallback((msg, type = "info") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 2500);
-  };
+  }, []);
+
+  const scrollBottom = useCallback(() => {
+    setTimeout(() => listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }), 60);
+  }, []);
+
+  const speakReply = useCallback(async (text) => {
+    if (!text) return;
+    const cleanText = text.replace(/[*_`#]/g, "").slice(0, 1400);
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.rate = 1.02;
+      utterance.pitch = 0.96;
+      window.speechSynthesis.speak(utterance);
+      return;
+    }
+    try {
+      const audioBlob = await speakText(cleanText);
+      const url = URL.createObjectURL(audioBlob);
+      const audio = new Audio(url);
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
+    } catch {
+      showToast("Reply received, but audio playback is unavailable", "error");
+    }
+  }, [showToast]);
+
+  const stopVoiceRecording = useCallback(() => {
+    voiceHoldRef.current = false;
+    const recorder = mediaRecorderRef.current;
+    if (voiceTimerRef.current) {
+      clearInterval(voiceTimerRef.current);
+      voiceTimerRef.current = null;
+    }
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  }, []);
+
+  const startVoiceRecording = useCallback(async (event) => {
+    if (event?.currentTarget && event.pointerId !== undefined) {
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+    }
+    if (loading || voiceState !== "idle" || !voiceReady) return;
+    voiceHoldRef.current = true;
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      showToast("This browser does not support voice input", "error");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"]
+        .find(type => MediaRecorder.isTypeSupported(type)) || "";
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (chunk) => {
+        if (chunk.data?.size) audioChunksRef.current.push(chunk.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(track => track.stop());
+        mediaRecorderRef.current = null;
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        audioChunksRef.current = [];
+        if (blob.size < 1000) {
+          setVoiceState("idle");
+          showToast("No speech captured — hold the button while speaking", "error");
+          return;
+        }
+        setVoiceState("transcribing");
+        try {
+          const result = await sendVoiceCommand(blob, sessionId || "", "auto");
+          const transcript = result.transcript || "[voice message]";
+          const reply = result.reply || "No response";
+          setMessages(prev => [...prev,
+            { id: uid(), role: "user", content: transcript, ts: ts(), voice: true },
+            { id: uid(), role: "assistant", content: reply, ts: ts(), intent: result.intent, voice: true },
+          ]);
+          if (result.session_id && result.session_id !== sessionId) {
+            localStorage.setItem("ora_session_id", result.session_id);
+            setSessionId(result.session_id);
+          }
+          speakReply(reply);
+          scrollBottom();
+        } catch (error) {
+          showToast(error.message || "Voice request failed", "error");
+        } finally {
+          setVoiceState("idle");
+          setVoiceSeconds(0);
+        }
+      };
+      recorder.start(100);
+      mediaRecorderRef.current = recorder;
+      if (!voiceHoldRef.current) {
+        recorder.stop();
+        return;
+      }
+      setVoiceSeconds(0);
+      setVoiceState("recording");
+      voiceTimerRef.current = setInterval(() => {
+        setVoiceSeconds(seconds => {
+          if (seconds >= 59) {
+            stopVoiceRecording();
+            return 60;
+          }
+          return seconds + 1;
+        });
+      }, 1000);
+    } catch {
+      showToast("Microphone permission is needed for voice input", "error");
+    }
+  }, [loading, scrollBottom, sessionId, showToast, speakReply, stopVoiceRecording, voiceReady, voiceState]);
+
+  useEffect(() => {
+    setVoiceSupported(Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder));
+    getVoiceConfig().then(setVoiceConfig).catch(() => setVoiceConfig(null));
+    return () => {
+      stopVoiceRecording();
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    };
+  }, [stopVoiceRecording]);
 
   useEffect(() => {
     const h = new Date().getHours();
@@ -179,10 +308,6 @@ export default function ChatPage() {
       .catch(() => {});
   }, [sessionId]);
 
-  const scrollBottom = useCallback(() => {
-    setTimeout(() => listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }), 60);
-  }, []);
-
   const startThinking = useCallback((id) => {
     thinkIdx.current = 0;
     thinkTimer.current = setInterval(() => {
@@ -199,7 +324,7 @@ export default function ChatPage() {
 
   const handleCopy = useCallback((text) => {
     navigator.clipboard.writeText(text).then(() => showToast("Copied", "success"));
-  }, []);
+  }, [showToast]);
 
   // Auto-grow textarea
   const handleInputChange = (e) => {
@@ -261,6 +386,21 @@ export default function ChatPage() {
   const chips    = CHIP_SETS[chipSet] || CHIP_SETS.default;
   const greeting = getGreeting();
 
+  const handleVoiceKeyDown = (event) => {
+    if (event.key === " " && !event.repeat) {
+      event.preventDefault();
+      voiceHoldRef.current = true;
+      startVoiceRecording(event);
+    }
+  };
+
+  const handleVoiceKeyUp = (event) => {
+    if (event.key === " ") {
+      event.preventDefault();
+      stopVoiceRecording();
+    }
+  };
+
   return (
     <div className="chat-page">
       {/* Messages */}
@@ -293,6 +433,23 @@ export default function ChatPage() {
 
       {/* ── Input bar — works on both mobile and desktop ── */}
       <div className="chat-input-bar">
+        {/* Push-to-talk voice control: hold while speaking, release to send. */}
+        <button
+          className={`chat-voice-btn ${voiceState === "recording" ? "recording" : ""}`}
+          type="button"
+          onPointerDown={startVoiceRecording}
+          onPointerUp={stopVoiceRecording}
+          onPointerCancel={stopVoiceRecording}
+          onKeyDown={handleVoiceKeyDown}
+          onKeyUp={handleVoiceKeyUp}
+          disabled={loading || !voiceReady || voiceState === "transcribing"}
+          aria-label={voiceState === "recording" ? `Recording ${voiceSeconds} seconds; release to send` : "Hold to talk to ORA"}
+          aria-pressed={voiceState === "recording"}
+          title={!voiceReady ? "Voice input is unavailable" : "Hold to talk; release to send"}
+        >
+          {voiceState === "recording" ? `● ${voiceSeconds}s` : voiceState === "transcribing" ? "…" : "MIC"}
+        </button>
+
         {/* Auto-growing textarea */}
         <textarea
           ref={textareaRef}

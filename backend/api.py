@@ -20,7 +20,7 @@ from typing import Any, Optional
 import psutil
 import requests
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
@@ -288,6 +288,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.middleware("http")(auth_middleware)
+from reliability import metrics_middleware
+app.middleware("http")(metrics_middleware)
 
 # ── WhatsApp incoming webhook (called by Baileys sidecar) ─────────────────────
 _WA_INTERNAL_TOKEN = os.getenv("ORA_INTERNAL_TOKEN", "").strip()
@@ -346,6 +348,34 @@ async def health(request: Request):
         "release": os.getenv("ORA_RELEASE", "unknown"),
         "service": "ora-backend",
     }
+
+
+@app.get("/api/ready")
+def readiness():
+    """Core-process readiness without contacting optional external integrations."""
+    checks: dict[str, bool] = {}
+    try:
+        from database import close_conn, get_conn
+        conn = get_conn()
+        conn.execute("SELECT 1").fetchone()
+        close_conn()
+        checks["database"] = True
+    except Exception:
+        checks["database"] = False
+    try:
+        from action_ledger import init_action_ledger
+        init_action_ledger()
+        checks["action_ledger"] = True
+    except Exception:
+        checks["action_ledger"] = False
+    core_ready = all(checks.values())
+    payload = {
+        "status": "ready" if core_ready else "degraded",
+        "release": os.getenv("ORA_RELEASE", "unknown"),
+        "service": "ora-backend",
+        "checks": checks,
+    }
+    return JSONResponse(status_code=200 if core_ready else 503, content=payload)
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
@@ -414,6 +444,7 @@ def diagnostics():
     """Token-protected operational status without secrets or personal payloads."""
     from action_ledger import list_actions
     from ora_scheduler import get_scheduler
+    from reliability import runtime_metrics
     scheduler = get_scheduler()
     jobs = []
     for job in scheduler.get_jobs():
@@ -432,6 +463,7 @@ def diagnostics():
         "actions": counts,
         "pending_approvals": counts["proposed"],
         "typed_tools": True,
+        "runtime": runtime_metrics.snapshot(),
     }
 
 
@@ -594,6 +626,84 @@ async def chat(payload: ChatRequest):
         print("[CHAT ERROR]")
         print(traceback.format_exc())
         return {"reply": "ORA error. Try again."}
+
+
+@app.get("/api/voice/config")
+def voice_config():
+    from voice_service import VOICE_ALLOWED_EXTENSIONS, VOICE_MAX_BYTES, VOICE_MODEL
+    return {
+        "enabled": bool(GROQ_API_KEY),
+        "stt": {
+            "provider": "groq",
+            "model": VOICE_MODEL,
+            "max_bytes": VOICE_MAX_BYTES,
+            "formats": sorted(VOICE_ALLOWED_EXTENSIONS),
+        },
+        "tts": {
+            "provider": "browser_speech_synthesis",
+            "server_fallback_available": bool(GROQ_API_KEY),
+        },
+        "interaction": {
+            "mode": "push_to_talk",
+            "max_recording_seconds": 60,
+            "approval_required_for_external_actions": True,
+        },
+    }
+
+
+class VoiceSpeakRequest(BaseModel):
+    text: str
+    voice: Optional[str] = None
+
+
+@app.post("/api/voice/speak")
+def voice_speak(payload: VoiceSpeakRequest):
+    try:
+        from voice_service import synthesize_speech
+        audio = synthesize_speech(payload.text, payload.voice)
+        return Response(content=audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    except Exception as exc:
+        print(f"[VOICE TTS ERROR] {exc}")
+        raise HTTPException(502, "Voice synthesis failed; try again")
+
+
+@app.post("/api/voice/command")
+async def voice_command(
+    audio: UploadFile = File(...),
+    session_id: str = Form(""),
+    language: str = Form("auto"),
+):
+    """Transcribe one push-to-talk recording and route it through normal chat safety."""
+    try:
+        from voice_service import VoiceInputError, VOICE_MAX_BYTES, transcribe_audio
+        audio_bytes = await audio.read(VOICE_MAX_BYTES + 1)
+        transcription = transcribe_audio(
+            audio_bytes,
+            filename=audio.filename or "ora-voice.webm",
+            language=language,
+        )
+        result = await chat(ChatRequest(message=transcription["text"], session_id=session_id or None))
+        return {
+            "ok": True,
+            "transcript": transcription["text"],
+            "transcription": transcription,
+            "reply": result.get("reply", ""),
+            "intent": result.get("intent"),
+            "query_type": result.get("query_type"),
+            "pipeline": result.get("pipeline"),
+            "session_id": result.get("session_id") or session_id or None,
+        }
+    except VoiceInputError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    except Exception as exc:
+        print(f"[VOICE ERROR] {exc}")
+        raise HTTPException(502, "Voice processing failed; try again")
 
 
 # ── Conversations ─────────────────────────────────────────────────────────────
