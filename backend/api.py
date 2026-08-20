@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('memory.profile', fromlist=['init_profile']).init_profile(), "Profile"),
         (lambda: __import__('knowledge.embeddings', fromlist=['init_vector_db']).init_vector_db(), "Knowledge DB"),
         (lambda: __import__('intelligence.goals_engine', fromlist=['init_goals_table']).init_goals_table(), "Goals"),
+        (lambda: __import__('action_ledger', fromlist=['init_action_ledger']).init_action_ledger(), "Action Ledger"),
         (lambda: __import__('fcm').init_fcm_table(), "FCM Tokens"),
         (lambda: __import__('intelligence.learning_engine', fromlist=['init_learning_tables']).init_learning_tables(), "Learning"),
         (lambda: __import__('connectors.gmail', fromlist=['init_gmail_tables']).init_gmail_tables(), "Gmail"),
@@ -305,18 +306,21 @@ except Exception as e:
     print("[ORA] Calendar routes NOT loaded:", e)
 
 
-# ── Keep-alive + Health ───────────────────────────────────────────────────────
-# Set up cron-job.org to GET /api/ping every 10 minutes — keeps Render awake
-# and ensures the scheduler never sleeps.
+# ── Health and diagnostics ─────────────────────────────────────────────────────
+# The ping endpoint is for diagnostics only; do not use it as a keep-alive.
 
 @app.get("/api/ping")
 async def ping():
-    """Keep-alive endpoint. Hit this every 10min from cron-job.org."""
+    """Lightweight diagnostic endpoint; it is safe to call but not a keep-alive."""
     return {"status": "alive", "time": datetime.now().isoformat()}
 
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health(request: Request):
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "release": os.getenv("ORA_RELEASE", "unknown"),
+        "service": "ora-backend",
+    }
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
@@ -334,7 +338,33 @@ def google_status():
 def status():
     return {"cpu": psutil.cpu_percent(interval=0.1),
             "ram": psutil.virtual_memory().percent,
-            "time": datetime.now().isoformat()}
+            "time": datetime.now().isoformat(),
+            "release": os.getenv("ORA_RELEASE", "unknown")}
+
+@app.get("/api/context")
+def personal_context(force: bool = False):
+    try:
+        from personal_context import build_personal_context
+        return build_personal_context(force=force)
+    except Exception:
+        print("[CONTEXT ERROR]")
+        print(traceback.format_exc())
+        raise HTTPException(500, "Personal context unavailable")
+
+@app.get("/api/capabilities")
+def capabilities():
+    return {
+        "release": os.getenv("ORA_RELEASE", "unknown"),
+        "pages": ["dashboard", "chat", "inbox", "tasks", "alerts", "knowledge", "memory"],
+        "integrations": {
+            "google": _google_is_authorized(),
+            "weather": True,
+            "mpesa": True,
+            "telegram": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
+        },
+        "action_ledger": True,
+        "approval_required_for": ["external_communication", "irreversible", "financial"],
+    }
 
 @app.get("/api/cache/stats")
 def cache_stats():
@@ -353,18 +383,27 @@ def agent_status():
         from agent import gather_context, decide
         ctx     = gather_context()
         actions = decide(ctx)
+        try:
+            from action_ledger import list_actions
+            ledger_actions = list_actions(status="proposed", limit=20)
+        except Exception:
+            ledger_actions = []
         return {
             "timestamp":       ctx.get("timestamp"),
-            "tasks":           len(ctx.get("tasks", [])),
-            "overdue":         len(ctx.get("overdue", [])),
-            "goals":           len(ctx.get("goals", [])),
-            "spend_alert":     ctx.get("spend_alert"),
-            "predictions":     len(ctx.get("predictions", [])),
+            "state":            ctx.get("state"),
+            "focus":            ctx.get("focus"),
+            "tasks":            len(ctx.get("tasks", [])),
+            "overdue":          len(ctx.get("overdue", [])),
+            "goals":            len(ctx.get("goals", [])),
+            "spend_alert":      ctx.get("spend_alert"),
+            "predictions":      len(ctx.get("predictions", [])),
             "pending_actions": [
                 {"type": a["type"], "key": a.get("key"), "message": a["message"]}
                 for a in actions
             ],
+            "approval_queue": len(ledger_actions),
         }
+
     except Exception:
         print(traceback.format_exc())
         return {"error": "agent context unavailable"}
@@ -546,6 +585,7 @@ class TaskCreate(BaseModel):
     title: str
     priority: str = "medium"
     due_at: Optional[str] = None
+    goal_id: Optional[int] = None
 
 @app.get("/api/tasks")
 def get_tasks_ep(status: str = "pending"):
@@ -553,7 +593,8 @@ def get_tasks_ep(status: str = "pending"):
         from database import get_tasks
         rows = get_tasks(status)
         return [{"id": r[0], "title": r[1], "priority": r[2],
-                 "created_at": r[3], "due_at": r[4]} for r in rows]
+                 "created_at": r[3], "due_at": r[4],
+                 "goal_id": r[5] if len(r) > 5 else None} for r in rows]
     except Exception:
         return []
 
@@ -561,17 +602,101 @@ def get_tasks_ep(status: str = "pending"):
 def add_task(payload: TaskCreate):
     try:
         from database import add_task
-        add_task(payload.title, payload.priority, payload.due_at)
-        return {"status": "created"}
+        task_id = add_task(payload.title, payload.priority, payload.due_at, payload.goal_id)
+        return {"status": "created", "id": task_id, "goal_id": payload.goal_id}
     except Exception:
         raise HTTPException(500, "Failed")
+
+class ActionCreate(BaseModel):
+    action_key: str
+    action_type: str
+    title: str
+    description: str = ""
+    payload: Optional[dict[str, Any]] = None
+    risk: str = "read_only"
+    requires_approval: bool = False
+    source: str = "api"
+    idempotency_key: Optional[str] = None
+
+
+@app.get("/api/actions")
+def list_actions_ep(status: Optional[str] = None, limit: int = 50):
+    try:
+        from action_ledger import list_actions
+        return list_actions(status=status, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception:
+        raise HTTPException(500, "Actions unavailable")
+
+
+@app.post("/api/actions")
+def create_action_ep(payload: ActionCreate):
+    try:
+        from action_ledger import create_action
+        return create_action(
+            action_key=payload.action_key,
+            action_type=payload.action_type,
+            title=payload.title,
+            description=payload.description,
+            payload=payload.payload or {},
+            risk=payload.risk,
+            requires_approval=payload.requires_approval,
+            source=payload.source,
+            idempotency_key=payload.idempotency_key,
+        )
+    except Exception:
+        raise HTTPException(500, "Action could not be created")
+
+
+@app.get("/api/actions/{action_id}")
+def get_action_ep(action_id: int):
+    from action_ledger import get_action
+    action = get_action(action_id)
+    if not action:
+        raise HTTPException(404, "Action not found")
+    return action
+
+
+@app.post("/api/actions/{action_id}/approve")
+def approve_action_ep(action_id: int):
+    from action_ledger import approve_action
+    action = approve_action(action_id)
+    if not action:
+        raise HTTPException(404, "Action not found")
+    return action
+
+
+@app.post("/api/actions/{action_id}/reject")
+def reject_action_ep(action_id: int):
+    from action_ledger import reject_action
+    action = reject_action(action_id)
+    if not action:
+        raise HTTPException(404, "Action not found")
+    return action
+
+
+@app.post("/api/actions/{action_id}/cancel")
+def cancel_action_ep(action_id: int):
+    from action_ledger import cancel_action
+    action = cancel_action(action_id)
+    if not action:
+        raise HTTPException(404, "Action not found")
+    return action
+
 
 @app.post("/api/tasks/{task_id}/complete")
 def complete_task(task_id: int):
     try:
         from database import complete_task
-        complete_task(task_id)
-        return {"status": "done"}
+        goal_id = complete_task(task_id)
+        if goal_id:
+            try:
+                from intelligence.goals_engine import sync_goal_progress
+                sync_goal_progress(goal_id)
+            except Exception:
+                pass
+        return {"status": "done", "goal_id": goal_id}
     except Exception:
         raise HTTPException(500, "Failed")
 
@@ -821,8 +946,11 @@ class GoalCreate(BaseModel):
 @app.get("/api/goals")
 def get_goals_ep(status: str = "active"):
     try:
-        from intelligence.goals_engine import get_goals
-        return get_goals(status)
+        from intelligence.goals_engine import get_goals, get_next_action
+        goals = get_goals(status)
+        for goal in goals:
+            goal["next_action"] = get_next_action(goal["id"])
+        return goals
     except Exception:
         return []
 
@@ -843,6 +971,30 @@ def trigger_checkin():
         return {"status": "sent"}
     except Exception:
         raise HTTPException(500, "Failed")
+
+@app.get("/api/goals/{goal_id}/tasks")
+def get_goal_tasks_ep(goal_id: int, status: Optional[str] = None):
+    try:
+        from intelligence.goals_engine import get_goal_tasks
+        return get_goal_tasks(goal_id, status=status)
+    except Exception:
+        raise HTTPException(500, "Goal tasks unavailable")
+
+
+@app.post("/api/goals/{goal_id}/sync")
+def sync_goal_ep(goal_id: int):
+    try:
+        from intelligence.goals_engine import sync_goal_progress, get_next_action
+        goal = sync_goal_progress(goal_id)
+        if not goal:
+            raise HTTPException(404, "Goal not found")
+        goal["next_action"] = get_next_action(goal_id)
+        return goal
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, "Goal sync failed")
+
 
 @app.post("/api/goals/{goal_id}/complete")
 def complete_goal_ep(goal_id: int):

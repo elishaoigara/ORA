@@ -1,7 +1,8 @@
 ﻿import { useState, useEffect, useCallback, useRef } from "react";
 import {
   getStatus, getAlerts, getTasks, getTheNumber,
-  getMpesaSummary, getGoals,
+  getMpesaSummary, getGoals, getPersonalContext, getActions,
+  approveAction, rejectAction,
 } from "../api";
 
 const PRI_COLOR = { high: "#ff4444", medium: "#ff9900", low: "#4488ff" };
@@ -57,13 +58,16 @@ export default function DashboardPage() {
   const [theNum,  setTheNum]  = useState(null);
   const [spend,   setSpend]   = useState(null);
   const [goals,   setGoals]   = useState([]);
+  const [context, setContext] = useState(null);
+  const [actions, setActions] = useState([]);
   const [loading, setLoading] = useState(true);
   const mounted = useRef(true);
 
   const loadAll = useCallback(async () => {
     try {
-      const [st, al, tk, tn, sp, gl] = await Promise.allSettled([
+      const [st, al, tk, tn, sp, gl, cx, ac] = await Promise.allSettled([
         getStatus(), getAlerts(5), getTasks(), getTheNumber(), getMpesaSummary(), getGoals("active"),
+        getPersonalContext(), getActions("proposed", 5),
       ]);
       if (!mounted.current) return;
       if (st.status === "fulfilled") setStatus(st.value);
@@ -72,6 +76,8 @@ export default function DashboardPage() {
       if (tn.status === "fulfilled") setTheNum(tn.value);
       if (sp.status === "fulfilled") setSpend(sp.value);
       if (gl.status === "fulfilled") setGoals(Array.isArray(gl.value) ? gl.value.slice(0, 3) : []);
+      if (cx.status === "fulfilled") setContext(cx.value);
+      if (ac.status === "fulfilled") setActions(Array.isArray(ac.value) ? ac.value : []);
     } catch {}
     setLoading(false);
   }, []);
@@ -101,6 +107,44 @@ export default function DashboardPage() {
         </div>
         <button className="btn" onClick={loadAll} title="Refresh">↺ REFRESH</button>
       </div>
+
+      {/* PERSONAL CONTEXT */}
+      {context && (
+        <div className="card" style={{ borderColor: "rgba(0,255,157,0.35)" }}>
+          <div className="card-header">
+            <span className="card-title">ORA FOCUS</span>
+            <span className="card-badge">{String(context.state || "ready").toUpperCase()}</span>
+          </div>
+          <div className="card-body">
+            <div className="task-title">{context.focus || "No priority selected yet"}</div>
+            <div className="text-dimmer mono text-xs" style={{ marginTop: 8 }}>
+              {context.summary?.pending_tasks || 0} tasks · {context.summary?.calendar_events || 0} events · {context.summary?.unread_emails || 0} unread emails
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* APPROVAL QUEUE */}
+      {actions.length > 0 && (
+        <div className="card" style={{ borderColor: "rgba(255,153,0,0.45)" }}>
+          <div className="card-header">
+            <span className="card-title">ACTION APPROVALS</span>
+            <span className="card-badge">{actions.length}</span>
+          </div>
+          <div className="card-body">
+            {actions.map(action => (
+              <div key={action.id} className="task-row" style={{ alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
+                  <div className="task-title">{action.title}</div>
+                  <div className="text-dimmer mono text-xs">{action.risk} · {action.source}</div>
+                </div>
+                <button className="btn" onClick={async () => { await approveAction(action.id); loadAll(); }}>APPROVE</button>
+                <button className="btn" onClick={async () => { await rejectAction(action.id); loadAll(); }}>REJECT</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* THE NUMBER */}
       {theNumOk && (

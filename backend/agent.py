@@ -24,134 +24,53 @@ from agent_guard import can_fire, mark_fired
 # ─────────────────────────────────────────────────────────────
 
 def gather_context() -> dict[str, Any]:
-    """
-    Pull everything ORA knows right now into a single dict.
-    Each source is individually wrapped — a broken source returns
-    a safe empty value rather than crashing the whole loop.
-    """
-    ctx: dict[str, Any] = {
-        "timestamp": datetime.now().isoformat(),
-        "hour": datetime.now().hour,
-    }
-
-    # Tasks (pending, top 10 by priority score)
+    """Return the canonical structured context with legacy agent aliases."""
     try:
-        from intelligence.priority_engine import get_prioritized_tasks
-        ctx["tasks"] = get_prioritized_tasks()
+        from personal_context import build_personal_context
+        snapshot = build_personal_context()
+        google = snapshot.get("google", {})
+        return {
+            **snapshot,
+            "timestamp": snapshot.get("generated_at", datetime.now().isoformat()),
+            "hour": datetime.now().hour,
+            "calendar_today": google.get("calendar_today", []),
+            "calendar_imminent": google.get("calendar_imminent", []),
+            "gmail": google.get("gmail", {}),
+            "github": {},
+        }
     except Exception:
-        print("[AGENT] gather_context: tasks failed")
+        print("[AGENT] canonical context failed")
         print(traceback.format_exc())
-        ctx["tasks"] = []
-
-    # Overdue tasks
-    try:
-        from database import get_tasks
-        now = datetime.now()
-        ctx["overdue"] = [
-            t for t in get_tasks("pending")
-            if t[4] and _is_overdue(t[4], now)
-        ]
-    except Exception:
-        print("[AGENT] gather_context: overdue check failed")
-        ctx["overdue"] = []
-
-    # Active goals
-    try:
-        from intelligence.goals_engine import get_goals
-        ctx["goals"] = get_goals("active")
-    except Exception:
-        print("[AGENT] gather_context: goals failed")
-        ctx["goals"] = []
-
-    # Recent memory events (last 10)
-    try:
-        from memory.events import get_recent_events
-        ctx["memory"] = get_recent_events(limit=10)
-    except Exception:
-        print("[AGENT] gather_context: memory failed")
-        ctx["memory"] = []
-
-    # Unacknowledged alerts
-    try:
-        from database import get_recent_alerts
-        all_alerts = get_recent_alerts(limit=20)
-        ctx["alerts"] = [a for a in all_alerts if not a[5]]
-    except Exception:
-        print("[AGENT] gather_context: alerts failed")
-        ctx["alerts"] = []
-
-    # M-Pesa spend check
-    try:
-        from mpesa_engine import check_spend_alert
-        ctx["spend_alert"] = check_spend_alert()
-    except Exception:
-        ctx["spend_alert"] = None
-
-    # Predictions
-    try:
-        from intelligence.prediction_engine import predict_needs
-        ctx["predictions"] = predict_needs()
-    except Exception:
-        print("[AGENT] gather_context: predictions failed")
-        ctx["predictions"] = []
-
-    # User profile
-    try:
-        from memory.profile import get_all_profile
-        ctx["profile"] = get_all_profile()
-    except Exception:
-        ctx["profile"] = {}
-
-    # ── Google Calendar ───────────────────────────────────────
-    # Google is optional: keep the core agent useful when OAuth is absent.
-    try:
-        from connectors.google_auth import is_authorized
-        google_ready = is_authorized("primary")
-    except Exception:
-        google_ready = False
-
-    if google_ready:
-        try:
-            from connectors.calendar import get_events_today, get_imminent_events
-            ctx["calendar_today"] = get_events_today()
-            ctx["calendar_imminent"] = get_imminent_events(30)
-        except Exception:
-            print("[AGENT] gather_context: calendar failed")
-            print(traceback.format_exc())
-            ctx["calendar_today"] = []
-            ctx["calendar_imminent"] = []
-    else:
-        ctx["calendar_today"] = []
-        ctx["calendar_imminent"] = []
-
-    # ── Gmail summary ─────────────────────────────────────────
-    if google_ready:
-        try:
-            from connectors.gmail import get_gmail_summary
-            ctx["gmail"] = get_gmail_summary()
-        except Exception:
-            print("[AGENT] gather_context: gmail failed")
-            ctx["gmail"] = {}
-    else:
-        ctx["gmail"] = {}
-
-    # ── Phase 4: Weather ─────────────────────────────────────
-    try:
-        from connectors.weather import get_weather_summary
-        ctx["weather"] = get_weather_summary()
-    except Exception:
-        print("[AGENT] gather_context: weather failed")
-        ctx["weather"] = ""
-
-    # GitHub context is intentionally omitted until its connector is deployed.
-    ctx["github"] = {}
-
-    return ctx
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "hour": datetime.now().hour,
+            "tasks": [],
+            "overdue": [],
+            "goals": [],
+            "memory": [],
+            "alerts": [],
+            "spend_alert": None,
+            "predictions": [],
+            "profile": {},
+            "calendar_today": [],
+            "calendar_imminent": [],
+            "gmail": {},
+            "github": {},
+        }
 
 
 # ─────────────────────────────────────────────────────────────
 # 2. DECIDE
 # ─────────────────────────────────────────────────────────────
+
+def _task_value(task: Any, key: str, index: int, default: Any = None) -> Any:
+    if isinstance(task, dict):
+        return task.get(key, default)
+    try:
+        return task[index]
+    except (IndexError, TypeError):
+        return default
+
 
 def decide(ctx: dict[str, Any]) -> list[dict]:
     actions: list[dict] = []
@@ -170,7 +89,7 @@ def decide(ctx: dict[str, Any]) -> list[dict]:
     # Overdue tasks
     overdue = ctx.get("overdue", [])
     if overdue and can_fire("overdue_tasks"):
-        titles = ", ".join(t[1][:40] for t in overdue[:3])
+        titles = ", ".join(str(_task_value(t, "title", 1, "task"))[:40] for t in overdue[:3])
         suffix = f" (+{len(overdue) - 3} more)" if len(overdue) > 3 else ""
         actions.append({
             "type": "alert",
@@ -186,7 +105,7 @@ def decide(ctx: dict[str, Any]) -> list[dict]:
         actions.append({
             "type": "notify",
             "key": "morning_top_task",
-            "message": f"🎯 Top priority today: {top[1][:60]}",
+            "message": f"🎯 Top priority today: {str(_task_value(top, 'title', 1, 'task'))[:60]}",
         })
 
     # Predictions
@@ -267,50 +186,80 @@ def decide(ctx: dict[str, Any]) -> list[dict]:
 # 3. EXECUTE
 # ─────────────────────────────────────────────────────────────
 
+def _ledger_actions(actions: list[dict]) -> None:
+    """Persist proposed low-risk personal notifications before execution."""
+    try:
+        from action_ledger import create_action, transition_action
+        for action in actions:
+            ledger = create_action(
+                action_key=action.get("key", "unknown"),
+                action_type=action.get("type", "notify"),
+                title=action.get("message", "ORA notification")[:120],
+                description="Autonomous notification generated from current personal context.",
+                payload={"message": action.get("message", "")},
+                risk="personal_notification",
+                requires_approval=False,
+                source="agent",
+                idempotency_key=f"agent:{action.get('key', 'unknown')}:{datetime.now().date().isoformat()}",
+            )
+            action["ledger_id"] = ledger["id"]
+            if ledger["status"] == "proposed":
+                transition_action(ledger["id"], "approved")
+    except Exception:
+        print("[AGENT] action ledger unavailable")
+
+
 def execute(actions: list[dict]) -> None:
     if not actions:
         return
 
     for action in actions:
+        ledger_id = action.get("ledger_id")
         try:
+            if ledger_id:
+                from action_ledger import transition_action
+                transition_action(ledger_id, "executing")
+
             atype = action.get("type", "notify")
             message = action.get("message", "")
             key = action.get("key", "unknown")
-
             if not message:
                 continue
 
             if atype == "alert":
-                try:
-                    from database import log_alert
-                    from telegram_bot import notify
-                    log_alert(f"agent:{key}", message, action.get("severity", "medium"))
-                    notify(message, is_alert=True)
-                    mark_fired(key)
-                except Exception:
-                    print(f"[AGENT] alert failed: {key}")
-                    print(traceback.format_exc())
+                from database import log_alert
+                from telegram_bot import notify
+                log_alert(f"agent:{key}", message, action.get("severity", "medium"))
+                notify(message, is_alert=True)
+                mark_fired(key)
+                if ledger_id:
+                    from action_ledger import transition_action
+                    transition_action(ledger_id, "completed", {"sent": True})
 
             elif atype == "notify":
-                try:
-                    from telegram_bot import notify
-                    notify(message, is_alert=False)
-                    mark_fired(key)
-                except Exception:
-                    print(f"[AGENT] notify failed: {key}")
-                    print(traceback.format_exc())
+                from telegram_bot import notify
+                notify(message, is_alert=False)
+                mark_fired(key)
+                if ledger_id:
+                    from action_ledger import transition_action
+                    transition_action(ledger_id, "completed", {"sent": True})
 
             elif atype == "log":
-                try:
-                    from database import log_alert
-                    log_alert(f"agent:{key}", message, action.get("severity", "low"))
-                    mark_fired(key)
-                except Exception:
-                    print(f"[AGENT] log failed: {key}")
-                    print(traceback.format_exc())
+                from database import log_alert
+                log_alert(f"agent:{key}", message, action.get("severity", "low"))
+                mark_fired(key)
+                if ledger_id:
+                    from action_ledger import transition_action
+                    transition_action(ledger_id, "completed", {"logged": True})
 
         except Exception:
-            print(f"[AGENT] execute crash: {action}")
+            if ledger_id:
+                try:
+                    from action_ledger import transition_action
+                    transition_action(ledger_id, "failed", error=f"{action.get('type', 'action')} failed")
+                except Exception:
+                    pass
+            print(f"[AGENT] execute failed: {key if 'key' in locals() else 'unknown'}")
             print(traceback.format_exc())
 
 
@@ -324,6 +273,7 @@ def run_agent_cycle() -> None:
 
         ctx = gather_context()
         actions = decide(ctx)
+        _ledger_actions(actions)
 
         print(
             f"[AGENT] tasks={len(ctx.get('tasks', []))} "

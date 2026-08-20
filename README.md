@@ -55,3 +55,15 @@ npm --prefix frontend run build
 ```
 
 The repository ignores environment files, generated SQLite/Chroma data, Python caches, frontend dependencies, and build output. The local copies of previously tracked runtime artifacts are preserved on disk but are no longer part of the source tree. Use `.env.production.example` for the backend host and `frontend/.env.example` for Vercel.
+
+## Autonomous core (phases 1–4)
+
+The current architecture uses Vercel for the React frontend and Render for the FastAPI backend. The Render manifest now contains only the backend service, while the frontend is expected to use `VITE_API_URL` and `VITE_ORA_API_TOKEN` in Vercel. The backend health response includes an `ORA_RELEASE` marker so deployment drift can be identified quickly.
+
+The autonomous core is centered on a structured personal context snapshot. `GET /api/context` aggregates profile, preferences, memory, alerts, tasks, goals, Google Calendar/Gmail data, weather, spending, and predictions with freshness and source metadata. Chat, Telegram, the dashboard, and the agent use the same context service rather than maintaining separate connector snapshots.
+
+ORA now includes a durable action ledger. Actions have a type, risk, source, payload, idempotency key, lifecycle status, and optional result or error. Read-only and personal-notification actions can proceed automatically; external communication, irreversible, and financial actions are automatically marked as requiring approval. The API supports listing, creating, approving, rejecting, and cancelling actions through `/api/actions`.
+
+Tasks may be linked to goals with `goal_id`. The Tasks interface lets you select an active goal when creating a task, goals expose their next pending action, and completing a linked task automatically recalculates goal progress. The dashboard surfaces ORA’s current state, focus, and pending approval queue.
+
+The active supported frontend pages are Dashboard, Chat, Inbox, Tasks, Alerts, Knowledge, and Memory. Research, News, Content, Code, and Agent Bus are intentionally not part of the active product surface because their former endpoints were unsupported or stale.

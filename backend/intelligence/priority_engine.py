@@ -3,7 +3,7 @@ from database import get_tasks
 
 
 def score_task(task):
-    _, title, priority, created_at, due_at = task
+    _, title, priority, created_at, due_at = task[:5]
 
     score = 0
 

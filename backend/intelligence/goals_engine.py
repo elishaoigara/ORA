@@ -79,6 +79,40 @@ def update_goal_progress(goal_id: int, progress: int) -> None:
     close_conn()
 
 
+def get_goal_tasks(goal_id: int, status: str | None = None) -> list[dict]:
+    """Return task objects linked to one goal, including status."""
+    conn = get_conn()
+    query = """SELECT id, title, status, priority, created_at, due_at, completed_at
+               FROM tasks WHERE goal_id=?"""
+    params: list = [goal_id]
+    if status:
+        query += " AND status=?"
+        params.append(status)
+    query += " ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, id ASC"
+    rows = conn.execute(query, params).fetchall()
+    close_conn()
+    return [
+        {"id": row[0], "title": row[1], "status": row[2], "priority": row[3],
+         "created_at": row[4], "due_at": row[5], "completed_at": row[6]}
+        for row in rows
+    ]
+
+
+def get_next_action(goal_id: int) -> dict | None:
+    tasks = get_goal_tasks(goal_id, status="pending")
+    return tasks[0] if tasks else None
+
+
+def sync_goal_progress(goal_id: int) -> dict | None:
+    """Recalculate progress from linked task completion and return the goal."""
+    tasks = get_goal_tasks(goal_id)
+    if tasks:
+        progress = round(sum(task["status"] == "done" for task in tasks) / len(tasks) * 100)
+        update_goal_progress(goal_id, progress)
+    goals = get_goals("active") + get_goals("completed")
+    return next((goal for goal in goals if goal["id"] == goal_id), None)
+
+
 def run_goal_checkin() -> None:
     """
     Weekly check-in: logs active goals to console / notifier.

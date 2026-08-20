@@ -76,7 +76,11 @@ def init_tasks_table():
         priority TEXT DEFAULT 'medium',
         created_at TEXT,
         due_at TEXT DEFAULT NULL,
-        completed_at TEXT DEFAULT NULL)""")
+        completed_at TEXT DEFAULT NULL,
+        goal_id INTEGER DEFAULT NULL)""")
+    columns = {row[1] for row in c.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "goal_id" not in columns:
+        c.execute("ALTER TABLE tasks ADD COLUMN goal_id INTEGER DEFAULT NULL")
     conn.commit()
     close_conn()
 
@@ -144,22 +148,26 @@ def get_conversation_history(limit=20):
     return list(reversed(rows))
 
 
-def add_task(title, priority="medium", due_at=None):
+def add_task(title, priority="medium", due_at=None, goal_id=None):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT INTO tasks (title, priority, created_at, due_at) VALUES (?, ?, ?, ?)",
-              (title, priority, datetime.now().isoformat(), due_at))
+    c.execute("""INSERT INTO tasks
+                 (title, priority, created_at, due_at, goal_id)
+                 VALUES (?, ?, ?, ?, ?)""",
+              (title, priority, datetime.now().isoformat(), due_at, goal_id))
     conn.commit()
+    task_id = c.lastrowid
     close_conn()
+    return task_id
 
 
 def get_tasks(status="pending"):
     conn = get_conn()
     c = conn.cursor()
     if status == "all":
-        c.execute("SELECT id, title, priority, created_at, due_at FROM tasks ORDER BY id DESC")
+        c.execute("SELECT id, title, priority, created_at, due_at, goal_id FROM tasks ORDER BY id DESC")
     else:
-        c.execute("SELECT id, title, priority, created_at, due_at FROM tasks WHERE status=? ORDER BY id DESC",
+        c.execute("SELECT id, title, priority, created_at, due_at, goal_id FROM tasks WHERE status=? ORDER BY id DESC",
               (status,))
     rows = c.fetchall()
     close_conn()
@@ -169,10 +177,12 @@ def get_tasks(status="pending"):
 def complete_task(task_id):
     conn = get_conn()
     c = conn.cursor()
+    row = c.execute("SELECT goal_id FROM tasks WHERE id=?", (task_id,)).fetchone()
     c.execute("UPDATE tasks SET status='done', completed_at=? WHERE id=?",
               (datetime.now().isoformat(), task_id))
     conn.commit()
     close_conn()
+    return row[0] if row else None
 
 
 def delete_task(task_id):

@@ -36,6 +36,8 @@ services:
         sync: false
       - key: APP_ENV
         value: production
+      - key: ORA_RELEASE
+        value: phase4
 
       # ── Google OAuth (set these in Render dashboard) ───
       - key: GOOGLE_CLIENT_ID
@@ -64,39 +66,5 @@ services:
       - key: GROQ_MODEL_FALLBACK
         value: "llama-3.1-8b-instant"
 
-  # ─────────────────────────────────────────────
-  # FRONTEND (Render Static)
-  # ─────────────────────────────────────────────
-  - type: web
-    name: ora-frontend
-    runtime: static
-    rootDir: frontend
-    buildCommand: npm install && npm run build
-    staticPublishPath: dist
-
-    # SPA routing — prevents 404 on hard refresh
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
-
-    headers:
-      - path: /*
-        name: X-Frame-Options
-        value: DENY
-      - path: /*
-        name: X-Content-Type-Options
-        value: nosniff
-      - path: /assets/*
-        name: Cache-Control
-        value: public, max-age=31536000, immutable
-      - path: /index.html
-        name: Cache-Control
-        value: no-cache, no-store, must-revalidate
-
-    envVars:
-      # Set to your ora-backend Render URL e.g. https://ora-backend.onrender.com
-      - key: VITE_API_URL
-        sync: false
-      - key: VITE_ORA_API_TOKEN
-        sync: false
+  # The React frontend is deployed separately on Vercel.
+  # Keep Vercel's VITE_API_URL pointed at the Render backend URL.

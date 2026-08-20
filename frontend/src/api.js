@@ -233,49 +233,23 @@ export const triggerGoalCheckin = () =>
   request("/goals/checkin", { method: "POST" });
 
 /* =========================
-   CONTENT STUDIO
+   PERSONAL CONTEXT & ACTIONS
    ========================= */
 
-export const createContentDraft = (payload) =>
-  request("/content/draft", { method: "POST", body: JSON.stringify(payload) });
+export const getPersonalContext = (force = false) =>
+  request(`/context${force ? "?force=true" : ""}`);
 
-export const getContentDrafts = (status = "all", limit = 20, search = "") =>
-  request(`/content/drafts?status=${status}&limit=${limit}&search=${encodeURIComponent(search)}`);
-
-export const getContentDraft = (id) =>
-  request(`/content/drafts/${id}`);
-
-export const updateDraftStatus = (id, status) =>
-  request(`/content/drafts/${id}/status?status=${status}`, { method: "POST" });
-
-export const editDraftText = (id, draft_text) =>
-  request(`/content/drafts/${id}/text`, { method: "PUT", body: JSON.stringify({ draft_text }) });
-
-export const regenerateDraft = (id, feedback = "") =>
-  request(`/content/drafts/${id}/regenerate`, { method: "POST", body: JSON.stringify({ feedback }) });
-
-export const deleteDraft = (id) =>
-  request(`/content/drafts/${id}`, { method: "DELETE" });
-
-export const getContentStats = () =>
-  request("/content/stats");
-
-/* =========================
-   CODE AGENT
-   ========================= */
-
-export const getCodeStats        = ()           => request("/code/stats");
-export const getCodeRepos        = ()           => request("/code/repos");
-export const getCodeRuns         = ()           => request("/code/runs");
-export const getRepoRun          = (repo)       => request(`/code/runs/${repo}`);
-export const getCodeScans        = (repo = "", status = "open", limit = 40) =>
-  request(`/code/scans?repo=${repo}&status=${status}&limit=${limit}`);
-export const resolveCodeScan     = (id)         => request(`/code/scans/${id}/resolve`, { method: "POST" });
-export const openCodeIssue       = (id)         => request(`/code/scans/${id}/issue`,   { method: "POST" });
-export const scanRepo            = (repo)       => request(`/code/scan/${repo}/sync`,   { method: "POST" });
-export const scanAllRepos        = ()           => request("/code/scan",                { method: "POST" });
-export const askCodeAgent        = (question, repo = "") =>
-  request("/code/ask", { method: "POST", body: JSON.stringify({ question, repo }) });
+export const getCapabilities = () => request("/capabilities");
+export const getActions = (status = "", limit = 50) =>
+  request(`/actions?limit=${limit}${status ? `&status=${encodeURIComponent(status)}` : ""}`);
+export const createAction = (payload) =>
+  request("/actions", { method: "POST", body: JSON.stringify(payload) });
+export const approveAction = (id) => request(`/actions/${id}/approve`, { method: "POST" });
+export const rejectAction = (id) => request(`/actions/${id}/reject`, { method: "POST" });
+export const cancelAction = (id) => request(`/actions/${id}/cancel`, { method: "POST" });
+export const getGoalTasks = (goalId, status = "") =>
+  request(`/goals/${goalId}/tasks${status ? `?status=${encodeURIComponent(status)}` : ""}`);
+export const syncGoal = (goalId) => request(`/goals/${goalId}/sync`, { method: "POST" });
 
 /* =========================
    BASE URL EXPORT

@@ -42,6 +42,35 @@ class SchedulerTests(unittest.TestCase):
         callback.assert_called_once_with()
 
 
+class ContextAndExecutionTests(unittest.TestCase):
+    def test_action_ledger_is_idempotent_and_transitionable(self):
+        from action_ledger import create_action, transition_action
+
+        first = create_action(
+            "test-action",
+            "test",
+            "Test action",
+            idempotency_key="test-action-ledger",
+        )
+        second = create_action(
+            "test-action",
+            "test",
+            "Duplicate test action",
+            idempotency_key="test-action-ledger",
+        )
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(transition_action(first["id"], "approved")["status"], "approved")
+
+    def test_personal_context_has_structured_summary(self):
+        from personal_context import build_personal_context
+
+        context = build_personal_context(force=True)
+        self.assertIn("summary", context)
+        self.assertIn("sources", context)
+        self.assertIn("tasks", context)
+        self.assertIn("goals", context)
+
+
 class ConversationTests(unittest.TestCase):
     def test_session_messages_round_trip(self):
         from conversation_history import ConversationHistory

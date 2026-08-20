@@ -1,5 +1,5 @@
-import { useState, useCallback, useRef } from "react";
-import { getTasks, createTask, completeTask, deleteTask } from "../api";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { getTasks, getGoals, createTask, completeTask, deleteTask } from "../api";
 
 const PRI_COLOR = { high: "#ff4444", medium: "#ff9900", low: "#4488ff" };
 const FILTERS = ["PENDING", "DONE"];
@@ -17,6 +17,8 @@ export default function TasksPage() {
   const [newTitle,   setNewTitle]   = useState("");
   const [newPri,     setNewPri]     = useState("medium");
   const [newDue,     setNewDue]     = useState("");
+  const [newGoalId,  setNewGoalId]  = useState("");
+  const [goals,      setGoals]      = useState([]);
   const [saving,     setSaving]     = useState(false);
   const [error,      setError]      = useState(null);
   const filterRef = useRef("PENDING");
@@ -31,18 +33,17 @@ export default function TasksPage() {
     }
   }, []);
 
-  // Load on mount
-  useState(() => {
+  useEffect(() => {
+    let active = true;
     setLoading(true);
-    load("pending").finally(() => setLoading(false));
-  });
-
-  // Also trigger once on mount via useEffect pattern
-  const [init, setInit] = useState(false);
-  if (!init) {
-    setInit(true);
-    setTimeout(() => load("pending").finally(() => setLoading(false)), 0);
-  }
+    Promise.allSettled([load("pending"), getGoals()]).then(([, goalResult]) => {
+      if (active && goalResult.status === "fulfilled") {
+        setGoals(Array.isArray(goalResult.value) ? goalResult.value : []);
+      }
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [load]);
 
   const onFilterChange = (f) => {
     filterRef.current = f;
@@ -65,14 +66,14 @@ export default function TasksPage() {
   };
 
   const openModal = () => {
-    setNewTitle(""); setNewPri("medium"); setNewDue(""); setError(null); setModal(true);
+    setNewTitle(""); setNewPri("medium"); setNewDue(""); setNewGoalId(""); setError(null); setModal(true);
   };
 
   const handleAdd = async () => {
     if (!newTitle.trim()) return;
     setSaving(true);
     try {
-      await createTask({ title: newTitle.trim(), priority: newPri, due_at: newDue || null });
+      await createTask({ title: newTitle.trim(), priority: newPri, due_at: newDue || null, goal_id: newGoalId ? Number(newGoalId) : null });
       setModal(false);
       filterRef.current = "PENDING";
       setFilter("PENDING");
@@ -139,6 +140,7 @@ export default function TasksPage() {
                       {t.priority?.toUpperCase()}
                     </span>
                     {due && <span className="task-due">DUE {due}</span>}
+                    {t.goal_id && <span className="task-due">GOAL #{t.goal_id}</span>}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
@@ -194,6 +196,16 @@ export default function TasksPage() {
                 </button>
               ))}
             </div>
+
+            {goals.length > 0 && (
+              <>
+                <div className="mono text-xs text-dimmer mb-8" style={{ letterSpacing: 2 }}>LINK TO GOAL (OPTIONAL)</div>
+                <select className="input mb-12" value={newGoalId} onChange={e => setNewGoalId(e.target.value)}>
+                  <option value="">No goal</option>
+                  {goals.map(goal => <option key={goal.id} value={goal.id}>{goal.goal}</option>)}
+                </select>
+              </>
+            )}
 
             <div className="mono text-xs text-dimmer mb-8" style={{ letterSpacing: 2 }}>DUE DATE (OPTIONAL)</div>
             <input
