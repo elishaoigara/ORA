@@ -139,6 +139,60 @@ class DevicePairingApiTests(unittest.TestCase):
         self.assertEqual(revoked.status_code, 200)
         self.assertEqual(revoked.json()["device"]["status"], "revoked")
 
+    def test_device_awareness_requires_explicit_consent_and_redacts_location_history(self):
+        create = self.client.post("/api/devices/pairing-codes", headers=self.owner_headers, json={})
+        pair = self.client.post(
+            "/api/devices/pair",
+            json={"pairing_code": create.json()["pairing_code"], "device_name": "Awareness test phone", "platform": "android"},
+        )
+        body = pair.json()
+        headers = {"X-ORA-Device-ID": body["device"]["id"], "X-ORA-Device-Token": body["device_token"]}
+
+        initial = self.client.get("/api/devices/self/awareness", headers=headers)
+        self.assertEqual(initial.status_code, 200)
+        self.assertFalse(next(item for item in initial.json()["awareness"]["consents"] if item["capability"] == "push_alerts")["enabled"])
+
+        denied = self.client.post(
+            "/api/devices/self/events", headers=headers, json={"event_type": "location_sample", "latitude": -1.286, "longitude": 36.817}
+        )
+        self.assertEqual(denied.status_code, 400)
+
+        zones_on = self.client.put(
+            "/api/devices/self/awareness", headers=headers, json={"capability": "zone_routines", "enabled": True}
+        )
+        self.assertEqual(zones_on.status_code, 200)
+        zones = self.client.put(
+            "/api/devices/self/zones",
+            headers=headers,
+            json={"zones": [{"id": "home", "label": "Home", "latitude": -1.2, "longitude": 36.8, "radius_m": 150}]},
+        )
+        self.assertEqual(zones.status_code, 200)
+        transition = self.client.post(
+            "/api/devices/self/events", headers=headers, json={"event_type": "zone_enter", "zone_id": "home"}
+        )
+        self.assertEqual(transition.status_code, 200)
+
+        continuous_on = self.client.put(
+            "/api/devices/self/awareness",
+            headers=headers,
+            json={"capability": "continuous_location", "enabled": True, "retention_hours": 24},
+        )
+        self.assertEqual(continuous_on.status_code, 200)
+        sample = self.client.post(
+            "/api/devices/self/events",
+            headers=headers,
+            json={"event_type": "location_sample", "latitude": -1.286389, "longitude": 36.817223, "accuracy_m": 12},
+        )
+        self.assertEqual(sample.status_code, 200)
+        history = self.client.get("/api/devices/self/events", headers=headers)
+        self.assertEqual(history.status_code, 200)
+        redacted = next(event for event in history.json()["events"] if event["event_type"] == "location_sample")
+        self.assertEqual(redacted["detail"], {"summary": "Precise location sample retained"})
+
+        deleted = self.client.post("/api/devices/self/location/delete", headers=headers)
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(deleted.json()["deleted"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

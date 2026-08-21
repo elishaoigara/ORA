@@ -1,0 +1,29 @@
+# Project TODO
+
+- [x] Create the Android Companion interface design plan.
+- [x] Define the ORA backend device, pairing-code, and device-token schema.
+- [x] Add secure pairing, confirmation, device listing, and device revocation endpoints to ORA.
+- [x] Add backend regression tests for pairing expiry, one-time code use, token verification, and revocation.
+- [x] Build the Android Home, Pair ORA, Awareness, and Privacy & Device screens.
+- [x] Store only device-scoped credentials in Android secure storage.
+- [x] Add a backend device-status client for the companion.
+- [x] Scaffold consent-aware push, notification-access, and location settings without requesting invasive permissions.
+- [x] Add deterministic mobile tests for pairing state and credential clearing.
+- [x] Validate backend compilation/tests and mobile TypeScript/lint/test checks.
+- [x] Generate the custom ORA Companion app icon and configure branding.
+- [x] Create a checkpoint and provide Android installation and pairing instructions.
+- [x] Upgrade the Expo SDK and dependent packages to restore compatibility with Expo Go SDK 56.
+- [x] Validate the upgraded Android Companion in the supported Expo Go runtime and provide updated pairing instructions.
+- [x] Investigate and correct the stale QR or manifest path that still reports Expo SDK 54 after the SDK 56 upgrade.
+- [x] Remove the incompatible Expo DOM WebView dependency path causing the Android standalone app to force-close.
+- [x] Validate the corrected Android build configuration and provide reinstallation instructions.
+- [x] Verify and configure the Render owner-token environment variable required for secure Android Companion pairing-code generation.
+- [x] Audit and document safe, opt-in enablement of push alerts and location routines for the paired Android Companion.
+- [x] Document how to monitor latest device check-ins from the ORA backend without exposing credentials.
+- [x] Implement only explicitly confirmed awareness enhancements, then validate and checkpoint a rebuild-ready Android configuration.
+- [ ] Provide practical next-feature recommendations for ORA Companion.
+- [x] Rotate the exposed ORA owner API token and revoke/re-pair the affected Android device credential.
+- [x] Add device-scoped push-token registration and consent-aware ORA push alerts.
+- [x] Add named-zone Home, Work, and Commute routines with event-only location ingestion.
+- [x] Add separately enabled continuous background location with a visible foreground-service notification, retention controls, and one-tap stop.
+- [ ] Rebuild and validate the standalone Android package after the approved awareness features are implemented.

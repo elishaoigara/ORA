@@ -60,6 +60,7 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('action_ledger', fromlist=['init_action_ledger']).init_action_ledger(), "Action Ledger"),
         (lambda: __import__('fcm').init_fcm_table(), "FCM Tokens"),
         (lambda: __import__('device_registry', fromlist=['init_device_tables']).init_device_tables(), "Device Registry"),
+        (lambda: __import__('device_awareness', fromlist=['init_awareness_tables']).init_awareness_tables(), "Device Awareness"),
         (lambda: __import__('intelligence.learning_engine', fromlist=['init_learning_tables']).init_learning_tables(), "Learning"),
         (lambda: __import__('connectors.gmail', fromlist=['init_gmail_tables']).init_gmail_tables(), "Gmail"),
         (lambda: __import__('conversation_history', fromlist=['conversation_history']).conversation_history, "Conv History"),
@@ -1146,6 +1147,151 @@ def revoke_registered_device(device_id: str):
         return {"ok": True, "device": revoke_device(device_id)}
     except DeviceRegistryError as exc:
         raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+# ── Android Companion awareness ────────────────────────────────────────────────
+class DeviceAwarenessConsentPayload(BaseModel):
+    capability: str
+    enabled: bool
+    retention_hours: Optional[int] = None
+
+
+class DevicePushRegistrationPayload(BaseModel):
+    token: str
+    provider: str = "expo"
+
+
+class DeviceZonePayload(BaseModel):
+    id: str
+    label: str
+    latitude: float
+    longitude: float
+    radius_m: int = 200
+
+
+class DeviceZonesPayload(BaseModel):
+    zones: list[DeviceZonePayload]
+
+
+class DeviceAwarenessEventPayload(BaseModel):
+    event_type: str
+    zone_id: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy_m: Optional[float] = None
+    mode: Optional[str] = None
+
+
+def _current_awareness_device(request: Request) -> dict[str, Any]:
+    device = getattr(request.state, "ora_device", None)
+    if not device:
+        raise HTTPException(status_code=401, detail="Device credential required")
+    return device
+
+
+def _awareness_http_error(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/devices/self/awareness")
+def get_device_awareness(request: Request):
+    device = _current_awareness_device(request)
+    try:
+        from device_awareness import get_awareness_state
+
+        return {"ok": True, "awareness": get_awareness_state(device["id"])}
+    except Exception as exc:
+        raise _awareness_http_error(exc) from exc
+
+
+@app.put("/api/devices/self/awareness")
+def update_device_awareness(request: Request, payload: DeviceAwarenessConsentPayload):
+    device = _current_awareness_device(request)
+    try:
+        from device_awareness import set_awareness_consent
+
+        return {
+            "ok": True,
+            "awareness": set_awareness_consent(
+                device["id"], payload.capability, payload.enabled, payload.retention_hours
+            ),
+        }
+    except Exception as exc:
+        raise _awareness_http_error(exc) from exc
+
+
+@app.put("/api/devices/self/zones")
+def update_device_zones(request: Request, payload: DeviceZonesPayload):
+    device = _current_awareness_device(request)
+    try:
+        from device_awareness import replace_zones
+
+        zones = replace_zones(device["id"], [item.model_dump() for item in payload.zones])
+        return {"ok": True, "zones": zones}
+    except Exception as exc:
+        raise _awareness_http_error(exc) from exc
+
+
+@app.post("/api/devices/self/push/register")
+def register_device_push(request: Request, payload: DevicePushRegistrationPayload):
+    device = _current_awareness_device(request)
+    try:
+        from device_awareness import register_push_token
+
+        return {"ok": True, "push": register_push_token(device["id"], payload.token, payload.provider)}
+    except Exception as exc:
+        raise _awareness_http_error(exc) from exc
+
+
+@app.post("/api/devices/self/push/test")
+def test_device_push(request: Request):
+    device = _current_awareness_device(request)
+    try:
+        from device_awareness import get_push_token
+        from fcm import send_push_to_token
+
+        token = get_push_token(device["id"])
+        if not token:
+            raise HTTPException(status_code=400, detail="Enable push alerts and register this phone before testing push.")
+        sent = send_push_to_token(token, "ORA push alerts enabled", "This phone can now receive ORA alerts.")
+        return {"ok": sent, "message": "Push test dispatched" if sent else "Push provider rejected this token."}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _awareness_http_error(exc) from exc
+
+
+@app.post("/api/devices/self/events")
+def ingest_device_awareness_event(request: Request, payload: DeviceAwarenessEventPayload):
+    device = _current_awareness_device(request)
+    try:
+        from device_awareness import record_awareness_event
+
+        return {"ok": True, "event": record_awareness_event(device["id"], payload.model_dump(exclude_none=True))}
+    except Exception as exc:
+        raise _awareness_http_error(exc) from exc
+
+
+@app.get("/api/devices/self/events")
+def get_device_awareness_events(request: Request, limit: int = 50):
+    device = _current_awareness_device(request)
+    try:
+        from device_awareness import list_awareness_events
+
+        return {"ok": True, "events": list_awareness_events(device["id"], limit)}
+    except Exception as exc:
+        raise _awareness_http_error(exc) from exc
+
+
+@app.post("/api/devices/self/location/delete")
+def delete_device_location_history(request: Request):
+    device = _current_awareness_device(request)
+    try:
+        from device_awareness import delete_location_history
+
+        return {"ok": True, "deleted": delete_location_history(device["id"])}
+    except Exception as exc:
+        raise _awareness_http_error(exc) from exc
 
 
 # ── Location ──────────────────────────────────────────────────────────────────

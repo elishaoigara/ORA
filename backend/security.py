@@ -33,6 +33,12 @@ _DEVICE_AUTH_PATHS = {
     "/api/devices/self",
     "/api/devices/self/check-in",
     "/api/devices/self/revoke",
+    "/api/devices/self/awareness",
+    "/api/devices/self/push/register",
+    "/api/devices/self/push/test",
+    "/api/devices/self/events",
+    "/api/devices/self/zones",
+    "/api/devices/self/location/delete",
 }
 _PUBLIC_PREFIXES = (
     "/api/auth/google",
