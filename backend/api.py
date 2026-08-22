@@ -60,7 +60,6 @@ async def lifespan(app: FastAPI):
         (lambda: __import__('action_ledger', fromlist=['init_action_ledger']).init_action_ledger(), "Action Ledger"),
         (lambda: __import__('fcm').init_fcm_table(), "FCM Tokens"),
         (lambda: __import__('device_registry', fromlist=['init_device_tables']).init_device_tables(), "Device Registry"),
-        (lambda: __import__('device_awareness', fromlist=['init_awareness_tables']).init_awareness_tables(), "Device Awareness"),
         (lambda: __import__('intelligence.learning_engine', fromlist=['init_learning_tables']).init_learning_tables(), "Learning"),
         (lambda: __import__('connectors.gmail', fromlist=['init_gmail_tables']).init_gmail_tables(), "Gmail"),
         (lambda: __import__('conversation_history', fromlist=['conversation_history']).conversation_history, "Conv History"),
@@ -1140,28 +1139,31 @@ def revoke_current_device(request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.post("/api/devices/{device_id}/revoke")
-def revoke_registered_device(device_id: str):
-    try:
-        from device_registry import DeviceRegistryError, revoke_device
-        return {"ok": True, "device": revoke_device(device_id)}
-    except DeviceRegistryError as exc:
-        raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+class DeviceCommandPreferencesUpdate(BaseModel):
+    global_pause: Optional[bool] = None
+    quiet_hours_enabled: Optional[bool] = None
+    quiet_start: Optional[str] = None
+    quiet_end: Optional[str] = None
 
 
-# ── Android Companion awareness ────────────────────────────────────────────────
-class DeviceAwarenessConsentPayload(BaseModel):
+class DeviceCaptureCreate(BaseModel):
+    kind: str = "text"
+    title: str = ""
+    body: str = ""
+    metadata: dict[str, Any] = {}
+
+
+class DeviceCaptureStatusUpdate(BaseModel):
+    status: str
+
+
+class DeviceAwarenessConsentUpdate(BaseModel):
     capability: str
     enabled: bool
     retention_hours: Optional[int] = None
 
 
-class DevicePushRegistrationPayload(BaseModel):
-    token: str
-    provider: str = "expo"
-
-
-class DeviceZonePayload(BaseModel):
+class DeviceAwarenessZone(BaseModel):
     id: str
     label: str
     latitude: float
@@ -1169,11 +1171,16 @@ class DeviceZonePayload(BaseModel):
     radius_m: int = 200
 
 
-class DeviceZonesPayload(BaseModel):
-    zones: list[DeviceZonePayload]
+class DeviceAwarenessZonesUpdate(BaseModel):
+    zones: list[DeviceAwarenessZone]
 
 
-class DeviceAwarenessEventPayload(BaseModel):
+class DeviceAwarenessPushToken(BaseModel):
+    token: str
+    provider: str = "expo"
+
+
+class DeviceAwarenessEvent(BaseModel):
     event_type: str
     zone_id: Optional[str] = None
     latitude: Optional[float] = None
@@ -1182,116 +1189,509 @@ class DeviceAwarenessEventPayload(BaseModel):
     mode: Optional[str] = None
 
 
-def _current_awareness_device(request: Request) -> dict[str, Any]:
+class DeviceNotificationSource(BaseModel):
+    package_name: str
+    app_label: str
+    content_mode: str = "metadata"
+    enabled: bool = True
+
+
+class DeviceNotificationSourcesUpdate(BaseModel):
+    sources: list[DeviceNotificationSource]
+
+
+class DeviceNotificationEventCreate(BaseModel):
+    package_name: str
+    title: str = ""
+    body: str = ""
+
+
+class DeviceSelectedContact(BaseModel):
+    display_name: str
+    normalized_phone: Optional[str] = None
+    relationship_label: Optional[str] = None
+
+
+class DeviceSelectedContactsUpdate(BaseModel):
+    contacts: list[DeviceSelectedContact]
+
+
+class DeviceHealthUpdate(BaseModel):
+    battery_percent: int
+    is_charging: bool = False
+    network_type: str = "unknown"
+
+
+def _companion_device_id(request: Request) -> str:
     device = getattr(request.state, "ora_device", None)
     if not device:
         raise HTTPException(status_code=401, detail="Device credential required")
-    return device
-
-
-def _awareness_http_error(exc: Exception) -> HTTPException:
-    return HTTPException(status_code=400, detail=str(exc))
+    return str(device["id"])
 
 
 @app.get("/api/devices/self/awareness")
 def get_device_awareness(request: Request):
-    device = _current_awareness_device(request)
     try:
         from device_awareness import get_awareness_state
 
-        return {"ok": True, "awareness": get_awareness_state(device["id"])}
-    except Exception as exc:
-        raise _awareness_http_error(exc) from exc
+        return {"ok": True, "awareness": get_awareness_state(_companion_device_id(request))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.put("/api/devices/self/awareness")
-def update_device_awareness(request: Request, payload: DeviceAwarenessConsentPayload):
-    device = _current_awareness_device(request)
+def update_device_awareness(payload: DeviceAwarenessConsentUpdate, request: Request):
     try:
         from device_awareness import set_awareness_consent
 
         return {
             "ok": True,
             "awareness": set_awareness_consent(
-                device["id"], payload.capability, payload.enabled, payload.retention_hours
+                _companion_device_id(request),
+                payload.capability,
+                payload.enabled,
+                payload.retention_hours,
             ),
         }
-    except Exception as exc:
-        raise _awareness_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.put("/api/devices/self/zones")
-def update_device_zones(request: Request, payload: DeviceZonesPayload):
-    device = _current_awareness_device(request)
+def update_device_awareness_zones(payload: DeviceAwarenessZonesUpdate, request: Request):
     try:
         from device_awareness import replace_zones
 
-        zones = replace_zones(device["id"], [item.model_dump() for item in payload.zones])
-        return {"ok": True, "zones": zones}
-    except Exception as exc:
-        raise _awareness_http_error(exc) from exc
+        return {"ok": True, "zones": replace_zones(_companion_device_id(request), [zone.model_dump() for zone in payload.zones])}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/devices/self/push/register")
-def register_device_push(request: Request, payload: DevicePushRegistrationPayload):
-    device = _current_awareness_device(request)
+def register_device_awareness_push(payload: DeviceAwarenessPushToken, request: Request):
     try:
         from device_awareness import register_push_token
 
-        return {"ok": True, "push": register_push_token(device["id"], payload.token, payload.provider)}
-    except Exception as exc:
-        raise _awareness_http_error(exc) from exc
+        return {"ok": True, "push": register_push_token(_companion_device_id(request), payload.token, payload.provider)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/devices/self/push/test")
-def test_device_push(request: Request):
-    device = _current_awareness_device(request)
+def test_device_awareness_push(request: Request):
     try:
         from device_awareness import get_push_token
         from fcm import send_push_to_token
 
-        token = get_push_token(device["id"])
+        token = get_push_token(_companion_device_id(request))
         if not token:
-            raise HTTPException(status_code=400, detail="Enable push alerts and register this phone before testing push.")
-        sent = send_push_to_token(token, "ORA push alerts enabled", "This phone can now receive ORA alerts.")
-        return {"ok": sent, "message": "Push test dispatched" if sent else "Push provider rejected this token."}
+            raise HTTPException(status_code=400, detail="Register a push token before requesting a test.")
+        sent = send_push_to_token(token, "ORA test", "Your paired-device alert channel is configured.")
+        return {"ok": bool(sent), "message": "Push test dispatched" if sent else "Push provider is not configured yet"}
     except HTTPException:
         raise
-    except Exception as exc:
-        raise _awareness_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/devices/self/events")
-def ingest_device_awareness_event(request: Request, payload: DeviceAwarenessEventPayload):
-    device = _current_awareness_device(request)
+def record_device_awareness_event(payload: DeviceAwarenessEvent, request: Request):
     try:
         from device_awareness import record_awareness_event
 
-        return {"ok": True, "event": record_awareness_event(device["id"], payload.model_dump(exclude_none=True))}
-    except Exception as exc:
-        raise _awareness_http_error(exc) from exc
-
-
-@app.get("/api/devices/self/events")
-def get_device_awareness_events(request: Request, limit: int = 50):
-    device = _current_awareness_device(request)
-    try:
-        from device_awareness import list_awareness_events
-
-        return {"ok": True, "events": list_awareness_events(device["id"], limit)}
-    except Exception as exc:
-        raise _awareness_http_error(exc) from exc
+        return {"ok": True, "event": record_awareness_event(_companion_device_id(request), payload.model_dump(exclude_none=True))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/devices/self/location/delete")
 def delete_device_location_history(request: Request):
-    device = _current_awareness_device(request)
     try:
         from device_awareness import delete_location_history
 
-        return {"ok": True, "deleted": delete_location_history(device["id"])}
+        return {"ok": True, "deleted": delete_location_history(_companion_device_id(request))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/devices/self/command-center")
+def get_device_command_center(request: Request):
+    try:
+        from device_command_center import get_command_center
+
+        return {"ok": True, "command_center": get_command_center(_companion_device_id(request))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/devices/self/preferences")
+def get_device_command_preferences(request: Request):
+    try:
+        from device_command_center import get_preferences
+
+        return {"ok": True, "preferences": get_preferences(_companion_device_id(request))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/devices/self/preferences")
+def update_device_command_preferences(payload: DeviceCommandPreferencesUpdate, request: Request):
+    try:
+        from device_command_center import set_preferences
+
+        return {
+            "ok": True,
+            "preferences": set_preferences(
+                _companion_device_id(request),
+                global_pause=payload.global_pause,
+                quiet_hours_enabled=payload.quiet_hours_enabled,
+                quiet_start=payload.quiet_start,
+                quiet_end=payload.quiet_end,
+            ),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/devices/self/captures")
+def get_device_captures(request: Request, status: Optional[str] = None, limit: int = 50):
+    try:
+        from device_command_center import list_captures
+
+        return {"ok": True, "captures": list_captures(_companion_device_id(request), status=status, limit=limit)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/self/captures")
+def create_device_capture(payload: DeviceCaptureCreate, request: Request):
+    try:
+        from device_command_center import create_capture
+
+        return {
+            "ok": True,
+            "capture": create_capture(
+                _companion_device_id(request),
+                kind=payload.kind,
+                title=payload.title,
+                body=payload.body,
+                metadata=payload.metadata,
+            ),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/self/captures/voice")
+async def create_device_voice_capture(
+    request: Request,
+    audio: UploadFile = File(...),
+    language: str = Form("auto"),
+):
+    """Transcribe a deliberate phone recording into a reviewable inbox capture.
+
+    Raw audio remains transient: it is sent to the configured transcription provider
+    for this request and is not persisted in ORA's device database.
+    """
+    try:
+        from device_command_center import create_capture
+        from voice_service import VOICE_MAX_BYTES, VoiceInputError, transcribe_audio
+
+        device_id = _companion_device_id(request)
+        audio_bytes = await audio.read(VOICE_MAX_BYTES + 1)
+        transcription = transcribe_audio(
+            audio_bytes,
+            filename=audio.filename or "ora-companion-voice.m4a",
+            language=language,
+        )
+        text = transcription["text"]
+        capture = create_capture(
+            device_id,
+            kind="voice_transcript",
+            title=text[:80],
+            body=text,
+            metadata={
+                "source": "push_to_talk",
+                "language": transcription.get("language"),
+                "duration_seconds": transcription.get("duration_seconds"),
+                "model": transcription.get("model"),
+                "quality": transcription.get("quality"),
+                "raw_audio_retained": False,
+            },
+        )
+        return {"ok": True, "capture": capture, "transcription": transcription}
+    except VoiceInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/devices/self/captures/{capture_id}")
+def update_device_capture(capture_id: int, payload: DeviceCaptureStatusUpdate, request: Request):
+    try:
+        from device_command_center import set_capture_status
+
+        return {
+            "ok": True,
+            "capture": set_capture_status(_companion_device_id(request), capture_id, payload.status),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/devices/self/activity")
+def get_device_activity(request: Request, limit: int = 50):
+    try:
+        from device_command_center import list_activity
+
+        return {"ok": True, "activity": list_activity(_companion_device_id(request), limit=limit)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/devices/self/notification-sources")
+def get_device_notification_sources(request: Request):
+    try:
+        from device_notification_awareness import list_sources
+
+        return {"ok": True, "sources": list_sources(_companion_device_id(request))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/devices/self/notification-sources")
+def update_device_notification_sources(payload: DeviceNotificationSourcesUpdate, request: Request):
+    try:
+        from device_notification_awareness import replace_sources
+
+        return {
+            "ok": True,
+            "sources": replace_sources(
+                _companion_device_id(request),
+                [source.model_dump() for source in payload.sources],
+            ),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/self/notification-events")
+def record_device_notification_event(payload: DeviceNotificationEventCreate, request: Request):
+    """Store one event from the Android listener after consent, allowlist, and pause checks."""
+    try:
+        from device_notification_awareness import record_notification_event
+
+        return {"ok": True, "event": record_notification_event(_companion_device_id(request), payload.model_dump())}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/devices/self/notification-events")
+def get_device_notification_events(request: Request, limit: int = 50):
+    try:
+        from device_notification_awareness import list_notification_events
+
+        return {"ok": True, "events": list_notification_events(_companion_device_id(request), limit=limit)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/devices/self/notification-events")
+def delete_device_notification_events(request: Request):
+    try:
+        from device_notification_awareness import delete_notification_events
+
+        return {"ok": True, "deleted": delete_notification_events(_companion_device_id(request))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/devices/self/contacts")
+def get_device_selected_contacts(request: Request):
+    try:
+        from device_context_controls import list_selected_contacts
+
+        return {"ok": True, "contacts": list_selected_contacts(_companion_device_id(request))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/devices/self/contacts")
+def update_device_selected_contacts(payload: DeviceSelectedContactsUpdate, request: Request):
+    try:
+        from device_context_controls import replace_selected_contacts
+
+        return {"ok": True, "contacts": replace_selected_contacts(_companion_device_id(request), [contact.model_dump() for contact in payload.contacts])}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/devices/self/health")
+def get_device_health(request: Request):
+    try:
+        from device_context_controls import get_latest_device_health
+
+        return {"ok": True, "health": get_latest_device_health(_companion_device_id(request))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/self/health")
+def record_device_health(payload: DeviceHealthUpdate, request: Request):
+    try:
+        from device_context_controls import record_device_health as save_device_health
+
+        return {"ok": True, "health": save_device_health(_companion_device_id(request), payload.model_dump())}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/devices/self/health")
+def delete_device_health_history(request: Request):
+    try:
+        from device_context_controls import delete_device_health
+
+        return {"ok": True, "deleted": delete_device_health(_companion_device_id(request))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _approval_summary(action: dict[str, Any]) -> dict[str, Any]:
+    """Return a review-safe action projection without connector payloads or results."""
+    return {
+        "id": action["id"],
+        "action_type": action["action_type"],
+        "title": action["title"],
+        "description": action.get("description") or "",
+        "risk": action["risk"],
+        "status": action["status"],
+        "requires_approval": bool(action["requires_approval"]),
+        "source": action.get("source"),
+        "created_at": action["created_at"],
+        "updated_at": action["updated_at"],
+        "expires_at": action.get("expires_at"),
+        "error": action.get("error"),
+        "verification_status": action.get("verification_status"),
+    }
+
+
+def _load_device_approval(action_id: int) -> dict[str, Any]:
+    from action_ledger import get_action
+
+    action = get_action(action_id)
+    if not action:
+        raise HTTPException(status_code=404, detail="Approval not found")
+    if not action.get("requires_approval"):
+        raise HTTPException(status_code=400, detail="This action is not part of the approval queue.")
+    return action
+
+
+@app.get("/api/devices/self/approvals")
+def get_device_approvals(request: Request, status: Optional[str] = None, limit: int = 50):
+    _companion_device_id(request)
+    try:
+        from action_ledger import list_actions
+
+        requested_status = status if status in {"proposed", "approved", "completed", "failed", "rejected", "cancelled"} else None
+        actions = list_actions(status=requested_status, limit=max(1, min(limit, 100)))
+        return {"ok": True, "approvals": [_approval_summary(action) for action in actions if action.get("requires_approval")]}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/self/approvals/{action_id}/approve")
+def approve_device_action(action_id: int, request: Request):
+    device_id = _companion_device_id(request)
+    try:
+        from action_ledger import approve_action
+        from device_command_center import record_activity
+
+        _load_device_approval(action_id)
+        action = approve_action(action_id)
+        if not action:
+            raise HTTPException(status_code=404, detail="Approval not found")
+        record_activity(device_id, "approval", "Action approved", f"Approval #{action_id}; execution still requires a separate tap")
+        return {"ok": True, "approval": _approval_summary(action), "execution_requires_user_tap": True}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/self/approvals/{action_id}/reject")
+def reject_device_action(action_id: int, request: Request):
+    device_id = _companion_device_id(request)
+    try:
+        from action_ledger import reject_action
+        from device_command_center import record_activity
+
+        _load_device_approval(action_id)
+        action = reject_action(action_id)
+        if not action:
+            raise HTTPException(status_code=404, detail="Approval not found")
+        record_activity(device_id, "approval", "Action rejected", f"Approval #{action_id}")
+        return {"ok": True, "approval": _approval_summary(action)}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/self/approvals/{action_id}/execute")
+def execute_device_action(action_id: int, request: Request):
+    """Execute only after a separate device-tapped approval; never run this automatically."""
+    device_id = _companion_device_id(request)
+    try:
+        from action_ledger import execute_action
+        from device_command_center import record_activity
+
+        action = _load_device_approval(action_id)
+        if action.get("status") != "approved":
+            raise HTTPException(status_code=400, detail="Approve this action before executing it.")
+        completed = execute_action(action_id)
+        if not completed:
+            raise HTTPException(status_code=404, detail="Approval not found")
+        record_activity(device_id, "approval", "Approved action executed", f"Approval #{action_id}; status {completed['status']}")
+        return {"ok": True, "approval": _approval_summary(completed)}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/self/tasks/{task_id}/complete")
+def complete_device_task(task_id: int, request: Request):
+    _companion_device_id(request)
+    try:
+        from database import complete_task
+
+        goal_id = complete_task(task_id)
+        return {"ok": True, "status": "done", "goal_id": goal_id}
     except Exception as exc:
-        raise _awareness_http_error(exc) from exc
+        raise HTTPException(status_code=500, detail="Task could not be completed") from exc
+
+
+@app.post("/api/devices/self/alerts/{alert_id}/ack")
+def acknowledge_device_alert(alert_id: int, request: Request):
+    _companion_device_id(request)
+    try:
+        from database import acknowledge_alert
+
+        acknowledge_alert(alert_id)
+        return {"ok": True}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Alert could not be acknowledged") from exc
+
+
+@app.post("/api/devices/{device_id}/revoke")
+def revoke_registered_device(device_id: str):
+    try:
+        from device_registry import DeviceRegistryError, revoke_device
+        return {"ok": True, "device": revoke_device(device_id)}
+    except DeviceRegistryError as exc:
+        raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
 
 
 # ── Location ──────────────────────────────────────────────────────────────────

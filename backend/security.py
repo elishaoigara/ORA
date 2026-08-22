@@ -33,13 +33,10 @@ _DEVICE_AUTH_PATHS = {
     "/api/devices/self",
     "/api/devices/self/check-in",
     "/api/devices/self/revoke",
-    "/api/devices/self/awareness",
-    "/api/devices/self/push/register",
-    "/api/devices/self/push/test",
-    "/api/devices/self/events",
-    "/api/devices/self/zones",
-    "/api/devices/self/location/delete",
 }
+_DEVICE_AUTH_PREFIXES = (
+    "/api/devices/self/",
+)
 _PUBLIC_PREFIXES = (
     "/api/auth/google",
 )
@@ -67,7 +64,7 @@ async def auth_middleware(
     if is_authorized(request.headers.get("X-ORA-Token")):
         return await call_next(request)
 
-    if request.url.path in _DEVICE_AUTH_PATHS:
+    if request.url.path in _DEVICE_AUTH_PATHS or request.url.path.startswith(_DEVICE_AUTH_PREFIXES):
         try:
             from device_registry import authenticate_device
 

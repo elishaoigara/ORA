@@ -20,10 +20,24 @@
 - [x] Verify and configure the Render owner-token environment variable required for secure Android Companion pairing-code generation.
 - [x] Audit and document safe, opt-in enablement of push alerts and location routines for the paired Android Companion.
 - [x] Document how to monitor latest device check-ins from the ORA backend without exposing credentials.
-- [x] Implement only explicitly confirmed awareness enhancements, then validate and checkpoint a rebuild-ready Android configuration.
+- [ ] Implement only explicitly confirmed awareness enhancements, then validate and checkpoint a rebuild-ready Android configuration.
 - [ ] Provide practical next-feature recommendations for ORA Companion.
 - [x] Rotate the exposed ORA owner API token and revoke/re-pair the affected Android device credential.
 - [x] Add device-scoped push-token registration and consent-aware ORA push alerts.
 - [x] Add named-zone Home, Work, and Commute routines with event-only location ingestion.
 - [x] Add separately enabled continuous background location with a visible foreground-service notification, retention controls, and one-tap stop.
 - [ ] Rebuild and validate the standalone Android package after the approved awareness features are implemented.
+- [ ] Defer external Expo and FCM push setup while completing a full privacy-first ORA Companion capability roadmap.
+- [ ] Present the implemented Companion feature inventory and prioritize the next build modules.
+- [x] Design the polished command-center information architecture, visual system, consent model, and shared backend schema.
+- [x] Build Command Center screens for daily plan, briefings, approvals, capture inbox, and activity timeline.
+- [x] Add explicit share-to-ORA and push-to-talk capture flows with reviewable ingestion.
+- [x] Add native Android notification access with app allowlists, redaction levels, and a reviewable audit trail.
+- [x] Add device health, contacts, context routines, global awareness pause, and comprehensive privacy controls.
+- [ ] Add actionable approvals, quiet hours, urgency policy, and delivery readiness states.
+- [ ] Validate, checkpoint, and publish the complete Companion source and standalone Android build path.
+- [x] Build the Today, Inbox, and Activity command-center screens with task completion, alert acknowledgement, reviewable text/link capture, sharing review, and voice transcript capture.
+- [x] Add a device-safe Approvals destination for proposed actions, explicit approval/rejection, and execution-state review.
+- [ ] Complete native notification-listener validation in a fresh standalone APK and confirm Android Settings access, source allowlisting, redaction, and audit synchronization.
+- [ ] Add selected-contact consent and low-frequency device-health awareness with manual-first defaults.
+- [ ] Extend Privacy with notification-audit deletion, global pause status, quiet-hours delivery policy, and retention review.

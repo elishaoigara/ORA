@@ -17,8 +17,17 @@ from typing import Any
 from database import close_conn, get_conn
 
 
-CAPABILITIES = {"push_alerts", "zone_routines", "continuous_location"}
+CAPABILITIES = {
+    "push_alerts",
+    "zone_routines",
+    "continuous_location",
+    "notification_access",
+    "selected_contacts",
+    "device_health",
+}
 DEFAULT_RETENTION_HOURS = 24
+DEFAULT_NOTIFICATION_RETENTION_HOURS = 72
+DEFAULT_HEALTH_RETENTION_HOURS = 24
 MAX_RETENTION_HOURS = 24 * 7
 MAX_ZONES = 5
 _ZONE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
@@ -112,7 +121,12 @@ def _consent_rows(device_id: str) -> dict[str, dict[str, Any]]:
         capability: {
             "capability": capability,
             "enabled": False,
-            "retention_hours": DEFAULT_RETENTION_HOURS if capability == "continuous_location" else 0,
+            "retention_hours": (
+                DEFAULT_NOTIFICATION_RETENTION_HOURS
+                if capability == "notification_access"
+                else DEFAULT_HEALTH_RETENTION_HOURS if capability == "device_health"
+                else DEFAULT_RETENTION_HOURS if capability == "continuous_location" else 0
+            ),
             "policy_version": "ora-awareness-v1",
             "updated_at": None,
         }
@@ -199,10 +213,15 @@ def set_awareness_consent(
     if capability not in CAPABILITIES:
         raise AwarenessError("Unknown awareness capability.")
 
-    if capability == "continuous_location":
-        selected_retention = retention_hours if retention_hours is not None else DEFAULT_RETENTION_HOURS
+    if capability in {"continuous_location", "notification_access", "device_health"}:
+        default_retention = (
+            DEFAULT_NOTIFICATION_RETENTION_HOURS
+            if capability == "notification_access"
+            else DEFAULT_HEALTH_RETENTION_HOURS if capability == "device_health" else DEFAULT_RETENTION_HOURS
+        )
+        selected_retention = retention_hours if retention_hours is not None else default_retention
         if not isinstance(selected_retention, int) or not 1 <= selected_retention <= MAX_RETENTION_HOURS:
-            raise AwarenessError(f"Continuous location retention must be between 1 and {MAX_RETENTION_HOURS} hours.")
+            raise AwarenessError(f"{capability.replace('_', ' ').capitalize()} retention must be between 1 and {MAX_RETENTION_HOURS} hours.")
     else:
         selected_retention = 0
 
@@ -234,6 +253,8 @@ def set_awareness_consent(
                     pass
         if capability == "zone_routines" and not enabled:
             conn.execute("DELETE FROM ora_device_zones WHERE device_id=?", (device_id,))
+        if capability == "selected_contacts" and not enabled:
+            conn.execute("DELETE FROM ora_device_contacts WHERE device_id=?", (device_id,))
         conn.commit()
     finally:
         close_conn()

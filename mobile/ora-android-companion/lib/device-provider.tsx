@@ -1,16 +1,22 @@
 import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import {
+  acknowledgeCommandAlert,
   checkIn,
   clearDeviceSession,
+  completeCommandTask,
   type AwarenessState,
+  type CommandCenter,
+  type CommandPreferences,
   type DeviceRecord,
   type DeviceSession,
   getAwarenessState,
+  getCommandCenter,
   getCurrentDevice,
   loadDeviceSession,
   pairWithOra,
   revokeCurrentDevice,
+  updateCommandPreferences as persistCommandPreferences,
 } from "@/lib/ora-device";
 import { clearedDeviceState, pairedDeviceState } from "@/lib/device-session-state";
 
@@ -20,13 +26,18 @@ type DeviceContextValue = {
   session: DeviceSession | null;
   device: DeviceRecord | null;
   awareness: AwarenessState | null;
+  commandCenter: CommandCenter | null;
   loading: boolean;
   busy: boolean;
   error: string | null;
   pair: (input: PairInput) => Promise<void>;
   refresh: () => Promise<void>;
   refreshAwareness: () => Promise<void>;
+  refreshCommandCenter: () => Promise<void>;
   sendCheckIn: () => Promise<void>;
+  completeTask: (taskId: number) => Promise<void>;
+  acknowledgeAlert: (alertId: number) => Promise<void>;
+  updateCommandPreferences: (updates: Partial<CommandPreferences>) => Promise<void>;
   revoke: () => Promise<void>;
   forgetLocalSession: () => Promise<void>;
 };
@@ -37,6 +48,7 @@ export function DeviceProvider({ children }: PropsWithChildren) {
   const [session, setSession] = useState<DeviceSession | null>(null);
   const [device, setDevice] = useState<DeviceRecord | null>(null);
   const [awareness, setAwareness] = useState<AwarenessState | null>(null);
+  const [commandCenter, setCommandCenter] = useState<CommandCenter | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +80,18 @@ export function DeviceProvider({ children }: PropsWithChildren) {
     }
   }, [session]);
 
+  const refreshCommandCenter = useCallback(async () => {
+    if (!session) {
+      setCommandCenter(null);
+      return;
+    }
+    try {
+      setCommandCenter(await getCommandCenter(session));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load the ORA command center.");
+    }
+  }, [session]);
+
   useEffect(() => {
     let active = true;
     loadDeviceSession()
@@ -96,6 +120,10 @@ export function DeviceProvider({ children }: PropsWithChildren) {
     if (session) void refreshAwareness();
   }, [refreshAwareness, session]);
 
+  useEffect(() => {
+    if (session) void refreshCommandCenter();
+  }, [refreshCommandCenter, session]);
+
   const pair = useCallback(async (input: PairInput) => {
     setBusy(true);
     setError(null);
@@ -105,6 +133,7 @@ export function DeviceProvider({ children }: PropsWithChildren) {
       setSession(paired.session);
       setDevice(paired.device);
       setAwareness(null);
+      setCommandCenter(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to pair this device.";
       setError(message);
@@ -130,6 +159,54 @@ export function DeviceProvider({ children }: PropsWithChildren) {
     }
   }, [session]);
 
+  const completeTask = useCallback(async (taskId: number) => {
+    if (!session) throw new Error("Pair this device before completing a task.");
+    setBusy(true);
+    setError(null);
+    try {
+      await completeCommandTask(session, taskId);
+      await refreshCommandCenter();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "ORA could not complete this task.";
+      setError(message);
+      throw new Error(message);
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshCommandCenter, session]);
+
+  const acknowledgeAlert = useCallback(async (alertId: number) => {
+    if (!session) throw new Error("Pair this device before acknowledging an alert.");
+    setBusy(true);
+    setError(null);
+    try {
+      await acknowledgeCommandAlert(session, alertId);
+      await refreshCommandCenter();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "ORA could not acknowledge this alert.";
+      setError(message);
+      throw new Error(message);
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshCommandCenter, session]);
+
+  const updateCommandPrefs = useCallback(async (updates: Partial<CommandPreferences>) => {
+    if (!session) throw new Error("Pair this device before changing command-center preferences.");
+    setBusy(true);
+    setError(null);
+    try {
+      await persistCommandPreferences(session, updates);
+      await refreshCommandCenter();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "ORA could not update these preferences.";
+      setError(message);
+      throw new Error(message);
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshCommandCenter, session]);
+
   const revoke = useCallback(async () => {
     if (!session) return;
     setBusy(true);
@@ -140,6 +217,7 @@ export function DeviceProvider({ children }: PropsWithChildren) {
       setSession(cleared.session);
       setDevice(cleared.device);
       setAwareness(null);
+      setCommandCenter(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "ORA could not revoke this device.");
       throw err;
@@ -154,12 +232,49 @@ export function DeviceProvider({ children }: PropsWithChildren) {
     setSession(cleared.session);
     setDevice(cleared.device);
     setAwareness(null);
+    setCommandCenter(null);
     setError(cleared.error);
   }, []);
 
   const value = useMemo(
-    () => ({ session, device, awareness, loading, busy, error, pair, refresh, refreshAwareness, sendCheckIn, revoke, forgetLocalSession }),
-    [session, device, awareness, loading, busy, error, pair, refresh, refreshAwareness, sendCheckIn, revoke, forgetLocalSession],
+    () => ({
+      session,
+      device,
+      awareness,
+      commandCenter,
+      loading,
+      busy,
+      error,
+      pair,
+      refresh,
+      refreshAwareness,
+      refreshCommandCenter,
+      sendCheckIn,
+      completeTask,
+      acknowledgeAlert,
+      updateCommandPreferences: updateCommandPrefs,
+      revoke,
+      forgetLocalSession,
+    }),
+    [
+      session,
+      device,
+      awareness,
+      commandCenter,
+      loading,
+      busy,
+      error,
+      pair,
+      refresh,
+      refreshAwareness,
+      refreshCommandCenter,
+      sendCheckIn,
+      completeTask,
+      acknowledgeAlert,
+      updateCommandPrefs,
+      revoke,
+      forgetLocalSession,
+    ],
   );
 
   return <DeviceContext.Provider value={value}>{children}</DeviceContext.Provider>;

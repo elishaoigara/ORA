@@ -1,46 +1,63 @@
-# ORA Android Companion — Interface Design
+# ORA Android Companion — Command Center Design
 
 ## Product purpose
 
-The ORA Android Companion is a consent-first bridge between the user’s Android phone and the existing ORA backend. Its first release pairs one device securely, keeps a visible connection state, stores only a revocable device credential, and gives the user clear control over future alert, notification, and location capabilities.
+ORA Companion is a **private mobile command center** for the paired ORA assistant. It gives the user a calm, glanceable view of the day, captures information deliberately, presents only reviewable proposed actions, and makes every awareness source visible, scoped, and reversible.
 
-The app is designed for **portrait 9:16 use**, one-handed interaction, and mainstream Android conventions. It must remain useful even when no sensitive data source is enabled.
+The design assumes **portrait 9:16**, one-handed Android use, and mainstream Android interaction conventions. The app stays useful with all awareness features off; pairing is never consent for notifications, location, contacts, or imported content.
 
-## Screen list
+## Navigation and screen list
 
-| Screen | Primary content and functionality |
+| Destination | Primary content and functionality |
 |---|---|
-| **Home** | Connection status, paired device name, last sync, a primary **Connect ORA** action when unpaired, and a global awareness pause control when paired. |
-| **Pair ORA** | HTTPS backend address, pairing code entry, validation status, device-name confirmation, and a clear explanation that the companion receives a device-scoped token rather than ORA’s master token. |
-| **Awareness** | Separate, opt-in cards for push alerts, named-zone routines, and continuous location. Every card gives plain-language data scope, native permission rationale, a visible enabled state, and a direct stop action. No permission is requested automatically. |
-| **Privacy & Device** | Device identifier, last check-in, consent summary, retention explanation, immediate precise-location deletion, reconnect action, and a destructive **Revoke device** control with explicit confirmation. |
-| **Pairing result** | A success state with the paired name, current backend, and the next recommended safe action: enable push notifications or test a device check-in. |
+| **Today** | Personal greeting, live ORA briefing, top priorities, active goal progress, next commitment, attention items, and one-thumb quick actions for voice note, share inbox, approval queue, and refresh. |
+| **Inbox** | Unified, reviewable feed for explicit shares, voice captures, redacted notification events, alerts, and suggested follow-ups. Filters separate Captures, Notifications, and ORA alerts. |
+| **Approvals** | A focused queue of proposed Gmail, Calendar, and other externally visible actions. Every card shows what will happen, risk, source, expiry, and explicit Approve / Reject controls. |
+| **Activity** | Time-ordered device events, routine transitions, completed tasks, assistant follow-ups, and delivery status. Detail screens explain why an event was retained and when it will expire. |
+| **Awareness** | Separate, opt-in controls for push alerts, notification access, named zones, continuous location, contacts, and device health. Each shows data scope, retention, Android permission state, and a stop control. |
+| **Privacy** | Global Pause All Awareness, audit/export/delete controls, source-by-source retention, precise-location deletion, notification allowlists, device session details, and revoke-device action. |
+| **Pair ORA** | HTTPS backend address, one-time pairing code, device-name confirmation, and clear explanation of the device-scoped credential boundary. |
 
 ## Key user flows
 
-1. **First pairing:** User opens Home → taps **Connect ORA** → enters the HTTPS ORA backend address and short pairing code → confirms the device label → companion exchanges the code for a device-scoped token → token is stored securely → Home displays **Connected**.
-2. **Device health:** User opens Home → sees last successful sync and backend readiness → taps refresh → companion fetches its device record and updates the status.
-3. **Privacy control:** User opens Privacy & Device → reviews what is currently enabled → taps **Revoke device** → confirms → companion clears the locally stored credential and returns to an unpaired state.
-4. **Future awareness opt-in:** User opens Awareness → reads the purpose and data scope for a capability → enables a feature only after the corresponding backend consent and native permission flow has been implemented.
-5. **Named-zone routine:** User enables Named-zone routines → grants Android foreground then background location → saves current place as Home, Work, or Commute → phone sends only entered/left events.
-6. **Continuous location:** User enables Continuous location → reviews persistent Android notification and 24-hour retention → grants permissions → sees the foreground service notification → stops it from Awareness or deletes retained samples from Privacy.
+1. **Morning command center:** User opens Today → reads briefing and attention items → marks a task done or opens an approval → returns to the next priority without navigating a long dashboard.
+2. **Capture deliberately:** User uses Android Share → selects ORA Companion → chooses save as reference, task, or question → sees it in Inbox → confirms, edits, or archives it.
+3. **Voice capture:** User holds the microphone control → releases to stop → sees a transcription draft and proposed task/reminder → confirms before ORA stores it.
+4. **Approval safety:** User opens Approvals → reads the exact external action → taps Approve & Execute or Reject → result is added to Activity with outcome and timestamp.
+5. **Notification awareness:** User enables notification access → is sent to Android Settings → returns to choose allowed apps and content level → ORA receives only the chosen redaction level → every event appears in Activity with a delete path.
+6. **Context routine:** User enables a named zone → saves current place as Home, Work, or Commute → ORA receives only arrival/departure event names. Continuous location requires its own consent, foreground notification, retention time, and Stop control.
+7. **Global pause:** User opens Privacy → taps Pause All Awareness → all ingestion is rejected server-side and native routines are stopped locally; a clear Resume control remains visible.
+
+## Consent and retention model
+
+| Capability | Default | Data boundary | Retention and stop path |
+|---|---|---|---|
+| Explicit shares | Off until user shares | Only user-selected text, links, images, or files | Inbox archive/delete at any time |
+| Voice notes | Off until press-and-hold | Audio only during an active recording; user confirms transcript | Delete original capture or derived draft |
+| Notification access | Off | Per-app allowlist; metadata, redacted preview, or full content chosen individually | Stop in Awareness and Android Settings; delete audit events |
+| Named zones | Off | Home/Work/Commute enter and exit events only | Stop in Awareness; remove each saved zone |
+| Continuous location | Off | Coordinates and accuracy only during foreground service | 24-hour default; immediate Privacy deletion and Stop |
+| Contacts | Off | Selected contacts or on-device matching; no bulk cloud copy by default | Disconnect in Awareness and delete mappings |
+| Device health | Off | Battery, charging, network class, and app status; no content | 7-day default with global pause |
 
 ## Interaction and accessibility
 
-Primary controls are at least 44 px high, use high-contrast labels, show loading and error states inline, and use destructive red styling only for revocation. The pairing form supports normal keyboard submission. Status is always expressed in text and color: **Connected**, **Needs pairing**, **Backend unavailable**, **Paused**, or **Revoked**.
+Primary actions are at least 48 px high and positioned within the lower thumb zone. Each sensitive control uses a short summary first, then an explanatory sheet before Android requests permission. Use inline loading states, plain-language errors, and haptic confirmation only for meaningful transitions. Destructive controls are visually distinct and always require confirmation.
 
-## Color choices
+## Visual system
 
-The companion inherits ORA’s dark operational identity while using clear Android status colors:
+The Companion uses an **operational dark mode** with calm, high-contrast information layers rather than dense “cyber” ornament. Large briefing text, compact status chips, restrained dividers, and consistent cards make the interface feel deliberate and readable at a glance.
 
 | Token | Color | Role |
 |---|---|---|
-| `background` | `#08110F` | Near-black green screen background |
-| `surface` | `#10201C` | Elevated cards and form surfaces |
-| `primary` | `#00E6A7` | ORA action and active connection accent |
+| `background` | `#08110F` | Deep green-black canvas |
+| `surface` | `#10201C` | Main cards and bottom navigation |
+| `surfaceRaised` | `#162A24` | Attention cards and modal sheets |
+| `primary` | `#00E6A7` | Primary actions and active state |
+| `accent` | `#4CA7FF` | Information, plan progress, and links |
 | `foreground` | `#F2FFF9` | Main text |
-| `muted` | `#95AAA3` | Supporting labels and timestamps |
-| `border` | `#1D3931` | Card and divider boundaries |
-| `success` | `#38D996` | Confirmed connection and safe state |
-| `warning` | `#F5B94C` | Unavailable or attention-required state |
-| `error` | `#F87171` | Failed connection and revoke action |
+| `muted` | `#95AAA3` | Supporting text and time labels |
+| `border` | `#1D3931` | Card and list separators |
+| `success` | `#38D996` | Safe, connected, complete |
+| `warning` | `#F5B94C` | Attention and pending approval |
+| `error` | `#F87171` | Failed, revoked, and destructive actions |

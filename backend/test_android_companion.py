@@ -139,59 +139,254 @@ class DevicePairingApiTests(unittest.TestCase):
         self.assertEqual(revoked.status_code, 200)
         self.assertEqual(revoked.json()["device"]["status"], "revoked")
 
-    def test_device_awareness_requires_explicit_consent_and_redacts_location_history(self):
+    def test_device_command_center_is_scoped_and_pause_blocks_new_captures(self):
+        from database import add_task, init_db, init_tasks_table, log_alert
+
+        init_db()
+        init_tasks_table()
+
         create = self.client.post("/api/devices/pairing-codes", headers=self.owner_headers, json={})
         pair = self.client.post(
             "/api/devices/pair",
-            json={"pairing_code": create.json()["pairing_code"], "device_name": "Awareness test phone", "platform": "android"},
+            json={"pairing_code": create.json()["pairing_code"], "device_name": "Command center test", "platform": "android"},
         )
-        body = pair.json()
-        headers = {"X-ORA-Device-ID": body["device"]["id"], "X-ORA-Device-Token": body["device_token"]}
+        self.assertEqual(pair.status_code, 200)
+        device_headers = {
+            "X-ORA-Device-ID": pair.json()["device"]["id"],
+            "X-ORA-Device-Token": pair.json()["device_token"],
+        }
 
-        initial = self.client.get("/api/devices/self/awareness", headers=headers)
-        self.assertEqual(initial.status_code, 200)
-        self.assertFalse(next(item for item in initial.json()["awareness"]["consents"] if item["capability"] == "push_alerts")["enabled"])
+        task_id = add_task("Review command center", priority="high")
+        log_alert("Companion test", "Reviewable test alert", "medium")
 
-        denied = self.client.post(
-            "/api/devices/self/events", headers=headers, json={"event_type": "location_sample", "latitude": -1.286, "longitude": 36.817}
-        )
-        self.assertEqual(denied.status_code, 400)
+        overview = self.client.get("/api/devices/self/command-center", headers=device_headers)
+        self.assertEqual(overview.status_code, 200)
+        self.assertTrue(any(task["id"] == task_id for task in overview.json()["command_center"]["tasks"]))
 
-        zones_on = self.client.put(
-            "/api/devices/self/awareness", headers=headers, json={"capability": "zone_routines", "enabled": True}
+        capture = self.client.post(
+            "/api/devices/self/captures",
+            headers=device_headers,
+            json={"kind": "text", "title": "A private thought", "body": "Keep this in the reviewable inbox."},
         )
-        self.assertEqual(zones_on.status_code, 200)
-        zones = self.client.put(
-            "/api/devices/self/zones",
-            headers=headers,
-            json={"zones": [{"id": "home", "label": "Home", "latitude": -1.2, "longitude": 36.8, "radius_m": 150}]},
+        self.assertEqual(capture.status_code, 200)
+        capture_id = capture.json()["capture"]["id"]
+        saved = self.client.patch(
+            f"/api/devices/self/captures/{capture_id}", headers=device_headers, json={"status": "saved"}
         )
-        self.assertEqual(zones.status_code, 200)
-        transition = self.client.post(
-            "/api/devices/self/events", headers=headers, json={"event_type": "zone_enter", "zone_id": "home"}
-        )
-        self.assertEqual(transition.status_code, 200)
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.json()["capture"]["status"], "saved")
 
-        continuous_on = self.client.put(
+        task_capture = self.client.post(
+            "/api/devices/self/captures",
+            headers=device_headers,
+            json={"kind": "text", "title": "Follow up with a client", "body": "Create only after explicit Inbox task conversion."},
+        )
+        self.assertEqual(task_capture.status_code, 200)
+        converted = self.client.patch(
+            f"/api/devices/self/captures/{task_capture.json()['capture']['id']}", headers=device_headers, json={"status": "task"}
+        )
+        self.assertEqual(converted.status_code, 200)
+        self.assertEqual(converted.json()["capture"]["status"], "task")
+        self.assertIn("task_id", converted.json()["capture"]["metadata"])
+
+        paused = self.client.put(
+            "/api/devices/self/preferences", headers=device_headers, json={"global_pause": True}
+        )
+        self.assertEqual(paused.status_code, 200)
+        self.assertTrue(paused.json()["preferences"]["global_pause"])
+        blocked = self.client.post(
+            "/api/devices/self/captures", headers=device_headers, json={"kind": "text", "title": "Blocked"}
+        )
+        self.assertEqual(blocked.status_code, 400)
+
+        resumed = self.client.put(
+            "/api/devices/self/preferences", headers=device_headers, json={"global_pause": False}
+        )
+        self.assertEqual(resumed.status_code, 200)
+        completed = self.client.post(f"/api/devices/self/tasks/{task_id}/complete", headers=device_headers)
+        self.assertEqual(completed.status_code, 200)
+
+        alert_id = overview.json()["command_center"]["alerts"][0]["id"]
+        acknowledged = self.client.post(f"/api/devices/self/alerts/{alert_id}/ack", headers=device_headers)
+        self.assertEqual(acknowledged.status_code, 200)
+
+        unauthenticated = self.client.get("/api/devices/self/command-center")
+        self.assertEqual(unauthenticated.status_code, 401)
+
+    def test_notification_awareness_requires_consent_allowlist_and_respects_pause(self):
+        create = self.client.post("/api/devices/pairing-codes", headers=self.owner_headers, json={})
+        pair = self.client.post(
+            "/api/devices/pair",
+            json={"pairing_code": create.json()["pairing_code"], "device_name": "Notification policy test", "platform": "android"},
+        )
+        self.assertEqual(pair.status_code, 200)
+        device_headers = {
+            "X-ORA-Device-ID": pair.json()["device"]["id"],
+            "X-ORA-Device-Token": pair.json()["device_token"],
+        }
+
+        denied_before_consent = self.client.get("/api/devices/self/notification-sources", headers=device_headers)
+        self.assertEqual(denied_before_consent.status_code, 400)
+
+        enabled = self.client.put(
             "/api/devices/self/awareness",
-            headers=headers,
-            json={"capability": "continuous_location", "enabled": True, "retention_hours": 24},
+            headers=device_headers,
+            json={"capability": "notification_access", "enabled": True, "retention_hours": 24},
         )
-        self.assertEqual(continuous_on.status_code, 200)
-        sample = self.client.post(
-            "/api/devices/self/events",
-            headers=headers,
-            json={"event_type": "location_sample", "latitude": -1.286389, "longitude": 36.817223, "accuracy_m": 12},
-        )
-        self.assertEqual(sample.status_code, 200)
-        history = self.client.get("/api/devices/self/events", headers=headers)
-        self.assertEqual(history.status_code, 200)
-        redacted = next(event for event in history.json()["events"] if event["event_type"] == "location_sample")
-        self.assertEqual(redacted["detail"], {"summary": "Precise location sample retained"})
+        self.assertEqual(enabled.status_code, 200)
 
-        deleted = self.client.post("/api/devices/self/location/delete", headers=headers)
-        self.assertEqual(deleted.status_code, 200)
-        self.assertEqual(deleted.json()["deleted"], 1)
+        blocked_source = self.client.post(
+            "/api/devices/self/notification-events",
+            headers=device_headers,
+            json={"package_name": "com.whatsapp", "title": "Not permitted", "body": "No allowlist yet"},
+        )
+        self.assertEqual(blocked_source.status_code, 400)
+
+        sources = self.client.put(
+            "/api/devices/self/notification-sources",
+            headers=device_headers,
+            json={"sources": [{"package_name": "com.whatsapp", "app_label": "WhatsApp", "content_mode": "redacted", "enabled": True}]},
+        )
+        self.assertEqual(sources.status_code, 200)
+        self.assertEqual(sources.json()["sources"][0]["content_mode"], "redacted")
+
+        recorded = self.client.post(
+            "/api/devices/self/notification-events",
+            headers=device_headers,
+            json={"package_name": "com.whatsapp", "title": "OTP 123456", "body": "See https://example.test and elisha@example.test"},
+        )
+        self.assertEqual(recorded.status_code, 200)
+        events = self.client.get("/api/devices/self/notification-events", headers=device_headers)
+        self.assertEqual(events.status_code, 200)
+        self.assertIn("[code]", events.json()["events"][0]["title"])
+        self.assertIn("[link]", events.json()["events"][0]["body"])
+        self.assertIn("[email]", events.json()["events"][0]["body"])
+
+        paused = self.client.put("/api/devices/self/preferences", headers=device_headers, json={"global_pause": True})
+        self.assertEqual(paused.status_code, 200)
+        blocked_while_paused = self.client.post(
+            "/api/devices/self/notification-events",
+            headers=device_headers,
+            json={"package_name": "com.whatsapp", "title": "Paused", "body": "Do not store"},
+        )
+        self.assertEqual(blocked_while_paused.status_code, 400)
+
+        self.client.put("/api/devices/self/preferences", headers=device_headers, json={"global_pause": False})
+        cleared = self.client.delete("/api/devices/self/notification-events", headers=device_headers)
+        self.assertEqual(cleared.status_code, 200)
+        self.assertGreaterEqual(cleared.json()["deleted"], 1)
+
+    def test_selected_contacts_and_device_health_are_consent_scoped_and_deletable(self):
+        create = self.client.post("/api/devices/pairing-codes", headers=self.owner_headers, json={})
+        pair = self.client.post(
+            "/api/devices/pair",
+            json={"pairing_code": create.json()["pairing_code"], "device_name": "Private context test", "platform": "android"},
+        )
+        self.assertEqual(pair.status_code, 200)
+        device_headers = {
+            "X-ORA-Device-ID": pair.json()["device"]["id"],
+            "X-ORA-Device-Token": pair.json()["device_token"],
+        }
+
+        self.assertEqual(self.client.get("/api/devices/self/contacts", headers=device_headers).status_code, 400)
+        self.assertEqual(self.client.get("/api/devices/self/health", headers=device_headers).status_code, 400)
+
+        for capability in ("selected_contacts", "device_health"):
+            enabled = self.client.put(
+                "/api/devices/self/awareness",
+                headers=device_headers,
+                json={"capability": capability, "enabled": True, "retention_hours": 24},
+            )
+            self.assertEqual(enabled.status_code, 200)
+
+        contacts = self.client.put(
+            "/api/devices/self/contacts",
+            headers=device_headers,
+            json={"contacts": [{"display_name": "Sam Example", "normalized_phone": "+254712345678", "relationship_label": "Family"}]},
+        )
+        self.assertEqual(contacts.status_code, 200)
+        self.assertEqual(contacts.json()["contacts"][0]["display_name"], "Sam Example")
+
+        health = self.client.post(
+            "/api/devices/self/health",
+            headers=device_headers,
+            json={"battery_percent": 68, "is_charging": True, "network_type": "wifi"},
+        )
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.json()["health"]["battery_percent"], 68)
+
+        self.client.put("/api/devices/self/preferences", headers=device_headers, json={"global_pause": True})
+        blocked = self.client.post(
+            "/api/devices/self/health",
+            headers=device_headers,
+            json={"battery_percent": 67, "is_charging": False, "network_type": "cellular"},
+        )
+        self.assertEqual(blocked.status_code, 400)
+
+        self.client.put("/api/devices/self/preferences", headers=device_headers, json={"global_pause": False})
+        cleared_health = self.client.delete("/api/devices/self/health", headers=device_headers)
+        self.assertEqual(cleared_health.status_code, 200)
+        self.assertEqual(cleared_health.json()["deleted"], 1)
+
+        disabled_contacts = self.client.put(
+            "/api/devices/self/awareness",
+            headers=device_headers,
+            json={"capability": "selected_contacts", "enabled": False},
+        )
+        self.assertEqual(disabled_contacts.status_code, 200)
+        self.assertEqual(self.client.get("/api/devices/self/contacts", headers=device_headers).status_code, 400)
+
+    def test_device_approval_queue_requires_separate_approve_and_execute_taps(self):
+        from action_ledger import create_action
+
+        create = self.client.post("/api/devices/pairing-codes", headers=self.owner_headers, json={})
+        pair = self.client.post(
+            "/api/devices/pair",
+            json={"pairing_code": create.json()["pairing_code"], "device_name": "Approval test", "platform": "android"},
+        )
+        self.assertEqual(pair.status_code, 200)
+        device_headers = {
+            "X-ORA-Device-ID": pair.json()["device"]["id"],
+            "X-ORA-Device-Token": pair.json()["device_token"],
+        }
+        action = create_action(
+            action_key="test-device-approval",
+            action_type="test.unsupported_action",
+            title="Review a safe test action",
+            description="A test proposal that has no connector implementation.",
+            payload={"private_value": "must_not_be_exposed"},
+            risk="external_write",
+            requires_approval=True,
+        )
+
+        listed = self.client.get("/api/devices/self/approvals", headers=device_headers)
+        self.assertEqual(listed.status_code, 200)
+        summary = next(item for item in listed.json()["approvals"] if item["id"] == action["id"])
+        self.assertNotIn("payload", summary)
+        self.assertEqual(summary["status"], "proposed")
+
+        premature = self.client.post(f"/api/devices/self/approvals/{action['id']}/execute", headers=device_headers)
+        self.assertEqual(premature.status_code, 400)
+
+        approved = self.client.post(f"/api/devices/self/approvals/{action['id']}/approve", headers=device_headers)
+        self.assertEqual(approved.status_code, 200)
+        self.assertTrue(approved.json()["execution_requires_user_tap"])
+        self.assertEqual(approved.json()["approval"]["status"], "approved")
+
+        executed = self.client.post(f"/api/devices/self/approvals/{action['id']}/execute", headers=device_headers)
+        self.assertEqual(executed.status_code, 200)
+        self.assertEqual(executed.json()["approval"]["status"], "failed")
+
+        rejected_action = create_action(
+            action_key="test-device-rejection",
+            action_type="test.unsupported_action",
+            title="Reject a safe test action",
+            risk="external_write",
+            requires_approval=True,
+        )
+        rejected = self.client.post(f"/api/devices/self/approvals/{rejected_action['id']}/reject", headers=device_headers)
+        self.assertEqual(rejected.status_code, 200)
+        self.assertEqual(rejected.json()["approval"]["status"], "rejected")
 
 
 if __name__ == "__main__":

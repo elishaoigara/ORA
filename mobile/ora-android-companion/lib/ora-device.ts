@@ -26,7 +26,7 @@ export type PairingResult = {
   device_token: string;
 };
 
-export type AwarenessCapability = "push_alerts" | "zone_routines" | "continuous_location";
+export type AwarenessCapability = "push_alerts" | "zone_routines" | "continuous_location" | "notification_access" | "selected_contacts" | "device_health";
 
 export type AwarenessConsent = {
   capability: AwarenessCapability;
@@ -50,6 +50,115 @@ export type AwarenessState = {
   consents: AwarenessConsent[];
   zones: AwarenessZone[];
   push: { registered: boolean; provider?: string | null; created_at?: string | null; last_seen_at?: string | null };
+};
+
+export type CommandTask = {
+  id: number;
+  title: string;
+  priority: "low" | "medium" | "high" | string;
+  created_at: string;
+  due_at?: string | null;
+  goal_id?: number | null;
+};
+
+export type CommandAlert = {
+  id: number;
+  rule_name: string;
+  message: string;
+  severity: "low" | "medium" | "high" | "critical" | string;
+  timestamp: string;
+  acknowledged: boolean;
+};
+
+export type CommandActivity = {
+  category: string;
+  title: string;
+  detail: string;
+  occurred_at: string;
+  retention_hours: number;
+};
+
+export type CommandPreferences = {
+  global_pause: boolean;
+  quiet_hours_enabled: boolean;
+  quiet_start?: string | null;
+  quiet_end?: string | null;
+  updated_at?: string | null;
+};
+
+export type Capture = {
+  id: number;
+  kind: "text" | "link" | "voice_transcript" | "shared_file" | string;
+  title: string;
+  body: string;
+  metadata: Record<string, unknown>;
+  status: "inbox" | "saved" | "archived" | "task";
+  created_at: string;
+  updated_at: string;
+};
+
+export type CommandCenter = {
+  briefing: string;
+  tasks: CommandTask[];
+  alerts: CommandAlert[];
+  attention_count: number;
+  pending_capture_count: number;
+  preferences: CommandPreferences;
+  activity: CommandActivity[];
+};
+
+export type NotificationContentMode = "metadata" | "redacted" | "full";
+
+export type NotificationSource = {
+  package_name: string;
+  app_label: string;
+  content_mode: NotificationContentMode;
+  enabled: boolean;
+  updated_at?: string | null;
+};
+
+export type NotificationAuditEvent = {
+  id: number;
+  package_name: string;
+  app_label: string;
+  title: string;
+  body: string;
+  content_mode: NotificationContentMode;
+  occurred_at: string;
+  expires_at: string;
+};
+
+export type SelectedContact = {
+  id?: number;
+  display_name: string;
+  normalized_phone?: string | null;
+  relationship_label?: string | null;
+  created_at?: string;
+};
+
+export type DeviceHealthSnapshot = {
+  id?: number;
+  battery_percent: number;
+  is_charging: boolean;
+  network_type: string;
+  occurred_at?: string;
+  retention_hours?: number;
+};
+
+export type DeviceApproval = {
+  id: number;
+  action_type: string;
+  title: string;
+  description: string;
+  risk: string;
+  status: "proposed" | "approved" | "completed" | "failed" | "rejected" | "cancelled" | string;
+  requires_approval: boolean;
+  source?: string | null;
+  created_at: string;
+  updated_at: string;
+  expires_at?: string | null;
+  error?: string | null;
+  verification_status?: string | null;
 };
 
 const SESSION_KEY = "ora_companion_device_session_v1";
@@ -226,6 +335,230 @@ export async function deletePreciseLocationHistory(session: DeviceSession): Prom
     headers: deviceHeaders(session),
   });
   return result.deleted;
+}
+
+export async function getCommandCenter(session: DeviceSession): Promise<CommandCenter> {
+  const result = await requestJson<{ ok: boolean; command_center: CommandCenter }>(`${session.backendUrl}/api/devices/self/command-center`, {
+    headers: deviceHeaders(session),
+  });
+  return result.command_center;
+}
+
+export async function getCommandPreferences(session: DeviceSession): Promise<CommandPreferences> {
+  const result = await requestJson<{ ok: boolean; preferences: CommandPreferences }>(`${session.backendUrl}/api/devices/self/preferences`, {
+    headers: deviceHeaders(session),
+  });
+  return result.preferences;
+}
+
+export async function updateCommandPreferences(
+  session: DeviceSession,
+  updates: Partial<Pick<CommandPreferences, "global_pause" | "quiet_hours_enabled" | "quiet_start" | "quiet_end">>,
+): Promise<CommandPreferences> {
+  const result = await requestJson<{ ok: boolean; preferences: CommandPreferences }>(`${session.backendUrl}/api/devices/self/preferences`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(session) },
+    body: JSON.stringify(updates),
+  });
+  return result.preferences;
+}
+
+export async function getCaptures(session: DeviceSession, status?: Capture["status"]): Promise<Capture[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : "";
+  const result = await requestJson<{ ok: boolean; captures: Capture[] }>(`${session.backendUrl}/api/devices/self/captures${query}`, {
+    headers: deviceHeaders(session),
+  });
+  return result.captures;
+}
+
+export async function createCapture(
+  session: DeviceSession,
+  payload: Pick<Capture, "kind" | "title" | "body"> & { metadata?: Record<string, unknown> },
+): Promise<Capture> {
+  const result = await requestJson<{ ok: boolean; capture: Capture }>(`${session.backendUrl}/api/devices/self/captures`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(session) },
+    body: JSON.stringify(payload),
+  });
+  return result.capture;
+}
+
+export async function updateCaptureStatus(
+  session: DeviceSession,
+  captureId: number,
+  status: Capture["status"],
+): Promise<Capture> {
+  const result = await requestJson<{ ok: boolean; capture: Capture }>(`${session.backendUrl}/api/devices/self/captures/${captureId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(session) },
+    body: JSON.stringify({ status }),
+  });
+  return result.capture;
+}
+
+export type VoiceCaptureResult = {
+  capture: Capture;
+  transcription: {
+    text: string;
+    language?: string | null;
+    duration_seconds?: number | null;
+    model?: string;
+  };
+};
+
+export async function uploadVoiceCapture(
+  session: DeviceSession,
+  input: { uri: string; filename: string; mimeType: string; language?: string },
+): Promise<VoiceCaptureResult> {
+  const form = new FormData();
+  form.append("audio", { uri: input.uri, name: input.filename, type: input.mimeType } as never);
+  form.append("language", input.language || "auto");
+  const result = await requestJson<{ ok: boolean } & VoiceCaptureResult>(`${session.backendUrl}/api/devices/self/captures/voice`, {
+    method: "POST",
+    headers: deviceHeaders(session),
+    body: form,
+  });
+  return { capture: result.capture, transcription: result.transcription };
+}
+
+export async function getCommandActivity(session: DeviceSession): Promise<CommandActivity[]> {
+  const result = await requestJson<{ ok: boolean; activity: CommandActivity[] }>(`${session.backendUrl}/api/devices/self/activity`, {
+    headers: deviceHeaders(session),
+  });
+  return result.activity;
+}
+
+export async function getNotificationSources(session: DeviceSession): Promise<NotificationSource[]> {
+  const result = await requestJson<{ ok: boolean; sources: NotificationSource[] }>(`${session.backendUrl}/api/devices/self/notification-sources`, {
+    headers: deviceHeaders(session),
+  });
+  return result.sources;
+}
+
+export async function replaceNotificationSources(
+  session: DeviceSession,
+  sources: Array<Pick<NotificationSource, "package_name" | "app_label" | "content_mode" | "enabled">>,
+): Promise<NotificationSource[]> {
+  const result = await requestJson<{ ok: boolean; sources: NotificationSource[] }>(`${session.backendUrl}/api/devices/self/notification-sources`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(session) },
+    body: JSON.stringify({ sources }),
+  });
+  return result.sources;
+}
+
+export async function submitNotificationAuditEvent(
+  session: DeviceSession,
+  payload: Pick<NotificationAuditEvent, "package_name" | "title" | "body">,
+): Promise<void> {
+  await requestJson<{ ok: boolean }>(`${session.backendUrl}/api/devices/self/notification-events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(session) },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getNotificationAuditEvents(session: DeviceSession): Promise<NotificationAuditEvent[]> {
+  const result = await requestJson<{ ok: boolean; events: NotificationAuditEvent[] }>(`${session.backendUrl}/api/devices/self/notification-events`, {
+    headers: deviceHeaders(session),
+  });
+  return result.events;
+}
+
+export async function deleteNotificationAuditEvents(session: DeviceSession): Promise<number> {
+  const result = await requestJson<{ ok: boolean; deleted: number }>(`${session.backendUrl}/api/devices/self/notification-events`, {
+    method: "DELETE",
+    headers: deviceHeaders(session),
+  });
+  return result.deleted;
+}
+
+export async function getSelectedContacts(session: DeviceSession): Promise<SelectedContact[]> {
+  const result = await requestJson<{ ok: boolean; contacts: SelectedContact[] }>(`${session.backendUrl}/api/devices/self/contacts`, {
+    headers: deviceHeaders(session),
+  });
+  return result.contacts;
+}
+
+export async function replaceSelectedContacts(
+  session: DeviceSession,
+  contacts: Array<Pick<SelectedContact, "display_name" | "normalized_phone" | "relationship_label">>,
+): Promise<SelectedContact[]> {
+  const result = await requestJson<{ ok: boolean; contacts: SelectedContact[] }>(`${session.backendUrl}/api/devices/self/contacts`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(session) },
+    body: JSON.stringify({ contacts }),
+  });
+  return result.contacts;
+}
+
+export async function getLatestDeviceHealth(session: DeviceSession): Promise<DeviceHealthSnapshot | null> {
+  const result = await requestJson<{ ok: boolean; health: DeviceHealthSnapshot | null }>(`${session.backendUrl}/api/devices/self/health`, {
+    headers: deviceHeaders(session),
+  });
+  return result.health;
+}
+
+export async function submitDeviceHealth(session: DeviceSession, snapshot: DeviceHealthSnapshot): Promise<DeviceHealthSnapshot> {
+  const result = await requestJson<{ ok: boolean; health: DeviceHealthSnapshot }>(`${session.backendUrl}/api/devices/self/health`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...deviceHeaders(session) },
+    body: JSON.stringify(snapshot),
+  });
+  return result.health;
+}
+
+export async function deleteDeviceHealthHistory(session: DeviceSession): Promise<number> {
+  const result = await requestJson<{ ok: boolean; deleted: number }>(`${session.backendUrl}/api/devices/self/health`, {
+    method: "DELETE",
+    headers: deviceHeaders(session),
+  });
+  return result.deleted;
+}
+
+export async function getDeviceApprovals(session: DeviceSession): Promise<DeviceApproval[]> {
+  const result = await requestJson<{ ok: boolean; approvals: DeviceApproval[] }>(`${session.backendUrl}/api/devices/self/approvals`, {
+    headers: deviceHeaders(session),
+  });
+  return result.approvals;
+}
+
+export async function approveDeviceApproval(session: DeviceSession, actionId: number): Promise<DeviceApproval> {
+  const result = await requestJson<{ ok: boolean; approval: DeviceApproval }>(`${session.backendUrl}/api/devices/self/approvals/${actionId}/approve`, {
+    method: "POST",
+    headers: deviceHeaders(session),
+  });
+  return result.approval;
+}
+
+export async function rejectDeviceApproval(session: DeviceSession, actionId: number): Promise<DeviceApproval> {
+  const result = await requestJson<{ ok: boolean; approval: DeviceApproval }>(`${session.backendUrl}/api/devices/self/approvals/${actionId}/reject`, {
+    method: "POST",
+    headers: deviceHeaders(session),
+  });
+  return result.approval;
+}
+
+export async function executeDeviceApproval(session: DeviceSession, actionId: number): Promise<DeviceApproval> {
+  const result = await requestJson<{ ok: boolean; approval: DeviceApproval }>(`${session.backendUrl}/api/devices/self/approvals/${actionId}/execute`, {
+    method: "POST",
+    headers: deviceHeaders(session),
+  });
+  return result.approval;
+}
+
+export async function completeCommandTask(session: DeviceSession, taskId: number): Promise<void> {
+  await requestJson<{ ok: boolean }>(`${session.backendUrl}/api/devices/self/tasks/${taskId}/complete`, {
+    method: "POST",
+    headers: deviceHeaders(session),
+  });
+}
+
+export async function acknowledgeCommandAlert(session: DeviceSession, alertId: number): Promise<void> {
+  await requestJson<{ ok: boolean }>(`${session.backendUrl}/api/devices/self/alerts/${alertId}/ack`, {
+    method: "POST",
+    headers: deviceHeaders(session),
+  });
 }
 
 export async function clearDeviceSession() {

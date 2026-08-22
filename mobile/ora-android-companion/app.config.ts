@@ -111,6 +111,12 @@ const config: ExpoConfig = {
       },
     ],
     [
+      "expo-contacts",
+      {
+        contactsPermission: "Allow ORA Companion to let you select individual contacts for your private ORA context.",
+      },
+    ],
+    [
       "expo-audio",
       {
         microphonePermission: "Allow $(PRODUCT_NAME) to access your microphone.",
