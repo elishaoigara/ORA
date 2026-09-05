@@ -1,69 +1,95 @@
-# ORA
+# ORA · Mini AI
 
-ORA is a personal assistant built around a React client and a FastAPI service. The current product intentionally focuses on a smaller, dependable core: chat, tasks, goals, memory, knowledge documents, Gmail/Calendar/Drive integration, alerts, proactive checks, weather, and M-Pesa ingestion.
+A personal AI workspace for Elisha: a restrained cyberpunk web app and Android companion with shared conversations, tasks, memory, document context and reviewable actions.
 
-## Runtime model
+**This branch is the ORA 2 rebuild. It is not a deployed upgrade yet.** Configure durable storage and validate a new Android build before switching production. The original `backend/api.py` and earlier modules remain as a rollback reference; the new entry point is **`next_api:app`**. Earlier roadmap documents describe the legacy implementation, not the active Mini runtime.
 
-The backend has one supported entry point:
+## What you can do
+
+- Talk to ORA with persistent, synchronized conversation history.
+- Record a voice note, review the transcript, then send it.
+- Choose an installed browser/Android voice and preview it. Read replies aloud optionally.
+- Ask for task/reminder proposals, personal memory or a message draft; review before applying.
+- Add tasks and reminders directly; complete them from either device.
+- Receive Android-local reminders for up to 50 synchronized future tasks, even when Render sleeps.
+- Opt into a daily local planning nudge. It respects the configured quiet-hour window; explicit timed reminders are not suppressed.
+- Keep confirmed memory and upload PDF, text or Markdown documents from web or phone.
+- Share today's phone calendar, one selected contact, current approximate location or battery status explicitly.
+- Enable a native Android notification listener for selected Gmail, Calendar, WhatsApp and Telegram notifications. Previews are redacted and synced when the app opens.
+- Review message drafts and open the OS share sheet to choose a recipient and send yourself.
+- Pause phone awareness, delete shared phone context, revoke a phone, or export the workspace from the web.
+
+## Design
+
+Charcoal surfaces, quiet cyan accents, restrained violet, generous spacing and a small abstract ORA orb. Both clients have Today, Talk, Plan, Memory and Settings. `shared/theme.json` records the palette; web CSS and Android StyleSheet tokens match it.
+
+## Architecture
+
+- **Vercel:** static React/Vite web client. No secrets are compiled into the client.
+- **Render Free:** one FastAPI worker, demand-driven requests. No always-running inference, cron loop, keep-alive traffic or local production database.
+- **External Postgres:** durable workspace, hashed session/device credentials and mutation receipts. A Supabase session pooler is one compatible option. Enable SSL. The API initializes its two private tables and enables row-level security with no public policies.
+- **Android:** Expo SDK 56, native notification module, local notification scheduling, secure credential storage and a device-local cached workspace/outbox.
+- **AI:** Groq Llama 3.3 70B by default, one bounded inference per chat request. A compact context and limited history control input size. `ORA_DAILY_AI_REQUESTS` provides a durable daily request cap (default 100). This is a request cap, not a guaranteed token or cost ceiling.
+- **Voice:** Groq Whisper transcription; system text-to-speech playback. Playback availability, offline support and voice quality depend on the device/browser speech engine.
+
+See [setup and migration](docs/ORA_MINI_SETUP.md), [feature boundaries](docs/ORA_MINI_CAPABILITIES.md), and [validation](docs/ORA_MINI_VALIDATION.md).
+
+## Local development
+
+Backend (Python 3.11+):
 
 ```bash
 cd backend
-uvicorn api:app --host 0.0.0.0 --port 8000
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+pip install -r requirements-mini.txt
+cp .env.example .env
+# Set ORA_API_TOKEN and GROQ_API_KEY in .env.
+uvicorn next_api:app --reload --port 8000
 ```
 
-The frontend is a Vite application:
+SQLite is allowed only for development. Production refuses to start without `DATABASE_URL`.
+
+Web:
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-The legacy deployment definition in `render.yaml` starts the backend with `uvicorn api:app` and serves the Vite build as a static site. The recommended production layout keeps the frontend on Vercel and runs the backend from `Dockerfile` with `docker-compose.prod.yml`, using a persistent `ora-data` volume.
+The default backend is `http://localhost:8000`. Set `VITE_API_URL` for deployed builds. Enter your owner key in the connection screen; it is exchanged for a seven-day revocable session held in browser session storage. Remove the old `VITE_ORA_API_TOKEN` variable from Vercel.
 
-For a zero-monthly-cost cloud deployment, see [`deploy/oci/README.md`](deploy/oci/README.md) for the Oracle Cloud Always Free workflow. The root [`Dockerfile`](Dockerfile) and [`docker-compose.prod.yml`](docker-compose.prod.yml) are also portable to a VPS or managed container platform.
-
-## Environment configuration
-
-Copy `backend/.env.example` to `backend/.env` for local development and fill in the credentials required by the integrations you intend to use. Real credentials must never be committed.
-
-For production, configure these values in the hosting dashboard:
-
-| Variable | Purpose |
-|---|---|
-| `ORA_API_TOKEN` | Protects application API routes with the `X-ORA-Token` header. |
-| `CORS_ORIGINS` | Comma-separated list of allowed browser origins. |
-| `APP_ENV=production` | Makes missing API authentication fail closed and disables interactive API documentation. |
-| `VITE_API_URL` | Public URL of the ORA backend. |
-| `VITE_ORA_API_TOKEN` | Token used by the single-user static frontend. |
-| `ORA_INTERNAL_TOKEN` | Separate token for the WhatsApp sidecar webhook. |
-
-Health and OAuth handshake routes remain public. The WhatsApp incoming endpoint has its own internal token check and fails closed if `ORA_INTERNAL_TOKEN` is missing.
-
-## Supported frontend pages
-
-The active navigation is intentionally limited to Dashboard, Chat, Inbox, Tasks, Alerts, Knowledge, and Memory. Code Agent, Content Studio, Research, News, voice transcription, and the old Agent Bus panel were removed from the active build because their backend implementations were not present in the deployed API.
-
-## Validation
-
-Run the following checks before pushing changes:
+Android:
 
 ```bash
-python3 -m compileall -q backend scheduler brain
-npm --prefix frontend run lint
-npm --prefix frontend run build
+cd mobile/ora-android-companion
+pnpm install --frozen-lockfile
+pnpm android
 ```
 
-The repository ignores environment files, generated SQLite/Chroma data, Python caches, frontend dependencies, and build output. The local copies of previously tracked runtime artifacts are preserved on disk but are no longer part of the source tree. Use `.env.production.example` for the backend host and `frontend/.env.example` for Vercel.
+A native development/standalone build is required for the custom notification listener. Expo Go cannot validate it. Minimum Android version is 8 (API 26). A build recipe for an installable APK is included in `eas.json`; it requires your Expo account/project and Android signing credentials.
 
-## Autonomous core (phases 1–4)
+## Checks
 
-The current architecture uses Vercel for the React frontend and Render for the FastAPI backend. The Render manifest now contains only the backend service, while the frontend is expected to use `VITE_API_URL` and `VITE_ORA_API_TOKEN` in Vercel. The backend health response includes an `ORA_RELEASE` marker so deployment drift can be identified quickly.
+```bash
+cd backend
+pip install httpx
+python -m unittest test_mini -v
+```
 
-The autonomous core is centered on a structured personal context snapshot. `GET /api/context` aggregates profile, preferences, memory, alerts, tasks, goals, Google Calendar/Gmail data, weather, spending, and predictions with freshness and source metadata. Chat, Telegram, the dashboard, and the agent use the same context service rather than maintaining separate connector snapshots.
+```bash
+cd frontend
+npm run lint
+npm run build
+```
 
-ORA now includes a durable action ledger. Actions have a type, risk, source, payload, idempotency key, lifecycle status, and optional result or error. Read-only and personal-notification actions can proceed automatically; external communication, irreversible, and financial actions are automatically marked as requiring approval. The API supports listing, creating, approving, rejecting, and cancelling actions through `/api/actions`.
+```bash
+cd mobile/ora-android-companion
+pnpm check
+pnpm test
+pnpm build
+```
 
-Tasks may be linked to goals with `goal_id`. The Tasks interface lets you select an active goal when creating a task, goals expose their next pending action, and completing a linked task automatically recalculates goal progress. The dashboard surfaces ORA’s current state, focus, and pending approval queue.
-
-The active supported frontend pages are Dashboard, Chat, Inbox, Tasks, Alerts, Knowledge, and Memory. Research, News, Content, Code, and Agent Bus are intentionally not part of the active product surface because their former endpoints were unsupported or stale.
+The workflow in `.github/workflows/mini.yml` runs these gates. Android export verifies JavaScript packaging; it is not a Kotlin compile, signed APK or physical-device test.

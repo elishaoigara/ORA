@@ -40,9 +40,15 @@ class OraNotificationListenerModule : Module() {
       OraNotificationListenerStore.eventsAsMaps(context)
     }
 
+    Function("acknowledgeEvents") { ids: List<String> ->
+      val context = appContext.reactContext ?: return@Function
+      OraNotificationListenerStore.acknowledgeEvents(context, ids.toSet())
+    }
+
     Function("clearPendingEvents") {
       val context = appContext.reactContext ?: return@Function
       OraNotificationListenerStore.clearEvents(context)
     }
   }
 }
+

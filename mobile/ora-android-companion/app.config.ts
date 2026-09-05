@@ -1,163 +1,62 @@
-// Load environment variables with proper priority (system > .env)
-import "./scripts/load-env.js";
 import type { ExpoConfig } from "expo/config";
-
-// Bundle ID format: space.manus.<project_name_dots>.<timestamp>
-// e.g., "my-app" created at 2024-01-15 10:30:45 -> "space.manus.my.app.t20240115103045"
-// Bundle ID can only contain letters, numbers, and dots
-// Android requires each dot-separated segment to start with a letter
-const rawBundleId = "com.app.oraandroidcompanion";
-const bundleId =
-  rawBundleId
-    .replace(/[-_]/g, ".") // Replace hyphens/underscores with dots
-    .replace(/[^a-zA-Z0-9.]/g, "") // Remove invalid chars
-    .replace(/\.+/g, ".") // Collapse consecutive dots
-    .replace(/^\.+|\.+$/g, "") // Trim leading/trailing dots
-    .toLowerCase()
-    .split(".")
-    .map((segment) => {
-      // Android requires each segment to start with a letter
-      // Prefix with 'x' if segment starts with a digit
-      return /^[a-zA-Z]/.test(segment) ? segment : "x" + segment;
-    })
-    .join(".") || "space.manus.app";
-// Extract timestamp from bundle ID and prefix with "manus" for deep link scheme
-// e.g., "space.manus.my.app.t20240115103045" -> "manus20240115103045"
-const timestamp = bundleId.split(".").pop()?.replace(/^t/, "") ?? "";
-const schemeFromBundleId = `manus${timestamp}`;
-
-const env = {
-  // App branding - update these values directly (do not use env vars)
-  appName: "ORA Companion",
-  appSlug: "ora-android-companion",
-  // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
-  // Leave empty to use the default icon from assets/images/icon.png
-  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519663842004912/mAoXQkqZMZTfXgYl.png",
-  scheme: schemeFromBundleId,
-  iosBundleId: bundleId,
-  androidPackage: bundleId,
-};
-
 const config: ExpoConfig = {
-  name: env.appName,
-  slug: env.appSlug,
-  version: "1.0.0",
+  name: "ORA Mini AI",
+  slug: "ora-android-companion",
+  version: "2.0.0",
+  scheme: "ora",
   orientation: "portrait",
+  userInterfaceStyle: "dark",
   icon: "./assets/images/icon.png",
-  scheme: env.scheme,
-  userInterfaceStyle: "automatic",
-  ios: {
-    supportsTablet: true,
-    bundleIdentifier: env.iosBundleId,
-    "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
-      }
-  },
   android: {
-    adaptiveIcon: {
-      backgroundColor: "#E6F4FE",
-      foregroundImage: "./assets/images/android-icon-foreground.png",
-      backgroundImage: "./assets/images/android-icon-background.png",
-      monochromeImage: "./assets/images/android-icon-monochrome.png",
-    },
-    predictiveBackGestureEnabled: false,
-    package: env.androidPackage,
+    package: "com.app.oraandroidcompanion",
     permissions: ["POST_NOTIFICATIONS"],
-    intentFilters: [
-      {
-        action: "VIEW",
-        autoVerify: true,
-        data: [
-          {
-            scheme: env.scheme,
-            host: "*",
-          },
-        ],
-        category: ["BROWSABLE", "DEFAULT"],
-      },
-    ],
+    adaptiveIcon: {
+      foregroundImage: "./assets/images/icon.png",
+      backgroundColor: "#090e14",
+    },
   },
-  web: {
-    bundler: "metro",
-    output: "static",
-    favicon: "./assets/images/favicon.png",
-  },
+  ios: { bundleIdentifier: "com.app.oraandroidcompanion" },
   plugins: [
     "expo-router",
     "expo-font",
-    "expo-image",
-    "expo-status-bar",
-    "expo-web-browser",
-    [
-      "expo-secure-store",
-      {
-        configureAndroidBackup: true,
-      },
-    ],
+    "expo-secure-store",
     [
       "expo-notifications",
-      {
-        icon: "./assets/images/android-icon-monochrome.png",
-        color: "#00E6A7",
-        defaultChannel: "ora-alerts",
-      },
-    ],
-    [
-      "expo-location",
-      {
-        isAndroidBackgroundLocationEnabled: true,
-        isAndroidForegroundServiceEnabled: true,
-        androidForegroundServiceIcon: "./assets/images/android-icon-monochrome.png",
-      },
-    ],
-    [
-      "expo-contacts",
-      {
-        contactsPermission: "Allow ORA Companion to let you select individual contacts for your private ORA context.",
-      },
+      { color: "#87e8dc", defaultChannel: "ora-reminders" },
     ],
     [
       "expo-audio",
       {
-        microphonePermission: "Allow $(PRODUCT_NAME) to access your microphone.",
+        microphonePermission:
+          "Allow ORA to record a voice note when you tap the microphone.",
       },
     ],
     [
-      "expo-video",
-      {
-        supportsBackgroundPlayback: true,
-        supportsPictureInPicture: true,
-      },
+      "expo-contacts",
+      { contactsPermission: "Choose individual contacts to share with ORA." },
     ],
     [
-      "expo-splash-screen",
+      "expo-location",
       {
-        image: "./assets/images/splash-icon.png",
-        imageWidth: 200,
-        resizeMode: "contain",
-        backgroundColor: "#ffffff",
-        dark: {
-          backgroundColor: "#000000",
-        },
+        locationWhenInUsePermission:
+          "Share your current location with ORA when you request it.",
       },
+    ],
+    ["expo-splash-screen", { backgroundColor: "#090e14" }],
+    ["expo-build-properties", { android: { minSdkVersion: 26 } }],
+    [
+      "expo-share-intent",
+      { androidIntentFilters: ["text/*"], androidMultiIntentFilters: [] },
     ],
     [
-      "expo-build-properties",
-      {
-        android: {
-          buildArchs: ["armeabi-v7a", "arm64-v8a"],
-          minSdkVersion: 24,
-        },
-      },
+      "expo-calendar",
+      { calendarPermission: "Share today’s events with ORA when you ask." },
     ],
+    "expo-document-picker",
   ],
-  experiments: {
-    typedRoutes: true,
-    reactCompiler: true,
-  },
+  experiments: { typedRoutes: true },
   extra: {
-    expoPushProjectId: process.env.EXPO_PUBLIC_EXPO_PUSH_PROJECT_ID || "",
+    eas: { projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID || undefined },
   },
 };
-
 export default config;

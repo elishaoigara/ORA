@@ -1,26 +1,22 @@
-import "../global.css";
-import "@/lib/awareness-runtime";
-
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ShareIntentProvider } from "expo-share-intent";
-
-import { DeviceProvider } from "@/lib/device-provider";
-import { ThemeProvider } from "@/lib/theme-provider";
-
+import { MiniProvider } from "@/lib/mini/provider";
 export default function RootLayout() {
   return (
-    <ThemeProvider>
-      <ShareIntentProvider options={{ resetOnBackground: false }}>
-        <DeviceProvider>
+    <SafeAreaProvider>
+      <ShareIntentProvider>
+        <MiniProvider>
           <StatusBar style="light" />
-          <Stack screenOptions={{ headerShown: false, animation: "fade" }}>
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="pair" options={{ presentation: "modal" }} />
-            <Stack.Screen name="approvals" options={{ presentation: "card" }} />
-          </Stack>
-        </DeviceProvider>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: "#090e14" },
+            }}
+          />
+        </MiniProvider>
       </ShareIntentProvider>
-    </ThemeProvider>
+    </SafeAreaProvider>
   );
 }

@@ -24,6 +24,8 @@ class OraNotificationListenerModule extends NativeModule<{}> {
   }
 
   clearPendingEvents() {}
+  acknowledgeEvents(_ids: string[]) {}
 }
 
 export default registerWebModule(OraNotificationListenerModule, "OraNotificationListener");
+

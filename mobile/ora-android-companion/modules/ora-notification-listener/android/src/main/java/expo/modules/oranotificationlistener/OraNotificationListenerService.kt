@@ -115,6 +115,7 @@ object OraNotificationListenerStore {
     }
   }
 
+  @Synchronized
   fun enqueue(context: Context, event: JSONObject) {
     val events = readEvents(context)
     events.put(event)
@@ -122,8 +123,20 @@ object OraNotificationListenerStore {
     preferences(context).edit().putString(KEY_EVENTS, events.toString()).apply()
   }
 
+  @Synchronized
   fun clearEvents(context: Context) {
     preferences(context).edit().remove(KEY_EVENTS).apply()
+  }
+
+  @Synchronized
+  fun acknowledgeEvents(context: Context, ids: Set<String>) {
+    val current = readEvents(context)
+    val remaining = JSONArray()
+    for (index in 0 until current.length()) {
+      val event = current.optJSONObject(index) ?: continue
+      if (!ids.contains(event.optString("id"))) remaining.put(event)
+    }
+    preferences(context).edit().putString(KEY_EVENTS, remaining.toString()).apply()
   }
 
   fun redact(value: String): String {
@@ -133,3 +146,4 @@ object OraNotificationListenerStore {
       .replace(Regex("\\b[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)+\\b"), "[email]")
   }
 }
+
