@@ -1,70 +1,26 @@
 services:
-  # ─────────────────────────────────────────────
-  # BACKEND (Render Free Tier — 512MB RAM)
-  # ─────────────────────────────────────────────
   - type: web
     name: ora-backend
     runtime: python
+    plan: free
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
-
-    disk:
-      name: ora-data
-      mountPath: /opt/ora-data
-      sizeGB: 1
-
+    buildCommand: pip install -r requirements-mini.txt
+    startCommand: uvicorn next_api:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /api/health
     envVars:
-      # ── Core ───────────────────────────────────
-      - key: GROQ_API_KEY
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_CHAT_ID
-        sync: false
-      - key: ORA_LOOP_INTERVAL
-        value: "30"
-      - key: ORA_DATA_DIR
-        value: /opt/ora-data
-      - key: RENDER_EXTERNAL_URL
-        sync: false
-      - key: FRONTEND_URL
-        sync: false
-      - key: CORS_ORIGINS
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
         sync: false
       - key: ORA_API_TOKEN
         sync: false
-      - key: APP_ENV
-        value: production
-      - key: ORA_RELEASE
-        value: android-companion-mvp
-
-      # ── Google OAuth (set these in Render dashboard) ───
-      - key: GOOGLE_CLIENT_ID
+      - key: GROQ_API_KEY
         sync: false
-      - key: GOOGLE_CLIENT_SECRET
+      - key: CORS_ORIGINS
         sync: false
-      # IMPORTANT: set this to https://your-backend.onrender.com/api/auth/google/callback
-      - key: GOOGLE_REDIRECT_URI
-        sync: false
-
-      # ── GitHub (optional) ──────────────────────
-      - key: GITHUB_TOKEN
-        sync: false
-      - key: GITHUB_USERNAME
-        sync: false
-
-      # ── Weather (defaults to Nairobi — change if needed) ──
-      - key: WEATHER_LAT
-        value: "-1.2921"
-      - key: WEATHER_LON
-        value: "36.8219"
-
-      # ── Groq model overrides ───────────────────
       - key: GROQ_MODEL_PRIMARY
-        value: "llama-3.3-70b-versatile"
-      - key: GROQ_MODEL_FALLBACK
-        value: "llama-3.1-8b-instant"
-
-  # The React frontend is deployed separately on Vercel.
-  # Keep Vercel's VITE_API_URL pointed at the Render backend URL.
+        value: llama-3.3-70b-versatile
+      - key: ORA_DAILY_AI_REQUESTS
+        value: "100"

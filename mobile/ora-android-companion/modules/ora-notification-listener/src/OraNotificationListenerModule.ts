@@ -34,6 +34,8 @@ declare class OraNotificationListenerModule extends NativeModule<{
   configure(enabled: boolean, sources: NativeNotificationSource[]): void;
   getPendingEvents(): NativeNotificationEvent[];
   clearPendingEvents(): void;
+  acknowledgeEvents(ids: string[]): void;
 }
 
 export default requireOptionalNativeModule<OraNotificationListenerModule>("OraNotificationListener");
+
