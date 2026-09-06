@@ -7,6 +7,8 @@ export function upcomingReminders(tasks: Task[], now: number) {
     .map((t) => ({
       id: "ora2-" + t.id + "-" + t.version,
       title: t.title,
+      taskId: t.id,
+      version: t.version,
       date: t.due_at!,
     }));
 }

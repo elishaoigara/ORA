@@ -1,3 +1,4 @@
+import { enableAppLock, disableAppLock } from "./app-lock";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -66,7 +67,14 @@ export function Button({
   );
 }
 function BrandMark({ size = 32 }: { size?: number }) {
-  return <Image source={require("../../assets/images/ora-horus.png")} accessibilityLabel="ORA" style={{ width: size, height: size, borderRadius: size / 2 }} resizeMode="contain" />;
+  return (
+    <Image
+      source={require("../../assets/images/ora-horus.png")}
+      accessibilityLabel="ORA"
+      style={{ width: size, height: size, borderRadius: size / 2 }}
+      resizeMode="contain"
+    />
+  );
 }
 export function Orb({ small = false }: { small?: boolean }) {
   return <BrandMark size={small ? 54 : 160} />;
@@ -121,7 +129,12 @@ function Frame({ children }: { children: React.ReactNode }) {
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
       <View style={s.topbar}>
-        <View style={s.row}><BrandMark /><Text style={s.logo}>ORA <Text style={s.mini}> MINI AI</Text></Text></View>
+        <View style={s.row}>
+          <BrandMark />
+          <Text style={s.logo}>
+            ORA <Text style={s.mini}> MINI AI</Text>
+          </Text>
+        </View>
         <Pressable accessibilityRole="button" onPress={m.sync}>
           <Text style={s.status}>{m.status}</Text>
         </Pressable>
@@ -174,7 +187,9 @@ function Frame({ children }: { children: React.ReactNode }) {
 export function PairScreen() {
   const m = useMini();
   const { busy, run } = useAction();
-  const [url, setUrl] = useState(process.env.EXPO_PUBLIC_API_URL || "https://ora-oovf.onrender.com");
+  const [url, setUrl] = useState(
+    process.env.EXPO_PUBLIC_API_URL || "https://ora-oovf.onrender.com",
+  );
   const [code, setCode] = useState("");
   return (
     <SafeAreaView style={s.safe}>
@@ -182,7 +197,12 @@ export function PairScreen() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[s.content, { paddingTop: 45 }]}
       >
-        <View style={s.row}><BrandMark /><Text style={s.logo}>ORA <Text style={s.mini}> MINI AI</Text></Text></View>
+        <View style={s.row}>
+          <BrandMark />
+          <Text style={s.logo}>
+            ORA <Text style={s.mini}> MINI AI</Text>
+          </Text>
+        </View>
         <View style={{ alignItems: "center", marginVertical: 28 }}>
           <Orb />
         </View>
@@ -258,11 +278,23 @@ function TaskRow({ task }: { task: Task }) {
           {task.title}
         </Text>
         <Text style={s.small}>
+          {task.priority === 1 ? "High priority · " : ""}
+          {!task.done && task.due_at && Date.parse(task.due_at) < Date.now()
+            ? "Overdue · "
+            : ""}
           {task.due_at
             ? new Date(task.due_at).toLocaleString()
             : "Whenever you’re ready"}
         </Text>
       </View>
+      <Pressable
+        onPress={() =>
+          router.push({ pathname: "/edit-task", params: { id: task.id } })
+        }
+        accessibilityLabel="Edit task"
+      >
+        <Ionicons name="create-outline" color={c.cyan} size={22} />
+      </Pressable>
       <Pressable
         accessibilityLabel="Delete task"
         onPress={() =>
@@ -339,6 +371,28 @@ export function TodayScreen() {
   );
   return (
     <Frame>
+      <Button
+        title={`Alert inbox · ${(m.data?.alerts || []).filter((a) => !a.read).length} unread`}
+        onPress={() => router.push("/notifications")}
+      />
+      <Card>
+        <Text style={s.heading}>Your daily briefing</Text>
+        <Text style={s.body}>
+          {m.data?.tasks.filter((t) => !t.done).length || 0} tasks open ·{" "}
+          {m.data?.tasks.filter(
+            (t) => !t.done && t.due_at && Date.parse(t.due_at) < Date.now(),
+          ).length || 0}{" "}
+          overdue.
+        </Text>
+        <Text style={s.muted}>
+          Start with{" "}
+          {[...(m.data?.tasks || [])]
+            .filter((t) => !t.done)
+            .sort((a, b) => a.priority - b.priority)[0]?.title ||
+            "one thing that matters today"}
+          .
+        </Text>
+      </Card>
       <Title
         eyebrow={new Date(clock)
           .toLocaleDateString(undefined, {
@@ -398,6 +452,10 @@ export function TodayScreen() {
           <Ionicons name="arrow-forward" color={c.cyan} size={18} />
         </Pressable>
       ))}
+      <Button
+        title="New task · date picker and repeats"
+        onPress={() => router.push("/edit-task")}
+      />
       <Text style={s.heading}>On your radar</Text>
       <Card>
         {tasks.length ? (
@@ -419,6 +477,7 @@ export function TalkScreen() {
   const clock = useClock();
   const { busy, run } = useAction();
   const [draft, setDraft] = useState("");
+  const [search, setSearch] = useState("");
   const [recording, setRecording] = useState(false);
   const [autoSpeak, setAutoSpeak] = useState(false);
   const list = useRef<ScrollView>(null);
@@ -447,7 +506,7 @@ export function TalkScreen() {
     const voice = await readLocal("voice", "");
     Speech.speak(text.replace(/[*#`]/g, ""), {
       voice: voice || undefined,
-      rate: 0.98,
+      rate: await readLocal("voiceRate", 0.98),
     });
   };
   const send = () =>
@@ -548,32 +607,36 @@ export function TalkScreen() {
               </Text>
             </View>
           )}
-          {m.data?.messages.map((message) => (
-            <View
-              key={message.id}
-              style={[s.message, message.role === "user" && s.userMessage]}
-            >
-              <Text style={s.messageLabel}>
-                {message.role === "user" ? "YOU" : "ORA"}
-              </Text>
-              <Text selectable style={s.body}>
-                {message.text}
-              </Text>
-              {message.role === "assistant" && (
-                <Pressable
-                  accessibilityLabel="Read reply aloud"
-                  onPress={() => speak(message.text)}
-                  style={{ paddingTop: 12 }}
-                >
-                  <Ionicons
-                    name="volume-medium-outline"
-                    size={18}
-                    color={c.muted}
-                  />
-                </Pressable>
-              )}
-            </View>
-          ))}
+          {m.data?.messages
+            .filter((message) =>
+              message.text.toLowerCase().includes(search.toLowerCase()),
+            )
+            .map((message) => (
+              <View
+                key={message.id}
+                style={[s.message, message.role === "user" && s.userMessage]}
+              >
+                <Text style={s.messageLabel}>
+                  {message.role === "user" ? "YOU" : "ORA"}
+                </Text>
+                <Text selectable style={s.body}>
+                  {message.text}
+                </Text>
+                {message.role === "assistant" && (
+                  <Pressable
+                    accessibilityLabel="Read reply aloud"
+                    onPress={() => speak(message.text)}
+                    style={{ paddingTop: 12 }}
+                  >
+                    <Ionicons
+                      name="volume-medium-outline"
+                      size={18}
+                      color={c.muted}
+                    />
+                  </Pressable>
+                )}
+              </View>
+            ))}
           {busy && (
             <View style={s.row}>
               <ActivityIndicator color={c.cyan} />
@@ -588,6 +651,14 @@ export function TalkScreen() {
               <Proposal action={a} key={a.id} />
             ))}
         </ScrollView>
+        <TextInput
+          style={s.input}
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Search conversation"
+          placeholderTextColor={c.muted}
+          accessibilityLabel="Search conversation"
+        />
         <View style={s.composer}>
           <TextInput
             accessibilityLabel="Message ORA"
@@ -694,10 +765,14 @@ export function PlanScreen() {
         />
       </Card>
       <Text style={s.small}>
-        Only reminders already synchronized to this phone are scheduled locally.
-        Android may delay delivery depending on its battery and notification
-        settings.
+        Tasks save and schedule on this phone immediately, then synchronize when
+        online. Android may delay delivery depending on its battery and
+        notification settings.
       </Text>
+      <Button
+        title="New task · date picker and repeats"
+        onPress={() => router.push("/edit-task")}
+      />
       <Text style={s.heading}>On your radar</Text>
       <Card>
         {m.data?.tasks.length ? (
@@ -722,6 +797,7 @@ export function MemoryScreen() {
   const m = useMini();
   const { busy, run } = useAction();
   const [text, setText] = useState("");
+  const [search, setSearch] = useState("");
   return (
     <Frame>
       <Title
@@ -752,19 +828,46 @@ export function MemoryScreen() {
           icon="add"
         />
       </Card>
-      {m.data?.memories.map((memory) => (
-        <Card key={memory.id}>
-          <Ionicons name="layers-outline" color={c.violet} size={22} />
-          <Text style={[s.body, { marginVertical: 14 }]}>{memory.text}</Text>
-          <Pressable
-            onPress={() =>
-              run(() => m.mutate("memory.delete", { id: memory.id }))
-            }
-          >
-            <Text style={s.link}>Forget</Text>
-          </Pressable>
-        </Card>
-      ))}
+      <TextInput
+        style={s.input}
+        value={search}
+        onChangeText={setSearch}
+        placeholder="Search memories or categories"
+        placeholderTextColor={c.muted}
+      />
+      {[...(m.data?.memories || [])]
+        .filter((memory) =>
+          (memory.text + " " + (memory.category || ""))
+            .toLowerCase()
+            .includes(search.toLowerCase()),
+        )
+        .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned))
+        .map((memory) => (
+          <Card key={memory.id}>
+            <Text style={s.eyebrow}>
+              {memory.pinned ? "PINNED · " : ""}
+              {memory.category || "GENERAL"}
+            </Text>
+            <Button
+              title="Edit memory"
+              ghost
+              onPress={() =>
+                router.push({
+                  pathname: "/edit-memory",
+                  params: { id: memory.id },
+                })
+              }
+            />
+            <Text style={[s.body, { marginVertical: 14 }]}>{memory.text}</Text>
+            <Pressable
+              onPress={() =>
+                run(() => m.mutate("memory.delete", { id: memory.id }))
+              }
+            >
+              <Text style={s.link}>Forget</Text>
+            </Pressable>
+          </Card>
+        ))}
       <Text style={s.heading}>Your knowledge</Text>
       <Text style={s.muted}>
         Your documents are available to ORA on both web and phone.
@@ -828,6 +931,14 @@ const sources = [
 export function SettingsScreen() {
   const m = useMini();
   const { busy, run } = useAction();
+  const [voiceRate, setVoiceRate] = useState(0.98);
+  const [appLock, setAppLock] = useState(false);
+  const [quietStart, setQuietStart] = useState(
+    String(m.data?.settings.quiet_start ?? 22),
+  );
+  const [quietEnd, setQuietEnd] = useState(
+    String(m.data?.settings.quiet_end ?? 7),
+  );
   const [voices, setVoices] = useState<Speech.Voice[]>([]);
   const [voice, setVoice] = useState("");
   const [autoSpeak, setAutoSpeak] = useState(false);
@@ -836,6 +947,8 @@ export function SettingsScreen() {
   const [selected, setSelected] = useState<string[]>([]);
   const device = m.data?.devices.find((d) => d.id === m.session?.device_id);
   useEffect(() => {
+    readLocal("voiceRate", 0.98).then(setVoiceRate);
+    readLocal("appLock", false).then(setAppLock);
     Speech.getAvailableVoicesAsync().then(setVoices);
     readLocal("voice", "").then(setVoice);
     readLocal("autoSpeak", false).then(setAutoSpeak);
@@ -887,6 +1000,69 @@ export function SettingsScreen() {
         detail="Choose the voice. Choose what you share. Stay in control."
       />
       <Card>
+        <Button
+          title="Notifications, weather and alert inbox"
+          onPress={() => router.push("/notifications")}
+        />
+        <Text style={s.heading}>Biometric app lock</Text>
+        <Switch
+          value={appLock}
+          onValueChange={(v) =>
+            run(async () => {
+              if (v) await enableAppLock();
+              else await disableAppLock();
+              setAppLock(v);
+            })
+          }
+        />
+        <Text style={s.small}>
+          Locks when you leave ORA. Changing enrolled biometrics may require
+          pairing again.
+        </Text>
+        <Text style={s.heading}>Quiet hours · account timezone</Text>
+        <TextInput
+          value={quietStart}
+          onChangeText={setQuietStart}
+          keyboardType="number-pad"
+          style={s.input}
+          accessibilityLabel="Quiet hours start 0 to 23"
+        />
+        <TextInput
+          value={quietEnd}
+          onChangeText={setQuietEnd}
+          keyboardType="number-pad"
+          style={s.input}
+          accessibilityLabel="Quiet hours end 0 to 23"
+        />
+        <Button
+          title="Save quiet hours"
+          onPress={() =>
+            run(() =>
+              m.mutate("settings.update", {
+                quiet_start: Number(quietStart),
+                quiet_end: Number(quietEnd),
+              }),
+            )
+          }
+        />
+        <Text style={s.small}>
+          Quiet hours suppress remote updates. Your explicitly timed task
+          reminders still sound.
+        </Text>
+        <Text style={s.heading}>Voice speed · {voiceRate}×</Text>
+        <View style={s.row}>
+          {[0.8, 0.98, 1.15].map((rate) => (
+            <Button
+              key={rate}
+              title={String(rate)}
+              ghost
+              onPress={() => {
+                setVoiceRate(rate);
+                void writeLocal("voiceRate", rate);
+              }}
+            />
+          ))}
+        </View>
         <Text style={s.heading}>A voice you connect with</Text>
         <ScrollView
           horizontal
@@ -931,7 +1107,7 @@ export function SettingsScreen() {
             Speech.stop();
             Speech.speak(
               "Hey. I’m ORA. Let’s make room for your next big idea.",
-              { voice: voice || undefined, rate: 0.98 },
+              { voice: voice || undefined, rate: voiceRate },
             );
           }}
         />

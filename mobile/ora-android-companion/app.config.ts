@@ -2,14 +2,18 @@ import type { ExpoConfig } from "expo/config";
 const config: ExpoConfig = {
   name: "ORA Mini AI",
   slug: "ora-android-companion",
-  version: "2.0.0",
+  owner: "leo333",
+  version: "2.1.0",
   scheme: "ora",
   orientation: "portrait",
   userInterfaceStyle: "dark",
   icon: "./assets/images/ora-horus.png",
   android: {
     package: "com.app.oraandroidcompanion",
-    permissions: ["POST_NOTIFICATIONS"],
+    ...(process.env.GOOGLE_SERVICES_JSON
+      ? { googleServicesFile: process.env.GOOGLE_SERVICES_JSON }
+      : {}),
+    permissions: ["POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM"],
     adaptiveIcon: {
       foregroundImage: "./assets/images/ora-adaptive.png",
       backgroundColor: "#000000",
@@ -40,9 +44,19 @@ const config: ExpoConfig = {
       {
         locationWhenInUsePermission:
           "Share your current location with ORA when you request it.",
+        isAndroidBackgroundLocationEnabled: true,
+        isAndroidForegroundServiceEnabled: true,
       },
     ],
-    ["expo-splash-screen", { backgroundColor: "#000000" }],
+    [
+      "expo-splash-screen",
+      {
+        image: "./assets/images/ora-horus.png",
+        imageWidth: 200,
+        resizeMode: "contain",
+        backgroundColor: "#000000",
+      },
+    ],
     ["expo-build-properties", { android: { minSdkVersion: 26 } }],
     [
       "expo-share-intent",
@@ -56,7 +70,7 @@ const config: ExpoConfig = {
   ],
   experiments: { typedRoutes: true },
   extra: {
-    eas: { projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID || undefined },
+    eas: { projectId: "eeb08070-cabe-47bb-b2bb-3e9ef6533240" },
   },
 };
 export default config;

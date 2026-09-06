@@ -2,19 +2,22 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ShareIntentProvider } from "expo-share-intent";
+import { AppLock } from "@/lib/mini/app-lock";
 import { MiniProvider } from "@/lib/mini/provider";
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <ShareIntentProvider>
         <MiniProvider>
-          <StatusBar style="light" />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: "#090e14" },
-            }}
-          />
+          <AppLock>
+            <StatusBar style="light" />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: "#090e14" },
+              }}
+            />
+          </AppLock>
         </MiniProvider>
       </ShareIntentProvider>
     </SafeAreaProvider>

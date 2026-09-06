@@ -24,6 +24,23 @@ export async function enableReminders() {
     throw new Error(
       "Allow notifications in Android Settings to receive reminders.",
     );
+  await Notifications.setNotificationCategoryAsync("ora-task", [
+    {
+      identifier: "done",
+      buttonTitle: "Done",
+      options: { opensAppToForeground: true },
+    },
+    {
+      identifier: "snooze",
+      buttonTitle: "Snooze 10 min",
+      options: { opensAppToForeground: true },
+    },
+    {
+      identifier: "open",
+      buttonTitle: "Open",
+      options: { opensAppToForeground: true },
+    },
+  ]);
   await writeLocal("reminders", true);
 }
 export async function cancelReminders() {
@@ -52,18 +69,32 @@ export async function reconcileReminders(snapshot: Snapshot) {
   if (daily) ids.add(dailyId);
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   const existing = new Set(scheduled.map((n) => n.identifier));
-  for (const n of scheduled)
-    if (n.identifier.startsWith("ora2-") && !ids.has(n.identifier))
+  for (const n of scheduled) {
+    const d = n.content.data || {};
+    const validSnooze =
+      n.identifier.startsWith("ora2-snooze-") &&
+      snapshot.tasks.some(
+        (t) => t.id === d.task_id && t.version === d.version && !t.done,
+      );
+    if (
+      n.identifier.startsWith("ora2-") &&
+      !validSnooze &&
+      !ids.has(n.identifier)
+    )
       await Notifications.cancelScheduledNotificationAsync(n.identifier);
+  }
   for (const item of plan)
     if (!existing.has(item.id))
       await Notifications.scheduleNotificationAsync({
         identifier: item.id,
         content: {
           title: "ORA · A little nudge",
-          body: item.title,
+          body: (await readLocal("privateNotifications", true))
+            ? "Open ORA to see your reminder."
+            : item.title,
           sound: "default",
-          data: { task_id: item.id },
+          data: { task_id: item.taskId, version: item.version },
+          categoryIdentifier: "ora-task",
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DATE,

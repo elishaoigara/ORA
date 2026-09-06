@@ -18,7 +18,13 @@ describe("phone reminder planning", () => {
       task("past", { due_at: "2000-01-01T10:00:00Z" }),
     ];
     expect(upcomingReminders(list, Date.parse("2029-01-01"))).toEqual([
-      { id: "ora2-future-1", title: "future", date: "2030-01-01T10:00:00Z" },
+      {
+        id: "ora2-future-1",
+        taskId: "future",
+        version: 1,
+        title: "future",
+        date: "2030-01-01T10:00:00Z",
+      },
     ]);
   });
   it("changes identity on edits and bounds scheduled work", () => {

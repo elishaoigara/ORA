@@ -1,0 +1,26 @@
+name: Companion weather and push dispatch
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17,47 * * * *'
+permissions: {}
+concurrency:
+  group: companion-tick
+  cancel-in-progress: false
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Run bounded companion check
+        env:
+          ORA_BACKEND_URL: ${{ secrets.ORA_BACKEND_URL }}
+          ORA_CRON_TOKEN: ${{ secrets.ORA_CRON_TOKEN }}
+        run: |
+          if [ -z "$ORA_BACKEND_URL" ] || [ -z "$ORA_CRON_TOKEN" ]; then
+            echo "Set ORA_BACKEND_URL and ORA_CRON_TOKEN repository secrets to enable dispatch."
+            exit 0
+          fi
+          curl --fail --silent --show-error --max-time 360 \
+            --request POST --header "Authorization: Bearer $ORA_CRON_TOKEN" \
+            "${ORA_BACKEND_URL%/}/api/companion/tick"

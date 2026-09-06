@@ -29,6 +29,9 @@ export type ListenerStatus = {
 declare class OraNotificationListenerModule extends NativeModule<{
   onNotificationPosted: (event: NativeNotificationEvent) => void;
 }> {
+  canScheduleExactAlarms(): boolean;
+  openExactAlarmSettings(): void;
+  pickDateTime(initial: number): Promise<number | null>;
   getListenerStatus(): ListenerStatus;
   openNotificationListenerSettings(): boolean;
   configure(enabled: boolean, sources: NativeNotificationSource[]): void;

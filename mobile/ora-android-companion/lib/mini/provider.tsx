@@ -6,6 +6,8 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { applyLocal, validateTask } from "./offline";
+import { notificationListeners, registerPush } from "./notification-center";
 import { AppState } from "react-native";
 import {
   ApiError,
@@ -66,28 +68,55 @@ export function MiniProvider({ children }: { children: React.ReactNode }) {
         await writeLocal("outbox", remaining);
         setQueue(remaining);
       }
-      const next = await request<Snapshot>("/sync");
+      const server = await request<Snapshot>("/sync");
+      const next = (await readLocal<Op[]>("outbox", [])).reduce(
+        applyLocal,
+        server,
+      );
       setData(next);
       await writeLocal("snapshot", next);
+      let count = 0;
+      try {
+        count = await reconcileReminders(next);
+      } catch {
+        setError(
+          "Tasks are saved. Open the notification center to allow notifications and precise reminder timing, then sync.",
+        );
+      }
+      await writeLocal("lastSync", new Date().toISOString());
+      if (
+        (await readLocal("pushEnabled", false)) &&
+        (await readLocal("pushRetryAt", 0)) < Date.now()
+      ) {
+        await writeLocal("pushRetryAt", Date.now() + 3600000);
+        void registerPush().catch((e) =>
+          writeLocal("notificationError", String(e)),
+        );
+      }
       const device = next.devices.find((d) => d.id === next.device_id);
       if (!device || device.paused || !device.permissions.notifications) {
         NativeListener?.configure(false, []);
       }
-      if (device && !device.paused && device.permissions.notifications) {
-        const events = NativeListener?.getPendingEvents() || [];
-        for (const e of events) {
-          if (Date.now() - Date.parse(e.occurredAt) > 86400000) continue;
-          await request("/events", {
-            request_id: e.id,
-            kind: "notifications",
-            text: `${e.appLabel}: ${e.title} ${e.body}`.slice(0, 1200),
-            observed_at: e.occurredAt,
-          });
+      try {
+        if (device && !device.paused && device.permissions.notifications) {
+          const events = NativeListener?.getPendingEvents() || [];
+          for (const e of events) {
+            if (Date.now() - Date.parse(e.occurredAt) > 86400000) continue;
+            await request("/events", {
+              request_id: e.id,
+              kind: "notifications",
+              text: `${e.appLabel}: ${e.title} ${e.body}`.slice(0, 1200),
+              observed_at: e.occurredAt,
+            });
+          }
+          // Acknowledge only the events included in this snapshot; preserve new arrivals.
+          NativeListener?.acknowledgeEvents(events.map((e) => e.id));
         }
-        // Acknowledge only the events included in this snapshot; preserve new arrivals.
-        NativeListener?.acknowledgeEvents(events.map((e) => e.id));
+      } catch {
+        setError(
+          "Workspace synced. Phone context upload will retry separately.",
+        );
       }
-      const count = await reconcileReminders(next);
       setStatus(`Synced · ${count} phone reminders`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Sync failed");
@@ -111,7 +140,17 @@ export function MiniProvider({ children }: { children: React.ReactNode }) {
       if (!alive) return;
       setActive(s);
       if (s) {
-        setData(await readLocal<Snapshot | null>("snapshot", null));
+        const cached = await readLocal<Snapshot | null>("snapshot", null);
+        setData(cached);
+        if (cached) {
+          try {
+            await reconcileReminders(cached);
+          } catch {
+            setError(
+              "Check notification and exact-alarm permissions in the notification center.",
+            );
+          }
+        }
         setQueue(await readLocal<Op[]>("outbox", []));
         await sync();
       } else setStatus("Pair your phone");
@@ -132,8 +171,46 @@ export function MiniProvider({ children }: { children: React.ReactNode }) {
     setActive(await pair(url, code));
     await sync();
   };
-  const mutate = async (kind: string, payload: Record<string, unknown>) => {
+  const mutationChain = useRef<Promise<unknown>>(Promise.resolve());
+  const performMutation = async (
+    kind: string,
+    payload: Record<string, unknown>,
+  ) => {
     const op = { request_id: makeId(), kind, payload };
+    if (
+      [
+        "task.create",
+        "task.complete",
+        "task.update",
+        "task.delete",
+        "memory.save",
+      ].includes(kind)
+    ) {
+      if (kind === "task.create" || kind === "task.update")
+        validateTask(payload);
+      const cached = await readLocal<Snapshot | null>("snapshot", null);
+      if (!cached)
+        throw new Error(
+          "Sync your workspace once before creating offline changes.",
+        );
+      const pending = [...(await readLocal<Op[]>("outbox", [])), op];
+      if (pending.length > 100) throw new Error("Sync queued changes first.");
+      await writeLocal("outbox", pending);
+      const next = applyLocal(cached, op);
+      await writeLocal("snapshot", next);
+      setQueue(pending);
+      setData(next);
+      try {
+        await reconcileReminders(next);
+      } catch {
+        setError(
+          "Task saved. Allow notifications and precise reminder timing, then sync to schedule it.",
+        );
+      }
+      setStatus("Saved on phone · syncing");
+      void sync();
+      return;
+    }
     try {
       await request("/operations", op);
       await sync();
@@ -152,6 +229,20 @@ export function MiniProvider({ children }: { children: React.ReactNode }) {
       } else throw e;
     }
   };
+  const mutate = (
+    kind: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> => {
+    const next = mutationChain.current.then(() =>
+      performMutation(kind, payload),
+    );
+    mutationChain.current = next.catch(() => {});
+    return next;
+  };
+  useEffect(
+    () => notificationListeners((kind, payload) => mutate(kind, payload), sync),
+    [active],
+  );
   const ask = async (text: string) => {
     const old = await readLocal<{ request_id: string; text: string } | null>(
       "pendingChat",
@@ -186,6 +277,7 @@ export function MiniProvider({ children }: { children: React.ReactNode }) {
   const clearQueue = async () => {
     await writeLocal("outbox", []);
     setQueue([]);
+    await sync();
   };
   return (
     <MiniContext.Provider

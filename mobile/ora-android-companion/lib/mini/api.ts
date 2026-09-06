@@ -9,6 +9,7 @@ export type Task = {
   done: boolean;
   priority: number;
   version: number;
+  repeat?: string;
 };
 export type Action = {
   id: string;
@@ -27,7 +28,18 @@ export type Snapshot = {
   revision: number;
   tasks: Task[];
   messages: { id: string; role: string; text: string; created_at: string }[];
-  memories: { id: string; text: string }[];
+  memories: { id: string; text: string; category?: string; pinned?: boolean }[];
+  alerts?: {
+    id: string;
+    title: string;
+    body: string;
+    created: number;
+    expires: number;
+    read: boolean;
+    delivery: string;
+    error?: string;
+  }[];
+  scheduler_at?: string;
   actions: Action[];
   documents: { id: string; name: string }[];
   suggestions: { title: string; detail: string; prompt: string }[];
@@ -41,6 +53,9 @@ export type Snapshot = {
   devices: {
     id: string;
     label: string;
+    push_registered?: boolean;
+    forecast?: Record<string, any>;
+    weather?: Record<string, any>;
     paused: boolean;
     permissions: Record<string, boolean>;
   }[];

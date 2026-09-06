@@ -19,6 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from mini.store import Store, now
 from mini.intelligence import respond, suggestions
+from mini.companion import weather_check, dispatch, alert
+import re
 
 store = None
 chat_lock = threading.Lock()
@@ -116,7 +118,7 @@ def new_session(state, device_id=None):
 @app.get('/api/health')
 def health():
     return {'ok': store is not None, 'release': 'ora-mini-2', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
-            'reminders': 'android-local', 'ai_configured': bool(os.getenv('GROQ_API_KEY'))}
+            'companion_release': '2.1', 'reminders': 'android-local', 'ai_configured': bool(os.getenv('GROQ_API_KEY'))}
 
 
 @app.post('/api/v2/session')
@@ -166,7 +168,9 @@ def pair(payload: Pair, request: Request):
 def snapshot(state, auth):
     data = {k: state[k] for k in ('revision', 'tasks', 'messages', 'memories', 'actions', 'settings')}
     data['documents'] = [{'id': d['id'], 'name': d['name'], 'created_at': d['created_at']} for d in state['documents']]
-    data['devices'] = [d for d in state['devices'] if not d.get('revoked')]
+    data['devices'] = [{k: v for k, v in d.items() if k not in ('push_token', 'weather')} | {'push_registered': bool(d.get('push_token')), 'weather': {k: v for k, v in d.get('weather', {}).items() if k not in ('latitude', 'longitude')}} for d in state['devices'] if not d.get('revoked')]
+    data['alerts'] = [{k: v for k, v in a.items() if k not in ('ticket', 'key')} for a in state.get('alerts', []) if not auth.get('device_id') or a['device_id'] == auth['device_id']]
+    data['scheduler_at'] = state.get('scheduler_at')
     data['events'] = [e for e in state['events'] if e['expires_at'] > now()][-30:]
     data['suggestions'] = suggestions(state)
     data['synced_at'] = now()
@@ -201,7 +205,10 @@ def task_payload(p):
     priority = p.get('priority', 2)
     if type(priority) is not int or priority not in (1,2,3):
         raise HTTPException(422, 'Priority must be 1, 2 or 3.')
-    return {'title': clean_text(p.get('title'), 240), 'due_at': due(p.get('due_at')), 'priority': priority}
+    repeat = p.get('repeat', 'none')
+    if repeat not in ('none', 'daily', 'weekly'):
+        raise HTTPException(422, 'Choose none, daily or weekly repeat.')
+    return {'title': clean_text(p.get('title'), 240), 'due_at': due(p.get('due_at')), 'priority': priority, 'repeat': repeat}
 
 
 def add_task(state, p, task_id):
@@ -224,9 +231,11 @@ def action_payload(kind, p):
 
 def apply_operation(state, op, auth):
     p, kind = op.payload, op.kind
+    if kind.startswith('companion.'):
+        return companion_operation(state, kind, p, auth)
     if kind == 'task.create':
         return add_task(state, p, op.request_id)
-    if kind in ('task.complete', 'task.delete'):
+    if kind in ('task.complete', 'task.delete', 'task.update'):
         task = next((t for t in state['tasks'] if t['id'] == p.get('id')), None)
         if not task:
             raise HTTPException(404, 'Task no longer exists.')
@@ -234,6 +243,13 @@ def apply_operation(state, op, auth):
             raise HTTPException(409, 'Task changed on another device. Sync and try again.')
         if kind == 'task.delete':
             state['tasks'].remove(task)
+        elif kind == 'task.update':
+            task.update(task_payload({**task, **p}), version=task['version']+1)
+        elif not task['done'] and task.get('repeat', 'none') != 'none' and task.get('due_at'):
+            step = timedelta(days=1 if task['repeat'] == 'daily' else 7)
+            date = datetime.fromisoformat(task['due_at']) + step
+            while date <= datetime.now(timezone.utc): date += step
+            task.update(due_at=date.isoformat(), version=task['version']+1)
         else:
             task.update(done=not task['done'], version=task['version']+1)
         return {'ok': True}
@@ -242,6 +258,13 @@ def apply_operation(state, op, auth):
             raise HTTPException(400, 'Memory limit reached. Remove an old memory first.')
         item = {'id': op.request_id, 'text': clean_text(p.get('text'), 1000), 'created_at': now()}
         state['memories'].append(item)
+        return item
+    if kind == 'memory.update':
+        item = next((m for m in state['memories'] if m['id'] == p.get('id')), None)
+        if not item: raise HTTPException(404, 'Memory not found.')
+        if 'text' in p: item['text'] = clean_text(p['text'], 1000)
+        if 'category' in p: item['category'] = clean_text(p['category'], 40)
+        if 'pinned' in p: item['pinned'] = bool(p['pinned'])
         return item
     if kind == 'memory.delete':
         state['memories'] = [m for m in state['memories'] if m['id'] != p.get('id')]
@@ -300,6 +323,9 @@ def apply_operation(state, op, auth):
                 raise HTTPException(422, 'Invalid permission.')
             device['permissions'][key] = p['enabled']
             if not p['enabled']:
+                if key == 'location' and device.get('weather', {}).get('source') == 'location':
+                    device.pop('weather', None)
+                    device.pop('forecast', None)
                 state['events'] = [e for e in state['events'] if not (e['device_id'] == device_id and e['kind'] == key)]
         elif kind == 'device.pause':
             if type(p.get('paused')) is not bool:
@@ -452,3 +478,66 @@ async def upload(file: UploadFile = File(...), auth=Depends(identity)):
 @app.get('/api/v2/export')
 def export(auth=Depends(owner)):
     return snapshot(db().read(), auth) | {'documents': db().read()['documents']}
+
+
+def companion_operation(state, kind, p, auth):
+    device = next((d for d in state['devices'] if d['id'] == auth.get('device_id') and not d.get('revoked')), None)
+    if not device: raise HTTPException(403, 'Use a paired phone for companion settings.')
+    if kind == 'companion.push':
+        token = p.get('token', '')
+        if token and not re.fullmatch(r'(?:Exponent|Expo)PushToken\[[A-Za-z0-9_-]{10,200}\]', token):
+            raise HTTPException(422, 'Invalid Expo push token.')
+        if token: device['push_token'] = token
+        else: device.pop('push_token', None)
+        device['private_notifications'] = bool(p.get('private', True))
+    elif kind == 'companion.weather':
+        if not p.get('enabled'):
+            device.pop('weather', None); device.pop('forecast', None)
+        else:
+            if p.get('source') not in ('city', 'location'): raise HTTPException(422, 'Choose city or location.')
+            if p['source'] == 'location' and not device['permissions'].get('location'): raise HTTPException(403, 'Location sharing is disabled.')
+            for key, low, high in [('latitude', -90, 90), ('longitude', -180, 180), ('rain', 1, 100), ('heat', 15, 55), ('wind', 10, 150)]:
+                if type(p.get(key)) not in (int, float) or not low <= p[key] <= high: raise HTTPException(422, 'Invalid weather setting: '+key)
+            device['weather'] = {k: p[k] for k in ('latitude', 'longitude', 'rain', 'heat', 'wind', 'source')}
+            device['weather'].update(enabled=True, updated=time.time(), label=clean_text(p.get('label', 'Your area'), 80), briefings=bool(p.get('briefings', True)))
+            device.pop('forecast', None)
+    elif kind == 'companion.alert.read':
+        for a in state.get('alerts', []):
+            if a['device_id'] == device['id'] and (p.get('id') == a['id'] or p.get('all') is True): a['read'] = True
+    elif kind == 'companion.alert.clear':
+        state['alerts'] = [a for a in state.get('alerts', []) if a['device_id'] != device['id']]
+    elif kind == 'companion.push.test':
+        alert(state, device['id'], 'test:'+uuid.uuid4().hex, 'ORA · Push test', 'Your remote notification reached this phone.', 'alerts')
+    else: raise HTTPException(422, 'Unknown companion operation.')
+    return {'ok': True}
+
+
+@app.post('/api/v2/weather/refresh')
+def refresh_weather(auth=Depends(identity)):
+    if not auth.get('device_id'): raise HTTPException(403, 'Use a paired phone.')
+    limited('weather:'+auth['id'], 4)
+    try: return {'forecast': weather_check(db(), auth['device_id'])}
+    except Exception: raise HTTPException(503, 'Weather is temporarily unavailable. Your previous forecast is retained.')
+
+
+@app.post('/api/companion/tick')
+def companion_tick(authorization: str = Header(default='')):
+    token = os.getenv('ORA_CRON_TOKEN', '')
+    if len(token) < 32 or not hmac.compare_digest(authorization, 'Bearer '+token):
+        raise HTTPException(401, 'Invalid scheduler credentials.')
+    # A persistent lease prevents overlapping jobs, including across process restarts.
+    def claim(s):
+        if s.get('cron_lease', 0) > time.time(): return False
+        s['cron_lease'] = time.time()+600
+        s['scheduler_at'] = now()
+        return True
+    if not db().mutate(claim): return {'busy': True}
+    try:
+        failures = 0
+        for device in db().read()['devices'][:10]:
+            try: weather_check(db(), device['id'])
+            except Exception: failures += 1
+        sent = dispatch(db())
+        return {'processed': sent, 'weather_failures': failures}
+    finally:
+        db().mutate(lambda s: s.update(cron_lease=0))
