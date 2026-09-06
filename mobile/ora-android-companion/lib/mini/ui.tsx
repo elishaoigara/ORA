@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   Alert,
   KeyboardAvoidingView,
   Linking,
@@ -64,13 +65,11 @@ export function Button({
     </Pressable>
   );
 }
+function BrandMark({ size = 32 }: { size?: number }) {
+  return <Image source={require("../../assets/images/ora-horus.png")} accessibilityLabel="ORA" style={{ width: size, height: size, borderRadius: size / 2 }} resizeMode="contain" />;
+}
 export function Orb({ small = false }: { small?: boolean }) {
-  return (
-    <View style={[s.orb, small && s.smallOrb]}>
-      <View style={[s.orbit, small && s.smallOrbit]} />
-      <View style={[s.core, small && s.smallCore]} />
-    </View>
-  );
+  return <BrandMark size={small ? 54 : 160} />;
 }
 function useClock() {
   const [clock, setClock] = useState(() => Date.now());
@@ -122,9 +121,7 @@ function Frame({ children }: { children: React.ReactNode }) {
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
       <View style={s.topbar}>
-        <Text style={s.logo}>
-          ✧ ORA <Text style={s.mini}> MINI AI</Text>
-        </Text>
+        <View style={s.row}><BrandMark /><Text style={s.logo}>ORA <Text style={s.mini}> MINI AI</Text></Text></View>
         <Pressable accessibilityRole="button" onPress={m.sync}>
           <Text style={s.status}>{m.status}</Text>
         </Pressable>
@@ -177,7 +174,7 @@ function Frame({ children }: { children: React.ReactNode }) {
 export function PairScreen() {
   const m = useMini();
   const { busy, run } = useAction();
-  const [url, setUrl] = useState(process.env.EXPO_PUBLIC_API_URL || "");
+  const [url, setUrl] = useState(process.env.EXPO_PUBLIC_API_URL || "https://ora-oovf.onrender.com");
   const [code, setCode] = useState("");
   return (
     <SafeAreaView style={s.safe}>
@@ -185,9 +182,7 @@ export function PairScreen() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[s.content, { paddingTop: 45 }]}
       >
-        <Text style={s.logo}>
-          ✧ ORA <Text style={s.mini}> MINI AI</Text>
-        </Text>
+        <View style={s.row}><BrandMark /><Text style={s.logo}>ORA <Text style={s.mini}> MINI AI</Text></Text></View>
         <View style={{ alignItems: "center", marginVertical: 28 }}>
           <Orb />
         </View>

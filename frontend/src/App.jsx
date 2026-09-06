@@ -84,17 +84,11 @@ function Icon({ name, size = 20 }) {
     </svg>
   );
 }
+function BrandMark({ size = 36 }) {
+  return <img src="/ora-horus.webp" alt="ORA" width={size} height={size} className="brand-mark" />;
+}
 function Orb({ small = false, active = false }) {
-  return (
-    <div
-      aria-hidden="true"
-      className={`orb ${small ? "small" : ""} ${active ? "active" : ""}`}
-    >
-      <div className="orb-core" />
-      <span />
-      <i />
-    </div>
-  );
+  return <div aria-hidden="true" className={`orb brand-emblem ${small ? "small" : ""} ${active ? "active" : ""}`}><img src="/ora-horus.webp" alt="" width="220" height="220" /></div>;
 }
 function Empty({ children }) {
   return (
@@ -387,7 +381,7 @@ export default function App() {
       <main className="connect-screen">
         <div className="connect-card">
           <div className="wordmark">
-            <Icon name="spark" size={28} /> ORA <span>MINI AI</span>
+            <BrandMark /> ORA <span>MINI AI</span>
           </div>
           <Orb />
           <span className="eyebrow">YOUR SPACE TO THINK</span>
@@ -449,7 +443,7 @@ export default function App() {
             setPage("today");
           }}
         >
-          <Icon name="spark" size={28} /> ORA <span>MINI AI</span>
+          <BrandMark /> ORA <span>MINI AI</span>
         </a>
         <div className="sidebar-caption">PERSONAL WORKSPACE</div>
         <nav>
@@ -1144,7 +1138,7 @@ export default function App() {
         </div>
         <footer className="page-footer">
           <span>
-            ORA <b>MINI AI</b>
+            <BrandMark size={24} /> ORA <b>MINI AI</b>
           </span>
           <span>Built around you.</span>
         </footer>

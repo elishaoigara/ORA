@@ -5,6 +5,6 @@ export const colors = {
   border: "#26313e",
   text: "#edf3f6",
   muted: "#96a6b8",
-  cyan: "#87e8dc",
-  violet: "#aaa1f7",
+  cyan: "#e4bc73",
+  violet: "#c8ad86",
 };

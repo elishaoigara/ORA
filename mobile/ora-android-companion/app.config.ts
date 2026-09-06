@@ -6,13 +6,13 @@ const config: ExpoConfig = {
   scheme: "ora",
   orientation: "portrait",
   userInterfaceStyle: "dark",
-  icon: "./assets/images/icon.png",
+  icon: "./assets/images/ora-horus.png",
   android: {
     package: "com.app.oraandroidcompanion",
     permissions: ["POST_NOTIFICATIONS"],
     adaptiveIcon: {
-      foregroundImage: "./assets/images/icon.png",
-      backgroundColor: "#090e14",
+      foregroundImage: "./assets/images/ora-adaptive.png",
+      backgroundColor: "#000000",
     },
   },
   ios: { bundleIdentifier: "com.app.oraandroidcompanion" },
@@ -22,7 +22,7 @@ const config: ExpoConfig = {
     "expo-secure-store",
     [
       "expo-notifications",
-      { color: "#87e8dc", defaultChannel: "ora-reminders" },
+      { color: "#e4bc73", defaultChannel: "ora-reminders" },
     ],
     [
       "expo-audio",
@@ -42,7 +42,7 @@ const config: ExpoConfig = {
           "Share your current location with ORA when you request it.",
       },
     ],
-    ["expo-splash-screen", { backgroundColor: "#090e14" }],
+    ["expo-splash-screen", { backgroundColor: "#000000" }],
     ["expo-build-properties", { android: { minSdkVersion: 26 } }],
     [
       "expo-share-intent",
