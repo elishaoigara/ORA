@@ -13,6 +13,23 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class OraNotificationListenerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("OraNotificationListener")
+    Function("openClockAction") { kind: String, value: String, label: String ->
+      val context = appContext.reactContext ?: return@Function false
+      val intent = if (kind == "timer") {
+        val seconds = value.toIntOrNull() ?: return@Function false
+        if (seconds !in 1..86400) return@Function false
+        Intent(android.provider.AlarmClock.ACTION_SET_TIMER).putExtra(android.provider.AlarmClock.EXTRA_LENGTH, seconds)
+      } else if (kind == "alarm") {
+        if (!Regex("(?:[01][0-9]|2[0-3]):[0-5][0-9]").matches(value)) return@Function false
+        val parts = value.split(":")
+        Intent(android.provider.AlarmClock.ACTION_SET_ALARM).putExtra(android.provider.AlarmClock.EXTRA_HOUR, parts[0].toInt()).putExtra(android.provider.AlarmClock.EXTRA_MINUTES, parts[1].toInt())
+      } else return@Function false
+      intent.putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, label.take(100))
+      intent.putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, false)
+      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      try { context.startActivity(intent); true } catch (_: android.content.ActivityNotFoundException) { false }
+    }
+
     AsyncFunction("pickDateTime") { initial: Double, promise: Promise ->
       val activity = appContext.currentActivity
       if (activity == null) { promise.resolve(null) } else activity.runOnUiThread {

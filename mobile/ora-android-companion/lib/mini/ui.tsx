@@ -128,6 +128,11 @@ function Frame({ children }: { children: React.ReactNode }) {
   if (!m.session) return <PairScreen />;
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
+      <Button
+        title="Tools & GitHub"
+        icon="construct-outline"
+        onPress={() => router.push("/tools")}
+      />
       <View style={s.topbar}>
         <View style={s.row}>
           <BrandMark />
@@ -555,6 +560,10 @@ export function TalkScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
+        <Button
+          title="Tools & activity · review actions"
+          onPress={() => router.push("/tools")}
+        />
         <View style={s.talkHeader}>
           <Orb small />
           <View style={{ flex: 1 }}>

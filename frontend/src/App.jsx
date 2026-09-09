@@ -10,12 +10,14 @@ import {
   uid,
 } from "./mini-client";
 import "./App.css";
+import ToolsPage from "./ToolsPage";
 
 const nav = [
   ["today", "Today", "sun"],
   ["chat", "Talk to ORA", "spark"],
   ["tasks", "My plan", "check"],
   ["memory", "Second brain", "layers"],
+  ["tools", "Tools & GitHub", "layers"],
   ["settings", "Connections", "sliders"],
 ];
 function Icon({ name, size = 20 }) {
@@ -85,10 +87,25 @@ function Icon({ name, size = 20 }) {
   );
 }
 function BrandMark({ size = 36 }) {
-  return <img src="/ora-horus.webp" alt="ORA" width={size} height={size} className="brand-mark" />;
+  return (
+    <img
+      src="/ora-horus.webp"
+      alt="ORA"
+      width={size}
+      height={size}
+      className="brand-mark"
+    />
+  );
 }
 function Orb({ small = false, active = false }) {
-  return <div aria-hidden="true" className={`orb brand-emblem ${small ? "small" : ""} ${active ? "active" : ""}`}><img src="/ora-horus.webp" alt="" width="220" height="220" /></div>;
+  return (
+    <div
+      aria-hidden="true"
+      className={`orb brand-emblem ${small ? "small" : ""} ${active ? "active" : ""}`}
+    >
+      <img src="/ora-horus.webp" alt="" width="220" height="220" />
+    </div>
+  );
 }
 function Empty({ children }) {
   return (
@@ -509,6 +526,15 @@ export default function App() {
           </div>
         )}
         <div className={`page-content ${page === "chat" ? "chat-page" : ""}`}>
+          {page === "tools" && (
+            <ToolsPage
+              onAsk={(prompt) => {
+                setDraft(prompt);
+                save("draft", prompt);
+                setPage("chat");
+              }}
+            />
+          )}
           {page === "today" && (
             <>
               <div className="page-heading">
@@ -624,6 +650,17 @@ export default function App() {
                 </section>
               )}
             </>
+          )}
+          {page === "chat" && (
+            <button className="tool-history" onClick={() => setPage("tools")}>
+              Tools & activity ·{" "}
+              {
+                (data?.tool_runs || []).filter(
+                  (r) => r.status === "awaiting_approval",
+                ).length
+              }{" "}
+              actions to review
+            </button>
           )}
           {page === "chat" && (
             <>

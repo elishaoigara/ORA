@@ -13,7 +13,11 @@ const config: ExpoConfig = {
     ...(process.env.GOOGLE_SERVICES_JSON
       ? { googleServicesFile: process.env.GOOGLE_SERVICES_JSON }
       : {}),
-    permissions: ["POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM"],
+    permissions: [
+      "POST_NOTIFICATIONS",
+      "com.android.alarm.permission.SET_ALARM",
+      "SCHEDULE_EXACT_ALARM",
+    ],
     adaptiveIcon: {
       foregroundImage: "./assets/images/ora-adaptive.png",
       backgroundColor: "#000000",

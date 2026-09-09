@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from mini.store import Store, now
 from mini.intelligence import respond, suggestions
+from mini.tools import Runtime, catalog, visible, BY_NAME, public_run, allowed_repos
 from mini.companion import weather_check, dispatch, alert
 import re
 
@@ -175,6 +176,7 @@ def snapshot(state, auth):
     data['suggestions'] = suggestions(state)
     data['synced_at'] = now()
     data['device_id'] = auth.get('device_id')
+    data['tool_runs'] = [public_run(r) for r in state.get('tool_runs', []) if visible(r, auth)][-30:]
     return data
 
 
@@ -367,7 +369,7 @@ def chat(payload: Chat, auth=Depends(identity)):
             usage['requests'] += 1
         db().mutate(reserve_budget)
         try:
-            reply, proposals = respond(state, payload.text)
+            reply, proposals = respond(state, payload.text, execute=lambda name, args, call_id: tool_runtime().run(name, args, auth, payload.request_id+":"+call_id))
         except Exception as exc:
             raise HTTPException(503, str(exc) if isinstance(exc, RuntimeError) else 'AI connection failed. Try again.')
         def save(current):
@@ -537,7 +539,85 @@ def companion_tick(authorization: str = Header(default='')):
         for device in db().read()['devices'][:10]:
             try: weather_check(db(), device['id'])
             except Exception: failures += 1
+        from mini.routines import tick_routines
+        tick_routines(db())
         sent = dispatch(db())
         return {'processed': sent, 'weather_failures': failures}
     finally:
         db().mutate(lambda s: s.update(cron_lease=0))
+
+
+def tool_operation(state, kind, payload, request_id, auth):
+    return apply_operation(state, Operation(kind=kind,payload=payload,request_id=request_id), auth)
+
+
+def tool_runtime():
+    return Runtime(db(), tool_operation)
+
+
+class ToolCall(BaseModel):
+    name: str = Field(max_length=80)
+    args: dict = Field(default_factory=dict)
+    request_id: str = Field(min_length=16, max_length=150)
+
+
+class ToolDecision(BaseModel):
+    reject: bool = False
+
+
+@app.get('/api/v2/tools')
+def list_tools(auth=Depends(identity)):
+    state=db().read()
+    return {'tools': [dict(t, enabled=t['name'] not in state.get('disabled_tools',[])) for t in catalog()],
+            'runs': [public_run(r, preview=True) for r in state.get('tool_runs',[]) if visible(r,auth)][-40:],
+            'repositories': allowed_repos()}
+
+
+@app.post('/api/v2/tools/run')
+def run_tool(payload: ToolCall, auth=Depends(identity)):
+    limited('tools:'+auth['id'],30)
+    return tool_runtime().run(payload.name,payload.args,auth,payload.request_id)
+
+
+@app.post('/api/v2/tools/actions/{run_id}')
+def approve_tool(run_id: str, payload: ToolDecision, auth=Depends(identity)):
+    limited('tool-approval:'+auth['id'],15)
+    return tool_runtime().approve(run_id,auth,payload.reject)
+
+
+@app.post('/api/v2/tools/settings')
+def tool_settings(payload: dict, auth=Depends(owner)):
+    name=payload.get('name')
+    if name not in BY_NAME or type(payload.get('enabled')) is not bool:raise HTTPException(422,'Invalid tool setting.')
+    def update(s):
+        disabled=set(s.get('disabled_tools',[]))
+        if payload['enabled']:disabled.discard(name)
+        else:disabled.add(name)
+        s['disabled_tools']=sorted(disabled)
+        return {'ok':True}
+    return db().mutate(update)
+
+
+@app.post('/api/v2/routines/{routine_id}/disable')
+def disable_routine(routine_id: str, auth=Depends(identity)):
+    def update(s):
+        r=next((r for r in s.get('routines',[]) if r['id']==routine_id and (not auth.get('device_id') or r.get('device_id')==auth['device_id'])),None)
+        if not r:raise HTTPException(404,'Routine not found.')
+        r['enabled']=False
+        return {'ok':True}
+    return db().mutate(update)
+
+
+@app.get('/api/v2/documents/{document_id}/download')
+def download_document(document_id: str, auth=Depends(identity)):
+    from fastapi.responses import PlainTextResponse
+    d=next((d for d in db().read()['documents'] if d['id']==document_id),None)
+    if not d:raise HTTPException(404,'Document not found.')
+    return PlainTextResponse(d['text'],headers={'Content-Disposition':'attachment; filename="ora-document.txt"'})
+
+
+@app.get('/api/v2/tools/runs/{run_id}')
+def tool_result(run_id: str, auth=Depends(identity)):
+    run=next((r for r in db().read().get('tool_runs',[]) if r['id']==run_id and visible(r,auth)),None)
+    if not run:raise HTTPException(404,'Tool result not found.')
+    return run

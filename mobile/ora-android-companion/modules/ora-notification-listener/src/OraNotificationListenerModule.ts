@@ -32,6 +32,7 @@ declare class OraNotificationListenerModule extends NativeModule<{
   canScheduleExactAlarms(): boolean;
   openExactAlarmSettings(): void;
   pickDateTime(initial: number): Promise<number | null>;
+  openClockAction(kind: string, value: string, label: string): boolean;
   getListenerStatus(): ListenerStatus;
   openNotificationListenerSettings(): boolean;
   configure(enabled: boolean, sources: NativeNotificationSource[]): void;
