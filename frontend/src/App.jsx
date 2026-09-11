@@ -11,6 +11,7 @@ import {
 } from "./mini-client";
 import "./App.css";
 import ToolsPage from "./ToolsPage";
+import WorkPage from "./WorkPage";
 
 const nav = [
   ["today", "Today", "sun"],
@@ -18,6 +19,7 @@ const nav = [
   ["tasks", "My plan", "check"],
   ["memory", "Second brain", "layers"],
   ["tools", "Tools & GitHub", "layers"],
+  ["work", "Projects & desktop", "layers"],
   ["settings", "Connections", "sliders"],
 ];
 function Icon({ name, size = 20 }) {
@@ -526,6 +528,7 @@ export default function App() {
           </div>
         )}
         <div className={`page-content ${page === "chat" ? "chat-page" : ""}`}>
+          {page === "work" && <WorkPage />}
           {page === "tools" && (
             <ToolsPage
               onAsk={(prompt) => {

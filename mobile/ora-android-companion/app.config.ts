@@ -3,7 +3,7 @@ const config: ExpoConfig = {
   name: "ORA Mini AI",
   slug: "ora-android-companion",
   owner: "leo333",
-  version: "2.1.0",
+  version: "2.2.0",
   scheme: "ora",
   orientation: "portrait",
   userInterfaceStyle: "dark",
@@ -64,7 +64,15 @@ const config: ExpoConfig = {
     ["expo-build-properties", { android: { minSdkVersion: 26 } }],
     [
       "expo-share-intent",
-      { androidIntentFilters: ["text/*"], androidMultiIntentFilters: [] },
+      {
+        androidIntentFilters: [
+          "text/*",
+          "image/png",
+          "image/jpeg",
+          "application/pdf",
+        ],
+        androidMultiIntentFilters: [],
+      },
     ],
     [
       "expo-calendar",

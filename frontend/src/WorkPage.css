@@ -1,0 +1,121 @@
+.ora-work {
+  max-width: 1100px;
+  margin: auto;
+}
+.ora-work h1 {
+  font-size: clamp(28px, 4vw, 42px);
+}
+.ora-work h2 {
+  font-size: 22px;
+}
+.ora-work p {
+  line-height: 1.6;
+}
+.work-layout {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 22px;
+  margin-top: 24px;
+}
+.work-panel {
+  border: 1px solid #494036;
+  border-radius: 16px;
+  padding: 22px;
+  margin-bottom: 20px;
+  background: #121311;
+  min-width: 0;
+}
+.work-panel label {
+  display: block;
+  margin: 14px 0 8px;
+  color: #dfd7c6;
+}
+.work-panel input:not([type="checkbox"]),
+.work-panel textarea,
+.work-panel select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid #5d5342;
+  border-radius: 8px;
+  background: #0b0d0c;
+  color: #eee5d6;
+  font: inherit;
+}
+.work-panel textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+.work-panel button,
+.ora-work header button {
+  padding: 10px 14px;
+  border: 1px solid #756344;
+  border-radius: 8px;
+  background: #28231a;
+  color: #f0d59c;
+  cursor: pointer;
+  margin: 6px 8px 6px 0;
+}
+.work-panel button[aria-pressed="true"] {
+  background: #d3ae65;
+  color: #14110b;
+}
+.work-panel button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.work-panel aside button,
+.work-layout > aside > button {
+  display: block;
+  width: 100%;
+}
+.work-panel article {
+  border-top: 1px solid #494036;
+  padding: 15px 0;
+}
+.work-panel pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  max-height: 340px;
+  overflow: auto;
+}
+.work-panel .work-check {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.work-panel a {
+  color: #ebcc8b;
+}
+.work-panel small {
+  color: #b8b0a1;
+  line-height: 1.6;
+}
+.work-error {
+  color: #ffaaa0;
+}
+.work-panel code {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 750px) {
+  .work-layout {
+    grid-template-columns: 1fr;
+  }
+  .work-panel {
+    padding: 16px;
+  }
+  .work-layout > aside {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .work-layout > aside h2 {
+    width: 100%;
+  }
+  .work-layout > aside > button {
+    width: auto;
+  }
+}

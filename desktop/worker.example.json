@@ -1,0 +1,25 @@
+{
+  "url": "https://ora-oovf.onrender.com",
+  "label": "Elisha Windows",
+  "repositories": {
+    "ora-android": {
+      "path": "C:\\Users\\USER\\ora-android-companion",
+      "checks": {
+        "typecheck": [
+          "pnpm",
+          "exec",
+          "tsc",
+          "--noEmit"
+        ]
+      },
+      "timeout": 600,
+      "setup": [
+        [
+          "pnpm",
+          "install",
+          "--frozen-lockfile"
+        ]
+      ]
+    }
+  }
+}

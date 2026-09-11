@@ -23,12 +23,12 @@ def suggestions(state):
 
 def context(state, query):
     terms = set(query.lower().split())
-    docs = sorted(state['documents'], key=lambda d: -sum(w in d['text'].lower() for w in terms if len(w) > 3))[:2]
+    docs = sorted(state['documents'], key=lambda d: -sum(w in d['text'].lower() for w in terms if len(w) > 3))[:3 if state.get('explicit_attachments') else 2]
     events = [e for e in state['events'] if e.get('expires_at', '') > datetime.now(timezone.utc).isoformat()]
     return {'now': datetime.now(ZoneInfo(state['settings']['timezone'])).isoformat(),
-            'profile': state['settings'], 'tasks': [{'title':t['title'],'due_at':t['due_at'],'priority':t['priority']} for t in state['tasks'] if not t['done']][:20],
+            'active_project': state.get('active_project'), 'profile': state['settings'], 'tasks': [{'title':t['title'],'due_at':t['due_at'],'priority':t['priority']} for t in state['tasks'] if not t['done']][:20],
             'confirmed_memory': [{'text':m['text'][:180]} for m in state['memories'][-20:]], 'phone_context': [{'kind':e['kind'],'text':e['text'][:250],'observed_at':e['observed_at']} for e in events[-4:]],
-            'documents': [{'name': d['name'], 'excerpt': d['text'][:1800]} for d in docs]}
+            'documents': [{'name': d['name'], 'excerpt': d['text'][:6000 if state.get('explicit_attachments') else 1800], 'truncated': len(d['text']) > (6000 if state.get('explicit_attachments') else 1800)} for d in docs]}
 
 
 def tool(name, description, properties, required):

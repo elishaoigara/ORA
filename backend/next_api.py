@@ -104,6 +104,8 @@ class Operation(BaseModel):
 
 
 class Chat(BaseModel):
+    project_id: str = Field(default="", max_length=100)
+    document_ids: list[str] = Field(default_factory=list, max_length=3)
     request_id: str = Field(min_length=16, max_length=100)
     text: str = Field(min_length=1, max_length=8000)
 
@@ -119,7 +121,7 @@ def new_session(state, device_id=None):
 @app.get('/api/health')
 def health():
     return {'ok': store is not None, 'release': 'ora-mini-2', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
-            'companion_release': '2.1', 'reminders': 'android-local', 'ai_configured': bool(os.getenv('GROQ_API_KEY'))}
+            'companion_release': '2.2', 'work_release': '1.0', 'reminders': 'android-local', 'ai_configured': bool(os.getenv('GROQ_API_KEY'))}
 
 
 @app.post('/api/v2/session')
@@ -356,6 +358,20 @@ def chat(payload: Chat, auth=Depends(identity)):
         raise HTTPException(409, 'ORA is answering another message. Try again in a moment.')
     try:
         state = db().read()
+        from mini.workspaces import project_context
+        if payload.project_id:
+            state['active_project'] = project_context(state, payload.project_id)
+        state['messages'] = [m for m in state['messages'] if m.get('project_id', '') == payload.project_id]
+        if payload.document_ids:
+            docs = [d for d in state['documents'] if d['id'] in payload.document_ids]
+            if len(docs) != len(set(payload.document_ids)):
+                raise HTTPException(404, 'Attachment not found.')
+            if any(d.get('project_id', '') != payload.project_id for d in docs):
+                raise HTTPException(422, 'Choose attachments from this project.')
+            state['documents'] = docs
+            state['explicit_attachments'] = True
+        elif payload.project_id:
+            state['documents'] = [d for d in state['documents'] if d.get('project_id') == payload.project_id]
         cached = next((m for m in state['messages'] if m.get('request_id') == payload.request_id and m['role'] == 'assistant'), None)
         if cached:
             return {'reply': cached['text']}
@@ -384,8 +400,8 @@ def chat(payload: Chat, auth=Depends(identity)):
                 current['actions'].append(action)
                 actions.append(action)
             current['actions'] = current['actions'][-100:]
-            current['messages'] += [{'id': uuid.uuid4().hex, 'request_id': payload.request_id, 'role': 'user', 'text': payload.text, 'created_at': now()},
-                                    {'id': uuid.uuid4().hex, 'request_id': payload.request_id, 'role': 'assistant', 'text': reply, 'created_at': now()}]
+            current['messages'] += [{'id': uuid.uuid4().hex, 'request_id': payload.request_id, 'role': 'user', 'project_id': payload.project_id, 'document_ids': payload.document_ids, 'text': payload.text, 'created_at': now()},
+                                    {'id': uuid.uuid4().hex, 'request_id': payload.request_id, 'role': 'assistant', 'project_id': payload.project_id, 'text': reply, 'created_at': now()}]
             current['messages'] = current['messages'][-300:]
             return {'reply': reply, 'actions': actions}
         return db().mutate(save, 'chat:' + payload.request_id)
@@ -621,3 +637,9 @@ def tool_result(run_id: str, auth=Depends(identity)):
     run=next((r for r in db().read().get('tool_runs',[]) if r['id']==run_id and visible(r,auth)),None)
     if not run:raise HTTPException(404,'Tool result not found.')
     return run
+
+
+from mini.workspaces import install as install_workspaces
+install_workspaces(app, db, identity, limited)
+from mini.desktop import install as install_desktop
+install_desktop(app, db, identity, owner, limited)

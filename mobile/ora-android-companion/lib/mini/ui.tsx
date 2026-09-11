@@ -133,6 +133,11 @@ function Frame({ children }: { children: React.ReactNode }) {
         icon="construct-outline"
         onPress={() => router.push("/tools")}
       />
+      <Button
+        title="Projects & desktop"
+        icon="folder-outline"
+        onPress={() => router.push("/work")}
+      />
       <View style={s.topbar}>
         <View style={s.row}>
           <BrandMark />
@@ -585,6 +590,12 @@ export function TalkScreen() {
         {hasShareIntent && (
           <View style={s.notice}>
             <Text style={s.eyebrow}>SHARED WITH ORA</Text>
+            {!!shareIntent.files?.length && (
+              <Button
+                title="Attach shared file to a project"
+                onPress={() => router.push("/work")}
+              />
+            )}
             <Text style={s.body}>
               {(shareIntent.text || shareIntent.webUrl || "").slice(0, 500)}
             </Text>
