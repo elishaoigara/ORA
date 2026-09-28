@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
+import * as FileSystem from "expo-file-system/legacy";
 import { Platform } from "react-native";
 export type Session = { url: string; token: string; device_id: string };
 export type Task = {
@@ -139,6 +140,40 @@ export async function request<T = Record<string, unknown>>(
     );
   } finally {
     clearTimeout(timer);
+  }
+}
+export async function saveDocumentToPhone(id: string, name: string, format: string) {
+  const active = await session();
+  if (!active) throw new ApiError("Pair ORA first.", 401);
+  const permission = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+  if (!permission.granted) return null;
+  if (!FileSystem.cacheDirectory) throw new Error("Phone storage is unavailable.");
+  const mime: Record<string, string> = {
+    pdf: "application/pdf",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    md: "text/markdown",
+    txt: "text/plain",
+  };
+  const temp = FileSystem.cacheDirectory + "ora-export-" + makeId();
+  try {
+    const result = await FileSystem.downloadAsync(
+      active.url + "/api/v2/documents/" + encodeURIComponent(id) + "/download",
+      temp,
+      { headers: { Authorization: "Bearer " + active.token } },
+    );
+    if (result.status !== 200) throw new ApiError("ORA could not download the file. Reconnect and try again.", result.status);
+    const data = await FileSystem.readAsStringAsync(result.uri, { encoding: FileSystem.EncodingType.Base64 });
+    const destination = await FileSystem.StorageAccessFramework.createFileAsync(
+      permission.directoryUri,
+      (name || "ora-file.txt").replace(/[^a-zA-Z0-9._-]/g, "_"),
+      mime[format] || "text/plain",
+    );
+    await FileSystem.writeAsStringAsync(destination, data, { encoding: FileSystem.EncodingType.Base64 });
+    return destination;
+  } finally {
+    await FileSystem.deleteAsync(temp, { idempotent: true }).catch(() => {});
   }
 }
 export async function pair(url: string, code: string) {

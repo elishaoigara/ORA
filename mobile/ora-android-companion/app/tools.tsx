@@ -12,8 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
-import * as FileSystem from "expo-file-system/legacy";
-import { request, makeId, writeLocal } from "@/lib/mini/api";
+import { request, makeId, writeLocal, saveDocumentToPhone } from "@/lib/mini/api";
 import { useMini } from "@/lib/mini/provider";
 import { colors as c } from "@/lib/mini/theme";
 type Tool = {
@@ -36,8 +35,9 @@ type Run = {
   created: number;
   expires: number;
 };
-type Data = { tools: Tool[]; runs: Run[]; repositories: string[] };
-function Result({ value, depth = 0 }: { value: any; depth?: number }) {
+type SavedFile = { id: string; name: string; kind: string; format: string; version: number };
+type Data = { tools: Tool[]; runs: Run[]; repositories: string[]; documents: SavedFile[] };
+function Result({ value, depth = 0, full = false }: { value: any; depth?: number; full?: boolean }) {
   if (value == null) return null;
   if (typeof value !== "object")
     return (
@@ -54,7 +54,7 @@ function Result({ value, depth = 0 }: { value: any; depth?: number }) {
   return (
     <View style={{ gap: 8 }}>
       {Object.entries(value)
-        .slice(0, 80)
+        .slice(0, full ? undefined : 80)
         .filter(([k]) => !["node_id", "avatar_url", "gravatar_id"].includes(k))
         .map(([k, v]) => (
           <View
@@ -73,7 +73,7 @@ function Result({ value, depth = 0 }: { value: any; depth?: number }) {
                 <Text style={s.link}>Open source ↗</Text>
               </Pressable>
             ) : (
-              <Result value={v} depth={depth + 1} />
+              <Result value={v} depth={depth + 1} full={full} />
             )}
           </View>
         ))}
@@ -86,6 +86,7 @@ export default function ToolsScreen() {
     tools: [],
     runs: [],
     repositories: [],
+    documents: [],
   });
   const [selected, setSelected] = useState("github.overview");
   const [args, setArgs] = useState<Record<string, string>>({});
@@ -160,7 +161,7 @@ export default function ToolsScreen() {
         contentContainerStyle={{ padding: 20, gap: 16 }}
       >
         {button("‹ Back", () => router.back())}
-        <Text style={s.title}>Tools & GitHub</Text>
+        <Text style={s.title}>Work tools & GitHub</Text>
         <Text style={s.text}>
           Live tools, reviewable actions, and a record of what ORA actually did.
         </Text>
@@ -200,6 +201,30 @@ export default function ToolsScreen() {
               ),
             !repo,
           )}
+        </View>
+        <View style={s.card}>
+          <Text style={s.heading}>Create & research</Text>
+          <Text style={s.text}>Ask ORA to prepare a file, or enter structured content below. Review before saving.</Text>
+          <View style={s.wrap}>
+            {[
+              ["documents.create", "Document · DOCX / PDF"],
+              ["presentations.create", "PowerPoint"],
+              ["spreadsheets.create", "Spreadsheet · XLSX"],
+              ["research.sources", "Research sources"],
+            ].map(([name, label]) => (
+              <View key={name}>{button(label, () => { setSelected(name); setArgs(name === "documents.create" ? { format: "docx" } : {}); })}</View>
+            ))}
+          </View>
+          {button("Ask ORA to create a file", () => ask("Help me research a topic, verify sources, then create a document or presentation for my review. Ask for the topic and intended audience."))}
+          <Text style={s.heading}>Saved files</Text>
+          {!data.documents?.length && <Text style={s.text}>No files saved yet.</Text>}
+          {data.documents?.map((file) => (
+            <View key={file.id}>
+              <Text style={s.text}>{file.name} · v{file.version}</Text>
+              {button("Save to phone", () => act(() => saveDocumentToPhone(file.id, file.name, file.format)))}
+              {button("Edit with ORA", () => ask(`Read my saved file ${file.id} (${file.name}, version ${file.version}), then help me revise it. Prepare the exact replacement for review.`))}
+            </View>
+          ))}
         </View>
         <TextInput
           style={s.input}
@@ -288,23 +313,11 @@ export default function ToolsScreen() {
                 }),
               )}
             {!!result.result?.document_id &&
-              button("Save document to phone", () =>
-                act(async () => {
-                  const p =
-                    await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
-                  if (!p.granted) return;
-                  const uri =
-                    await FileSystem.StorageAccessFramework.createFileAsync(
-                      p.directoryUri,
-                      (result.result.name || "ora-document.txt").replace(
-                        /[^a-zA-Z0-9._-]/g,
-                        "_",
-                      ),
-                      "text/plain",
-                    );
-                  await FileSystem.writeAsStringAsync(uri, result.result.text);
-                }),
-              )}
+              button("Save file to phone", () => act(() => saveDocumentToPhone(
+                result.result.document_id,
+                result.result.name,
+                result.result.format || "md",
+              )))}
             {result.tool === "github.tree" && result.result?.files ? (
               <View>
                 {result.result.files
@@ -327,7 +340,7 @@ export default function ToolsScreen() {
                 </Text>
               </View>
             ) : (
-              <Result value={result.result || result.preview} />
+              <Result value={result.result || result.preview} full={result.status === "awaiting_approval"} />
             )}
             {result.tool === "github.builds" &&
               Array.isArray(result.result) &&
@@ -373,7 +386,7 @@ export default function ToolsScreen() {
           .map((r) => (
             <View style={s.card} key={r.id}>
               <Text style={s.heading}>{r.tool}</Text>
-              <Result value={r.preview} />
+              <Result value={r.preview} full />
               {button(
                 "Approve this exact action",
                 () =>

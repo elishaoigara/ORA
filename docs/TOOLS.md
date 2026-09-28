@@ -1,6 +1,6 @@
 # ORA tools and GitHub workspace
 
-This release adds one shared tool runtime to the Render backend, used by web and Android. Open **Tools & GitHub** on either interface. Chat can call read tools and prepare write approvals; review approvals in Tools & activity. Results and history synchronize through the existing Neon workspace. No schema migration is needed.
+One shared tool runtime on Render serves web and Android. Open **Tools & GitHub** on web or **Work tools & GitHub** on Android. Chat can call read tools and prepare write approvals; review approvals in Tools & activity. Results and history synchronize through the existing workspace. No schema migration is needed.
 
 ## Start here
 
@@ -34,13 +34,21 @@ Calendar tools list events and free intervals in an explicit, timezone-aware int
 
 ## Research
 
-Set `TAVILY_API_KEY` in Render for live search and public-page extraction. This is an external service with its own quota/billing. Queries and chosen page URLs are sent to Tavily. Do not include secrets or private material in research requests. ORA preserves returned source URLs, labels limited results and treats retrieved content as untrusted evidence. It does not log into websites or run a remote browser.
+Set `TAVILY_API_KEY` in Render for live search, source collection and public-page extraction. This is an external service with its own quota/billing. Queries and chosen page URLs are sent to Tavily. Do not include secrets or private material in research requests. `research.sources` returns up to six distinct HTTPS sources with titles, short excerpts and available publication dates. Open primary sources and check important claims before publishing; excerpts can be misleading or stale. ORA does not log into websites or run a remote browser.
+
+## Files that ORA can make and revise
+
+- `documents.create`: supply a title, text and optional `format` (`md`, `txt`, `docx`, `pdf`; default `md`). Markdown style headings and `-` bullets become structured DOCX/PDF paragraphs. `documents.list` and `documents.read` show saved source and version; `documents.edit` replaces text after checking that version.
+- `presentations.create` and `presentations.edit`: `slides` is a JSON array of `{"title":"...","bullets":["...", "..."]}`. Each deck has 1–15 slides with at most six bullets per slide. The downloadable result is a real `.pptx` file.
+- `spreadsheets.create` and `spreadsheets.edit`: `headers` is a JSON array of unique column names, and `rows` is a JSON array of arrays with the same length. Up to 20 columns and 200 rows are accepted. XLSX text beginning with `=`, `+`, `-` or `@` stays text rather than executing as a formula. Calculations belong in the separate calculator/data tools.
+
+Every create/edit is an approval card containing the exact source. A version change during review blocks an edit. ORA keeps at most 20 files and renders binary exports only when an authenticated web or phone client downloads them (3 MB output limit). The app stores source content, not an original uploaded PDF or DOCX layout. Uploaded PDFs can be revised from extracted text, producing a newly rendered layout. Web and Android show Saved files for later downloads. Android asks for a storage folder; an updated APK is needed for the export action. No database migration or public file host is required. DOCX/PPTX/XLSX/PDF rendering adds `python-docx`, `python-pptx`, `openpyxl` and `reportlab` to the Mini backend requirements.
 
 ## Tools available without new external credentials
 
 - Tasks: list, create, edit, complete and delete with version checks and approval for writes.
 - Personal knowledge: search relevant memory/document excerpts with source names; propose saved memories.
-- Documents: save Markdown/text documents into ORA. Download them on the web or choose a storage folder on Android.
+- Documents, presentations and spreadsheets: create, read, versioned edits and authenticated exports as described above.
 - Calculator: a bounded arithmetic parser, never arbitrary code execution.
 - CSV analysis: numeric counts, totals, means, minimums and maximums, up to 1,000 rows / 50 columns of supplied CSV. It is not a general spreadsheet editor.
 - Phone handoffs: prepare SMS, dialer, map and browser links. Android can also open the clock app to confirm timers and alarms; install the new APK. Handoff does not mean a message was sent, a call was made, or an alarm was confirmed.
@@ -58,6 +66,9 @@ Set `TAVILY_API_KEY` in Render for live search and public-page extraction. This 
 - “Search my saved notes for our hosting decision and turn the answer into a Markdown document.”
 - “Search my Gmail for this client's latest email and draft a reply for review.”
 - “Create a morning routine with my task briefing, saved weather and ORA's latest build status.”
+- “Research solar container farming in Kenya using current public sources, cite the URLs and prepare a three-page PDF brief for review.”
+- “Turn this plan into an eight-slide PowerPoint, then prepare the deck for my approval.”
+- “Build an XLSX startup budget with columns for cost, frequency and notes. Keep user-entered text literal.”
 
 ## Controls, limits and recovery
 

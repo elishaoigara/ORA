@@ -16,6 +16,8 @@ The product goal is a useful personal AI, not a claim of unrestricted phone cont
 | Location | User-triggered approximate location snapshot | No continuous/background tracking in this version |
 | Battery | User-triggered device battery snapshot | No continuous health monitoring |
 | Files | User-picked PDF/text/Markdown, extracted text shared between clients | No full-filesystem scan, OCR, image understanding or video analysis |
+| Work files | Reviewed creation and versioned edits; authenticated DOCX/PDF, PPTX and XLSX downloads on web/phone | Generated layouts use bounded text and JSON specifications; uploaded files retain extracted text rather than original layout |
+| Public research | Tavily-backed search with source links when a server key is configured | Search excerpts are evidence to verify, not a guarantee of factual accuracy; no authenticated browsing |
 | Outgoing messages | AI draft, approval, OS share sheet | User selects/verifies the recipient and sends; ORA never claims sending happened |
 | Privacy | Per-source consent, pause, deletion, device revocation, browser export | An offline phone cannot receive remote revocation until reconnecting |
 

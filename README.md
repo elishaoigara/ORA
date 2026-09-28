@@ -14,6 +14,7 @@ A personal AI workspace for Elisha: a restrained cyberpunk web app and Android c
 - Receive Android-local reminders for up to 50 synchronized future tasks, even when Render sleeps.
 - Opt into a daily local planning nudge. It respects the configured quiet-hour window; explicit timed reminders are not suppressed.
 - Keep confirmed memory and upload PDF, text or Markdown documents from web or phone.
+- Research public sources with links, create and revise reviewed documents, and download real DOCX/PDF, PowerPoint and XLSX files from either client.
 - Share today's phone calendar, one selected contact, current approximate location or battery status explicitly.
 - Enable a native Android notification listener for selected Gmail, Calendar, WhatsApp and Telegram notifications. Previews are redacted and synced when the app opens.
 - Review message drafts and open the OS share sheet to choose a recipient and send yourself.
@@ -33,6 +34,8 @@ Charcoal surfaces, quiet cyan accents, restrained violet, generous spacing and a
 - **Voice:** Groq Whisper transcription; system text-to-speech playback. Playback availability, offline support and voice quality depend on the device/browser speech engine.
 
 See [setup and migration](docs/ORA_MINI_SETUP.md), [feature boundaries](docs/ORA_MINI_CAPABILITIES.md), and [validation](docs/ORA_MINI_VALIDATION.md).
+
+The new file tools use the existing authenticated `/api/v2/tools` flow. Ask ORA to create a file or use Tools & activity, inspect the exact proposal, approve it, then download it from Saved files. File source is stored in the durable workspace and rendered on demand; no public links or filesystem persistence are required. Live research needs `TAVILY_API_KEY` on Render. See [tool setup and limits](docs/TOOLS.md).
 
 ## Local development
 

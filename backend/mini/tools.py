@@ -49,6 +49,7 @@ define('knowledge.search','Search my knowledge','Search memories and document ex
 define('memory.save','Remember something','Save a fact explicitly shared by the owner.','text',True)
 define('web.search','Research the web','Live search with source URLs; query is sent to Tavily.','query',service='search')
 define('web.read','Read a web page','Extract a public web page through Tavily. No authenticated pages.','url',service='search')
+define('research.sources','Research with sources','Find current public sources with titles, links, dates and short evidence excerpts. ORA can synthesize a cited answer from these results.','query',service='search')
 define('calendar.list','Read calendar','List events in a timezone-aware start/end interval up to 31 days.','start end',service='google')
 define('calendar.free','Find free time','Find free intervals between timezone-aware start/end, up to 31 days.','start end',service='google')
 define('calendar.create','Create calendar event','Prepare an event with exact start/end. No guests added automatically.','title start end description?',True,'google')
@@ -58,7 +59,14 @@ define('email.draft','Draft email','Create a Gmail draft for review.','to subjec
 define('email.send','Send email','Send exactly the approved recipient, subject and body.','to subject body',True,'google')
 define('phone.action','Prepare phone action','Prepare a dialer, SMS composer, map destination or browser URL. kind is dial, sms, maps, browser, timer (seconds) or alarm (HH:MM, phone local time). Never reports a message sent or call made.','kind target body?')
 define('weather.outlook','Weather outlook','Read stored forecasts with timestamps. For live travel forecasts provide latitude and longitude explicitly.','latitude? longitude?')
-define('documents.create','Create document','Save a Markdown/text document to ORA with downloadable contents.','title text',True)
+define('documents.list','My files','List saved documents, presentations and spreadsheets with IDs and versions.')
+define('documents.read','Read saved file','Read the source text or structured content before revising a saved file.','id')
+define('documents.create','Create document','Create an editable document; format can be md, txt, docx or pdf. Markdown headings and bullets are styled in DOCX/PDF. Review exact text first.','title text format?',True)
+define('documents.edit','Edit document','Replace a saved document’s source text using its current version from documents.list. Uploaded PDFs are text-only extracts; the edited output is newly rendered.','id version text title? format?',True)
+define('presentations.create','Create presentation','Create a real PowerPoint file. slides is JSON: [{"title":"...","bullets":["...", "..."]}]; 1–15 slides, up to six bullets each.','title slides',True)
+define('presentations.edit','Edit presentation','Replace the slides in a saved PowerPoint, using its ID and current version. slides uses the same JSON format as create.','id version slides title?',True)
+define('spreadsheets.create','Create spreadsheet','Create a formatted XLSX file. headers is a JSON string array; rows is a JSON array of equally sized arrays. Strings are literal text, never formulas.','title headers rows',True)
+define('spreadsheets.edit','Edit spreadsheet','Replace a saved XLSX sheet using its ID and current version. Supply headers and rows as JSON arrays.','id version headers rows title?',True)
 define('calculator','Calculate','Arithmetic only: numbers, + - * / % ** and parentheses. No code execution.','expression')
 define('data.analyze','Analyze CSV','Summarize up to 1,000 rows and numeric columns from supplied CSV.','csv')
 define('notifications.digest','Notification digest','Read fresh, consented phone context. Phone requests only see their own context.')
@@ -208,6 +216,14 @@ def calculate(expression):
 def execute_read(name,a,state,auth):
     if name.startswith('github.'): return github_read(name,a)
     if name=='tasks.list': return state['tasks']
+    if name=='documents.list':
+        from mini.artifacts import metadata
+        return [metadata(d) for d in state['documents']]
+    if name=='documents.read':
+        from mini.artifacts import metadata
+        d=next((d for d in state['documents'] if d['id']==a.get('id')),None)
+        if not d:fail('File not found.',404)
+        return metadata(d)|({'text':d['text']} if d.get('kind','document')=='document' else {'content':d['content']})
     if name=='knowledge.search':
         terms=[w for w in text(a.get('query'),500).lower().split() if len(w)>1]
         rows=[{'source':'Memory','id':m['id'],'text':m['text']} for m in state['memories']]+[{'source':d['name'],'id':d['id'],'text':d['text']} for d in state['documents']]
@@ -218,6 +234,18 @@ def execute_read(name,a,state,auth):
                 pos=min([row['text'].lower().find(t) for t in terms if t in row['text'].lower()] or [0]);start=max(0,pos-150)
                 matches.append({'source':row['source'],'id':row['id'],'excerpt':row['text'][start:start+1800],'score':score})
         return sorted(matches,key=lambda m:-m['score'])[:8]
+    if name=='research.sources':
+        query=text(a.get('query'),500)
+        found=http('https://api.tavily.com/search','POST',{'query':query,'max_results':6,'include_answer':False},
+                   {'Authorization':'Bearer '+os.environ['TAVILY_API_KEY']})
+        sources=[];seen=set()
+        for row in found.get('results',[])[:6]:
+            url=row.get('url','')
+            if not isinstance(url,str) or not url.startswith('https://') or url in seen:continue
+            seen.add(url)
+            sources.append({'title':str(row.get('title',''))[:250], 'url':url,
+                            'published_date':row.get('published_date'), 'excerpt':str(row.get('content',''))[:1600]})
+        return {'query':query,'sources':sources,'note':'Search excerpts are untrusted; open primary sources to verify important claims.'}
     if name.startswith('web.'):
         if name=='web.search': body={'query':text(a.get('query'),1000),'max_results':5,'include_answer':False};path='search'
         else:
@@ -339,6 +367,35 @@ def prepare(name,a,state,auth):
     if name=='calendar.create':interval(a)
     if name.startswith('email.'):
         if not re.fullmatch(r'[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+',str(a.get('to',''))) or any('\n' in str(a.get(k,'')) or '\r' in str(a.get(k,'')) for k in ('to','subject')):fail('Use one explicit email address and a single-line subject.')
+    if name in ('documents.create','documents.edit','presentations.create','presentations.edit','spreadsheets.create','spreadsheets.edit'):
+        from mini import artifacts
+        original=None
+        if name.endswith('.edit'):
+            original=next((d for d in state['documents'] if d['id']==a.get('id')),None)
+            if not original:fail('File not found.',404)
+            expected={'documents':'document','presentations':'presentation','spreadsheets':'spreadsheet'}[name.split('.')[0]]
+            if original.get('kind','document')!=expected:fail('Choose a matching file type.',422)
+            if original.get('version',1)!=num(a.get('version')):fail('File changed. Read its current version and try again.',409)
+        try:
+            heading=artifacts.title(a.get('title',original.get('title',original['name'].rsplit('.',1)[0]) if original else None))
+            if name.startswith('documents.'):
+                content,fmt=artifacts.document(a.get('text'),a.get('format') or (original.get('format','md') if original else 'md'))
+                clean={'title':heading,'text':content,'format':fmt}
+                preview={'title':heading,'format':fmt,'text':content}
+                if original:preview['diff']=''.join(difflib.unified_diff(original['text'].splitlines(True),content.splitlines(True),fromfile='current',tofile='proposed'))[:35000]
+            elif name.startswith('presentations.'):
+                content=artifacts.slides(a.get('slides'))
+                clean={'title':heading,'slides':content}
+                preview={'title':heading,'slides':content}
+            else:
+                headers,rows=artifacts.sheet(a.get('headers'),a.get('rows'))
+                clean={'title':heading,'headers':headers,'rows':rows}
+                preview={'title':heading,'headers':headers,'rows':rows}
+        except ValueError as exc:fail(str(exc))
+        if original:
+            clean.update(id=original['id'],version=original.get('version',1))
+            preview.update(id=original['id'],from_version=original.get('version',1))
+        return clean,preview
     if name=='routines.save':
         steps=json_value(a.get('steps'))
         if not isinstance(steps,list) or not 1<=len(steps)<=3:fail('A routine needs one to three read steps.')
@@ -382,12 +439,26 @@ def write_tool(name,a,store,auth,run_id,operation):
         msg=EmailMessage();msg['To']=a['to'];msg['Subject']=text(a.get('subject'),250);msg.set_content(text(a.get('body'),20000))
         raw=base64.urlsafe_b64encode(msg.as_bytes()).decode()
         return google('/drafts' if name=='email.draft' else '/messages/send','POST',{'message':{'raw':raw}} if name=='email.draft' else {'raw':raw},gmail=True)
-    if name=='documents.create':
-        title=text(a.get('title'),120);content=text(a.get('text'),50000)
+    if name in ('documents.create','documents.edit','presentations.create','presentations.edit','spreadsheets.create','spreadsheets.edit'):
+        from mini import artifacts
+        kind={'documents':'document','presentations':'presentation','spreadsheets':'spreadsheet'}[name.split('.')[0]]
+        fmt=a.get('format','md') if kind=='document' else ('pptx' if kind=='presentation' else 'xlsx')
+        content=a['text'] if kind=='document' else (a['slides'] if kind=='presentation' else {'headers':a['headers'],'rows':a['rows']})
         def save(s):
-            if len(s['documents'])>=20:fail('Document limit reached.')
-            doc={'id':run_id,'name':title if title.endswith(('.md','.txt')) else title+'.md','text':content,'created_at':datetime.now(timezone.utc).isoformat()};s['documents'].append(doc)
-            return {'document_id':run_id,'name':doc['name'],'text':content}
+            if name.endswith('.create'):
+                if len(s['documents'])>=20:fail('File limit reached (20).')
+                doc={'id':run_id,'created_at':datetime.now(timezone.utc).isoformat(),'version':1}
+                s['documents'].append(doc)
+            else:
+                doc=next((d for d in s['documents'] if d['id']==a['id']),None)
+                if not doc or doc.get('kind','document')!=kind:fail('File not found.',404)
+                if doc.get('version',1)!=a['version']:fail('File changed after your preview. Read it again.',409)
+                doc['version']=a['version']+1
+            doc.update(kind=kind,format=fmt,title=a['title'],name=artifacts.filename(a['title'],fmt),
+                       text=artifacts.record_text(kind,content))
+            if kind=='document':doc.pop('content',None)
+            else:doc['content']=content
+            return {'document_id':doc['id'],'name':doc['name'],'format':fmt,'kind':kind,'version':doc['version']}
         return store.mutate(save,'tool-write:'+run_id)
     if name=='routines.save':
         def save(s):

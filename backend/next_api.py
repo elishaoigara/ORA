@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from mini.store import Store, now
 from mini.intelligence import respond, suggestions
 from mini.tools import Runtime, catalog, visible, BY_NAME, public_run, allowed_repos
+from mini.artifacts import metadata as file_metadata, render as render_file
 from mini.companion import weather_check, dispatch, alert
 import re
 
@@ -170,7 +171,7 @@ def pair(payload: Pair, request: Request):
 
 def snapshot(state, auth):
     data = {k: state[k] for k in ('revision', 'tasks', 'messages', 'memories', 'actions', 'settings')}
-    data['documents'] = [{'id': d['id'], 'name': d['name'], 'created_at': d['created_at']} for d in state['documents']]
+    data['documents'] = [file_metadata(d) for d in state['documents']]
     data['devices'] = [{k: v for k, v in d.items() if k not in ('push_token', 'weather')} | {'push_registered': bool(d.get('push_token')), 'weather': {k: v for k, v in d.get('weather', {}).items() if k not in ('latitude', 'longitude')}} for d in state['devices'] if not d.get('revoked')]
     data['alerts'] = [{k: v for k, v in a.items() if k not in ('ticket', 'key')} for a in state.get('alerts', []) if not auth.get('device_id') or a['device_id'] == auth['device_id']]
     data['scheduler_at'] = state.get('scheduler_at')
@@ -586,7 +587,7 @@ def list_tools(auth=Depends(identity)):
     state=db().read()
     return {'tools': [dict(t, enabled=t['name'] not in state.get('disabled_tools',[])) for t in catalog()],
             'runs': [public_run(r, preview=True) for r in state.get('tool_runs',[]) if visible(r,auth)][-40:],
-            'repositories': allowed_repos()}
+            'repositories': allowed_repos(), 'documents': [file_metadata(d) for d in state['documents']]}
 
 
 @app.post('/api/v2/tools/run')
@@ -626,10 +627,13 @@ def disable_routine(routine_id: str, auth=Depends(identity)):
 
 @app.get('/api/v2/documents/{document_id}/download')
 def download_document(document_id: str, auth=Depends(identity)):
-    from fastapi.responses import PlainTextResponse
+    from fastapi.responses import Response
     d=next((d for d in db().read()['documents'] if d['id']==document_id),None)
     if not d:raise HTTPException(404,'Document not found.')
-    return PlainTextResponse(d['text'],headers={'Content-Disposition':'attachment; filename="ora-document.txt"'})
+    try:data,mime,name=render_file(d)
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    return Response(data,media_type=mime,headers={'Content-Disposition':f'attachment; filename="{name}"',
+                                                   'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
 @app.get('/api/v2/tools/runs/{run_id}')
