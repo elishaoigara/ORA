@@ -97,7 +97,10 @@ def sheet(headers, rows):
 
 
 def filename(value, format):
-    stem = re.sub(r'[^A-Za-z0-9._-]+', '_', title(value)).strip('._')[:90] or 'ora-file'
+    name = title(value)
+    if name.lower().endswith('.' + format):
+        name = name[:-(len(format) + 1)]
+    stem = re.sub(r'[^A-Za-z0-9._-]+', '_', name).strip('._')[:90] or 'ora-file'
     return stem + '.' + format
 
 
