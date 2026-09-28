@@ -59,6 +59,30 @@ export async function connect(token) {
 export async function operation(kind, payload, requestId = uid()) {
   return api("/operations", { request_id: requestId, kind, payload });
 }
+export async function downloadDocument(id, name) {
+  const token = saved("token");
+  if (!token) throw new Error("Connect to ORA first.");
+  const response = await fetch(`${base}/api/v2/documents/${encodeURIComponent(id)}/download`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(typeof error.detail === "string" ? error.detail : "File download failed.");
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = (name || "ora-file.txt").replace(/[^a-zA-Z0-9._-]/g, "_");
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
 export function clearLocal() {
   for (const key of Object.keys(sessionStorage))
     if (key.startsWith("ora2:")) sessionStorage.removeItem(key);

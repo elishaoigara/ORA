@@ -1,18 +1,18 @@
 import { useEffect, useState } from "react";
-import { api, uid } from "./mini-client";
+import { api, uid, downloadDocument } from "./mini-client";
 
-function Output({ value }) {
+function Output({ value, full = false }) {
   if (value === null || value === undefined) return null;
   if (typeof value !== "object") return <span>{String(value)}</span>;
   if (Array.isArray(value))
     return (
       <div className="tool-results">
-        {value.slice(0, 100).map((v, i) => (
+        {(full ? value : value.slice(0, 100)).map((v, i) => (
           <div className="tool-result-item" key={i}>
-            <Output value={v} />
+            <Output value={v} full={full} />
           </div>
         ))}
-        {value.length > 100 && <p>Showing the first 100 items.</p>}
+        {!full && value.length > 100 && <p>Showing the first 100 items.</p>}
       </div>
     );
   return (
@@ -34,7 +34,7 @@ function Output({ value }) {
                   Open source ↗
                 </a>
               ) : (
-                <Output value={v} />
+                <Output value={v} full={full} />
               )}
             </dd>
           </div>
@@ -43,7 +43,7 @@ function Output({ value }) {
   );
 }
 export default function ToolsPage({ onAsk }) {
-  const [data, setData] = useState({ tools: [], runs: [], repositories: [] });
+  const [data, setData] = useState({ tools: [], runs: [], repositories: [], documents: [] });
   const [selected, setSelected] = useState("github.overview");
   const [args, setArgs] = useState({});
   const [repo, setRepo] = useState("");
@@ -110,20 +110,10 @@ export default function ToolsPage({ onAsk }) {
     setResult(null);
   };
   const pending = data.runs.filter((r) => r.status === "awaiting_approval");
-  const download = (r) => {
-    const content = r.result?.text;
-    if (typeof content !== "string") return;
-    const url = URL.createObjectURL(
-      new Blob([content], { type: "text/plain;charset=utf-8" }),
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = (r.result.name || "ora-document.txt").replace(
-      /[^a-zA-Z0-9._-]/g,
-      "_",
-    );
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const download = async (id, name) => {
+    setError("");
+    try { await downloadDocument(id, name); }
+    catch (e) { setError(e.message); }
   };
   return (
     <section className="tools-page">
@@ -180,6 +170,30 @@ export default function ToolsPage({ onAsk }) {
           Changes create draft pull requests; merging remains a separate
           decision.
         </p>
+      </div>
+      <div className="tool-cockpit">
+        <h2>Create & research</h2>
+        <div className="tool-shortcuts">
+          {[
+            ["documents.create", "Document · DOCX / PDF"],
+            ["presentations.create", "PowerPoint"],
+            ["spreadsheets.create", "Spreadsheet · XLSX"],
+            ["research.sources", "Research sources"],
+          ].map(([name, label]) => (
+            <button key={name} onClick={() => choose(name, name === "documents.create" ? { format: "docx" } : {})}>{label}</button>
+          ))}
+          <button onClick={() => onAsk("Help me research a topic, verify sources, then create a document or presentation for my review. Ask for the topic and intended audience.")}>Ask ORA to make it</button>
+        </div>
+        <p className="muted">Files are saved to your ORA workspace after approval. Research requires the server’s Tavily connection.</p>
+        <h3>Saved files</h3>
+        {!data.documents?.length && <p className="muted">No files saved yet.</p>}
+        {data.documents?.map((file) => (
+          <div className="tool-shortcuts" key={file.id}>
+            <span>{file.name} · v{file.version}</span>
+            <button onClick={() => download(file.id, file.name)}>Download</button>
+            <button onClick={() => onAsk(`Read my saved file ${file.id} (${file.name}, version ${file.version}), then help me revise it. Prepare the exact replacement for review.`)}>Edit with ORA</button>
+          </div>
+        ))}
       </div>
       <div className="tool-workspace">
         <aside>
@@ -310,8 +324,8 @@ export default function ToolsPage({ onAsk }) {
                 </p>
               )}
               {result.result?.document_id && (
-                <button onClick={() => download(result)}>
-                  Download document
+                <button onClick={() => download(result.result.document_id, result.result.name)}>
+                  Download file
                 </button>
               )}
               {result.tool === "github.tree" && result.result?.files ? (
@@ -335,7 +349,7 @@ export default function ToolsPage({ onAsk }) {
                     ))}
                 </div>
               ) : (
-                <Output value={result.result || result.preview} />
+                <Output value={result.result || result.preview} full={result.status === "awaiting_approval"} />
               )}
               {result.tool === "github.builds" &&
                 Array.isArray(result.result) &&
@@ -375,9 +389,9 @@ export default function ToolsPage({ onAsk }) {
               <h3>
                 {data.tools.find((t) => t.name === r.tool)?.title || r.tool}
               </h3>
-              <Output value={r.preview} />
+              <Output value={r.preview} full />
               <button
-                disabled={busy || r.expires * 1000 < Date.now()}
+                disabled={busy}
                 onClick={() => decide(r.id, false)}
               >
                 Approve this exact action
