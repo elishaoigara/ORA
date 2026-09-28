@@ -9,7 +9,7 @@ The product goal is a useful personal AI, not a claim of unrestricted phone cont
 | Reminders | Android-local scheduling for 50 upcoming synchronized tasks | New web reminders require phone sync; OS restrictions may delay delivery |
 | Daily nudge | Optional recurring local planning prompt | Generic prompt, not an AI-written live morning briefing |
 | Voice | Push-to-talk transcription and installed voice selection | No always-listening wake word; not guaranteed offline TTS on every speech engine |
-| Intelligence | Grounded context, bounded history, task/memory/message tools and suggestions | No live web search, local offline model, unrestricted autonomous execution or consciousness |
+| Intelligence | Grounded context, bounded history, task/memory/message tools and suggestions | Live research requires Tavily; there is no local offline model or unrestricted autonomous execution |
 | Notifications | Allowlisted native listener, redacted previews, bounded queue and synchronization | Cannot read an app's private database or unrelated message history; not real-time cloud monitoring |
 | Contacts | Pick and confirm one contact | No silent address-book upload |
 | Calendar | Review/share remaining events today from phone calendars | No automatic Google OAuth sync in the Mini runtime |
