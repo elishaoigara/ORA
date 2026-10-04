@@ -28,10 +28,12 @@ class TelegramTests(unittest.TestCase):
         api.store = Store(url='', path=self.temp.name + '/db')
         api.rates.clear()
         self.env = patch.dict(os.environ, {'TELEGRAM_BOT_TOKEN': '123:testing',
+                                           'TELEGRAM_CHAT_ID': '',
                                            'ORA_PUBLIC_URL': 'https://ora.example'})
         self.env.start()
         self.sent = []
         self.webhook_url = ''
+        self.chat_type = 'private'
         self.fail_send = False
         self.provider = patch('mini.telegram.requests.post', side_effect=self.telegram_api)
         self.provider.start()
@@ -56,6 +58,9 @@ class TelegramTests(unittest.TestCase):
             return Reply(True)
         if method == 'getWebhookInfo':
             return Reply({'url': self.webhook_url, 'pending_update_count': 0})
+        if method == 'getChat':
+            return Reply({'id': payload['chat_id'], 'type': self.chat_type,
+                          'first_name': 'Elisha'})
         if method in ('sendMessage', 'sendDocument'):
             if self.fail_send:
                 self.fail_send = False
@@ -140,14 +145,30 @@ class TelegramTests(unittest.TestCase):
 
     def test_render_external_url_automatically_registers_webhook(self):
         with patch.dict(os.environ, {'ORA_PUBLIC_URL': '',
-                                      'RENDER_EXTERNAL_URL': 'https://ora-example.onrender.com'}):
+                                      'RENDER_EXTERNAL_URL': 'https://ora-example.onrender.com',
+                                      'TELEGRAM_CHAT_ID': '123456'}):
             self.assertEqual(public_url(), 'https://ora-example.onrender.com')
             automatic_setup(api.store)
             self.assertEqual(self.webhook_url,
                              'https://ora-example.onrender.com/api/v2/telegram/webhook')
             status = self.client.get('/api/v2/telegram/status', headers=self.owner).json()
             self.assertTrue(status['webhook_active'])
-            self.assertFalse(status['linked'])
+            self.assertTrue(status['linked'])
+            self.assertEqual(self.update(140, user=123456, text='/tasks').status_code, 200)
+            self.assertEqual(api.store.read()['telegram']['user_id'], 123456)
+            self.assertEqual(self.update(141, user=99, text='/tasks').status_code, 200)
+            self.assertEqual(len(self.sent), 1)
+            self.client.delete('/api/v2/telegram/link', headers=self.owner)
+            automatic_setup(api.store)
+            self.assertFalse(self.client.get('/api/v2/telegram/status', headers=self.owner).json()['linked'])
+
+    def test_group_chat_id_does_not_grant_access(self):
+        with patch.dict(os.environ, {'TELEGRAM_CHAT_ID': '123456'}):
+            self.chat_type = 'group'
+            automatic_setup(api.store)
+            self.assertFalse(self.client.get('/api/v2/telegram/status', headers=self.owner).json()['linked'])
+            self.assertEqual(self.update(150, user=123456, text='/tasks').status_code, 200)
+            self.assertEqual(self.sent, [])
 
 
 if __name__ == '__main__':

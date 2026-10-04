@@ -42,6 +42,7 @@ Configure these environment variables:
 | `GROQ_STT_MODEL` | `whisper-large-v3-turbo` by default |
 | `ORA_DAILY_AI_REQUESTS` | `100` default; adjust to your provider quota/budget |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather, for the Render backend only |
+| `TELEGRAM_CHAT_ID` | Optional existing private chat ID; validated with Telegram before linking |
 | `ORA_PUBLIC_URL` | Optional HTTPS backend origin override; Render supplies `RENDER_EXTERNAL_URL` automatically |
 
 Do not add wildcard browser origins. `ORA_API_TOKEN` is not a Google or Supabase token. Keep one worker: it bounds inference concurrency and avoids simultaneous model requests from multiple clients. Durable database transactions still protect task mutations.
@@ -81,7 +82,7 @@ Open the web app and enter the owner key. That key is exchanged over HTTPS for a
 
 Telegram delivers bot updates to the active FastAPI backend on Render. Set `TELEGRAM_BOT_TOKEN` on the Render service; never put it in a `VITE_*` variable, source control, or chat. Render provides `RENDER_EXTERNAL_URL` automatically, so `ORA_PUBLIC_URL` is only needed to override the backend origin. On production startup, ORA registers the webhook automatically if the token and public URL are available.
 
-In the web app, open **Connections → Telegram**. The webhook uses a secret request header derived on the backend and takes over any prior webhook for that bot. If it did not activate automatically, choose **Activate Telegram webhook** to retry. Then choose **Generate Telegram link** and open the one-time link in your private Telegram account within 10 minutes. Do not forward the link: whoever opens it first becomes the paired account. You can disconnect from Connections and create a fresh link. An existing `TELEGRAM_CHAT_ID` is not automatically granted access; pair the private account explicitly.
+In the web app, open **Connections → Telegram**. The webhook uses a secret request header derived on the backend and takes over any prior webhook for that bot. If it did not activate automatically, choose **Activate Telegram webhook** to retry. If `TELEGRAM_CHAT_ID` is already configured, ORA checks with Telegram that it identifies a private chat and links that chat on startup. The first message from that private chat binds its sender to the workspace. Group chats are ignored. Otherwise choose **Generate Telegram link** and open the one-time link in your private Telegram account within 10 minutes. Do not forward the link: whoever opens it first becomes the paired account. Disconnecting in Connections prevents the configured chat ID from relinking automatically.
 
 Send text to the bot. It uses the same ORA Mini workspace, AI request budget, and enabled tools as web and Android. Use `/tasks`, `/pending`, and `/files`; send `/file ID` to receive an approved DOCX, PDF, PPTX, or XLSX file. Proposed writes still require approval in **Tools & activity** on the web or paired phone. Telegram groups, voice notes and uploads are not enabled by this gateway. With Render Free, the first message after sleep may wait for the service to wake; Telegram retries unsuccessful webhook delivery.
 

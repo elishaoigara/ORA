@@ -130,6 +130,19 @@ def configure(store):
     bot_call('setWebhook', {'url': url + '/api/v2/telegram/webhook',
                             'secret_token': webhook_secret(), 'allowed_updates': ['message'],
                             'max_connections': 1})
+    legacy_chat = None
+    configured_chat = os.getenv('TELEGRAM_CHAT_ID', '').strip()
+    if re.fullmatch(r'[1-9][0-9]{0,15}', configured_chat):
+        try:
+            candidate = bot_call('getChat', {'chat_id': int(configured_chat)})
+            if (candidate.get('type') == 'private' and
+                    type(candidate.get('id')) is int and
+                    candidate['id'] == int(configured_chat)):
+                legacy_chat = {'chat_id': candidate['id'],
+                               'first_name': str(candidate.get('first_name') or 'Owner')[:80]}
+        except HTTPException:
+            # A stale chat ID must not prevent the private pairing flow.
+            pass
     def save(s):
         telegram = s.setdefault('telegram', {})
         if telegram.get('bot_id') != me['id']:
@@ -137,6 +150,8 @@ def configure(store):
                 telegram.pop(key, None)
             s['telegram_updates'] = []
         telegram.update(bot_id=me['id'], username=me['username'])
+        if legacy_chat and not telegram.get('chat_id') and not telegram.get('legacy_link_disabled'):
+            telegram.update(legacy_chat)
     store.mutate(save)
     return {'ok': True, 'username': me['username']}
 
@@ -192,6 +207,7 @@ def install(app, store_factory, owner, chat, Chat, limited):
             telegram = s.setdefault('telegram', {})
             for key in ('chat_id', 'user_id', 'first_name', 'pairing'):
                 telegram.pop(key, None)
+            telegram['legacy_link_disabled'] = True
             return {'ok': True}
         return store_factory().mutate(save)
 
@@ -230,7 +246,17 @@ def install(app, store_factory, owner, chat, Chat, limited):
             if telegram.get('user_id') != peer['id'] or telegram.get('chat_id') != room['id']:
                 return {'ok': True}
             incoming = ''
-        authorized = telegram.get('user_id') == peer['id'] and telegram.get('chat_id') == room['id']
+        authorized = (telegram.get('chat_id') == room['id'] and
+                      telegram.get('user_id') in (None, peer['id']))
+        if authorized and telegram.get('user_id') is None:
+            def bind_private_owner(s):
+                row = s.setdefault('telegram', {})
+                if row.get('chat_id') != room['id'] or row.get('user_id') not in (None, peer['id']):
+                    return False
+                row['user_id'] = peer['id']
+                return True
+            if not store.mutate(bind_private_owner):
+                return {'ok': True}
         pairing = telegram.get('pairing', {})
         code = incoming.split(' ', 1)[-1].strip().upper() if incoming.startswith('/start ') else ''
         if not authorized:
@@ -247,6 +273,7 @@ def install(app, store_factory, owner, chat, Chat, limited):
                 row.update(user_id=peer['id'], chat_id=room['id'],
                            first_name=str(peer.get('first_name', 'Owner'))[:80])
                 row.pop('pairing', None)
+                row['legacy_link_disabled'] = True
                 return True
             if not store.mutate(link):
                 return {'ok': True}
