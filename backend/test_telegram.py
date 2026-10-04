@@ -11,7 +11,7 @@ os.environ['ORA_API_TOKEN'] = 'telegram-test-owner-key'
 from fastapi.testclient import TestClient
 import next_api as api
 from mini.store import Store
-from mini.telegram import webhook_secret
+from mini.telegram import automatic_setup, public_url, webhook_secret
 
 
 class Reply:
@@ -137,6 +137,17 @@ class TelegramTests(unittest.TestCase):
         api.store.mutate(lambda s: s['telegram'].update(bot_id=1234))
         self.client.post('/api/v2/telegram/setup', headers=self.owner)
         self.assertFalse(self.client.get('/api/v2/telegram/status', headers=self.owner).json()['linked'])
+
+    def test_render_external_url_automatically_registers_webhook(self):
+        with patch.dict(os.environ, {'ORA_PUBLIC_URL': '',
+                                      'RENDER_EXTERNAL_URL': 'https://ora-example.onrender.com'}):
+            self.assertEqual(public_url(), 'https://ora-example.onrender.com')
+            automatic_setup(api.store)
+            self.assertEqual(self.webhook_url,
+                             'https://ora-example.onrender.com/api/v2/telegram/webhook')
+            status = self.client.get('/api/v2/telegram/status', headers=self.owner).json()
+            self.assertTrue(status['webhook_active'])
+            self.assertFalse(status['linked'])
 
 
 if __name__ == '__main__':

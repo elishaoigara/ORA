@@ -20,8 +20,6 @@ services:
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
-      - key: ORA_PUBLIC_URL
-        sync: false
       - key: CORS_ORIGINS
         sync: false
       - key: GROQ_MODEL_PRIMARY

@@ -1070,9 +1070,9 @@ export default function App() {
                   <>
                     {telegram && (!telegram.configured || !telegram.public_url_configured) && (
                       <p className="muted">
-                        Set TELEGRAM_BOT_TOKEN and ORA_PUBLIC_URL on the Render
-                        backend to activate this connection. A Vercel environment
-                        variable is only available to the web deployment.
+                        {telegram.configured
+                          ? "Set ORA_PUBLIC_URL to this backend’s HTTPS origin if your host does not provide one."
+                          : "Set TELEGRAM_BOT_TOKEN on the Render backend and redeploy to activate this connection."}
                       </p>
                     )}
                     {telegram?.configured && telegram?.public_url_configured && (
