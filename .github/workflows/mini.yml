@@ -11,7 +11,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r backend/requirements-mini.txt httpx
-      - run: python -m unittest test_mini test_companion test_tools test_artifacts -v
+      - run: python -m unittest test_mini test_companion test_tools test_artifacts test_telegram -v
         working-directory: backend
   web:
     runs-on: ubuntu-latest

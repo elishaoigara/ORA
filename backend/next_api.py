@@ -647,3 +647,5 @@ from mini.workspaces import install as install_workspaces
 install_workspaces(app, db, identity, limited)
 from mini.desktop import install as install_desktop
 install_desktop(app, db, identity, owner, limited)
+from mini.telegram import install as install_telegram
+install_telegram(app, db, owner, chat, Chat, limited)

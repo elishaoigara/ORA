@@ -41,6 +41,8 @@ Configure these environment variables:
 | `GROQ_MODEL_PRIMARY` | `llama-3.3-70b-versatile` by default |
 | `GROQ_STT_MODEL` | `whisper-large-v3-turbo` by default |
 | `ORA_DAILY_AI_REQUESTS` | `100` default; adjust to your provider quota/budget |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather, for the Render backend only |
+| `ORA_PUBLIC_URL` | HTTPS backend origin, for example `https://your-backend.onrender.com` (no path or trailing slash) |
 
 Do not add wildcard browser origins. `ORA_API_TOKEN` is not a Google or Supabase token. Keep one worker: it bounds inference concurrency and avoids simultaneous model requests from multiple clients. Durable database transactions still protect task mutations.
 
@@ -74,6 +76,16 @@ The import refuses to overwrite a nonempty Mini task/message/memory workspace. I
 - Redeploy the matching branch.
 
 Open the web app and enter the owner key. That key is exchanged over HTTPS for a short-lived opaque session. The key itself is not retained. The temporary session, cached workspace and drafts use tab-scoped browser session storage; avoid public/shared browsers and disconnect when finished.
+
+### Telegram
+
+Telegram delivers bot updates to the active FastAPI backend on Render. A bot token saved only in Vercel's environment is unavailable to that backend. Copy the same bot token from your password manager or Vercel secret setting into Render as `TELEGRAM_BOT_TOKEN`; never put it in a `VITE_*` variable, source control, or chat. Set `ORA_PUBLIC_URL` to the public HTTPS Render origin and redeploy Render.
+
+In the web app, open **Connections → Telegram → Activate Telegram webhook**. This owner-only action checks the token and registers `/api/v2/telegram/webhook` with Telegram using a secret request header derived on the backend. It takes over any prior webhook for that bot. Then choose **Generate Telegram link** and open the one-time link in your private Telegram account within 10 minutes. Do not forward the link: whoever opens it first becomes the paired account. You can disconnect from Connections and create a fresh link.
+
+Send text to the bot. It uses the same ORA Mini workspace, AI request budget, and enabled tools as web and Android. Use `/tasks`, `/pending`, and `/files`; send `/file ID` to receive an approved DOCX, PDF, PPTX, or XLSX file. Proposed writes still require approval in **Tools & activity** on the web or paired phone. Telegram groups, voice notes and uploads are not enabled by this gateway. With Render Free, the first message after sleep may wait for the service to wake; Telegram retries unsuccessful webhook delivery.
+
+To validate, send `/help` from the linked private chat, create a task request, approve it in ORA, and check `/tasks`. Send the same command from another account; it must receive no workspace data. If setup reports a token error, check that the value on Render is a BotFather bot token and that `ORA_PUBLIC_URL` points to this API rather than the Vercel frontend.
 
 Add a task, refresh, and check that it survives. Ask ORA for a reminder; approve the proposal. The task must appear exactly once.
 

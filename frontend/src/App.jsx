@@ -141,6 +141,8 @@ export default function App() {
   const [when, setWhen] = useState("");
   const [memory, setMemory] = useState("");
   const [pairCode, setPairCode] = useState("");
+  const [telegram, setTelegram] = useState(null);
+  const [telegramLink, setTelegramLink] = useState(null);
   const [voices, setVoices] = useState([]);
   const [voice, setVoice] = useState(localStorage.getItem("ora:voice") || "");
   const [autoSpeak, setAutoSpeak] = useState(false);
@@ -152,6 +154,13 @@ export default function App() {
   const bottom = useRef(null);
   const syncing = useRef(false);
   const busyRef = useRef(false);
+  const refreshTelegram = useCallback(async () => {
+    try {
+      setTelegram(await api("/telegram/status"));
+    } catch (e) {
+      setError(e.message);
+    }
+  }, []);
   const sync = useCallback(async () => {
     if (syncing.current) return;
     syncing.current = true;
@@ -205,6 +214,9 @@ export default function App() {
       window.removeEventListener("online", focus);
     };
   }, [authenticated, sync]);
+  useEffect(() => {
+    if (authenticated && page === "settings") refreshTelegram();
+  }, [authenticated, page, refreshTelegram]);
   useEffect(() => {
     save("draft", draft);
   }, [draft]);
@@ -1029,6 +1041,77 @@ export default function App() {
                   )}
                 </section>
               </div>
+              <section className="panel settings-panel">
+                <h2>Telegram</h2>
+                <p className="muted">
+                  Chat with ORA in a private Telegram conversation. It shares your
+                  tasks, memory, research and file tools. Review proposed changes
+                  in Tools & activity before they run.
+                </p>
+                <button className="text-button" disabled={busy} onClick={refreshTelegram}>
+                  Check Telegram connection
+                </button>
+                {telegram?.linked ? (
+                  <>
+                    <p>Connected as {telegram.first_name || "your Telegram account"}.</p>
+                    <button
+                      disabled={busy}
+                      className="button ghost"
+                      onClick={() => run(async () => {
+                        await api("/telegram/link", null, "DELETE");
+                        setTelegramLink(null);
+                        await refreshTelegram();
+                      })}
+                    >
+                      Disconnect Telegram
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {telegram && (!telegram.configured || !telegram.public_url_configured) && (
+                      <p className="muted">
+                        Set TELEGRAM_BOT_TOKEN and ORA_PUBLIC_URL on the Render
+                        backend to activate this connection. A Vercel environment
+                        variable is only available to the web deployment.
+                      </p>
+                    )}
+                    {telegram?.configured && telegram?.public_url_configured && (
+                      <>
+                        <button
+                          disabled={busy}
+                          className="button ghost"
+                          onClick={() => run(async () => {
+                            await api("/telegram/setup", {});
+                            await refreshTelegram();
+                          })}
+                        >
+                          {telegram.webhook_active ? "Refresh Telegram webhook" : "Activate Telegram webhook"}
+                        </button>
+                        {telegram.webhook_active && (
+                          <button
+                            disabled={busy}
+                            className="button primary"
+                            onClick={() => run(async () => {
+                              setTelegramLink(await api("/telegram/pairing-code", {}));
+                            })}
+                          >
+                            Generate Telegram link
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {telegramLink && (
+                      <div className="pair-code">
+                        <a href={telegramLink.url} target="_blank" rel="noreferrer">
+                          Open @{telegram?.username} in Telegram
+                        </a>
+                        <small>One-time link · expires in 10 minutes</small>
+                      </div>
+                    )}
+                  </>
+                )}
+                {telegram?.linked && <p className="muted">Use /help in Telegram for commands. Generated files are available with /files after approval.</p>}
+              </section>
               <section className="panel settings-panel">
                 <h2>Your rhythm</h2>
                 <form
