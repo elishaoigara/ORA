@@ -40,6 +40,9 @@ def db():
 async def lifespan(app):
     global store
     store = Store()
+    if os.getenv('RENDER_EXTERNAL_URL') and os.getenv('TELEGRAM_BOT_TOKEN'):
+        from mini.telegram import automatic_setup
+        threading.Thread(target=automatic_setup, args=(store,), daemon=True).start()
     yield
 
 

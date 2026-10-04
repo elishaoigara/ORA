@@ -1,6 +1,7 @@
 """Private Telegram gateway for the active ORA Mini workspace."""
 import hashlib
 import hmac
+import logging
 import os
 import re
 import secrets
@@ -25,11 +26,15 @@ def webhook_secret():
 
 
 def public_url():
-    value = os.getenv('ORA_PUBLIC_URL', '').rstrip('/')
-    parsed = urlsplit(value)
-    if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or
-            parsed.password or parsed.port not in (None, 443) or parsed.path or
-            parsed.query or parsed.fragment):
+    value = (os.getenv('ORA_PUBLIC_URL') or os.getenv('RENDER_EXTERNAL_URL', '')).rstrip('/')
+    try:
+        parsed = urlsplit(value)
+        valid = (parsed.scheme == 'https' and parsed.hostname and not parsed.username and
+                 not parsed.password and parsed.port in (None, 443) and not parsed.path and
+                 not parsed.query and not parsed.fragment)
+    except ValueError:
+        valid = False
+    if not valid:
         return ''
     return value
 
@@ -115,6 +120,37 @@ def command(text, store):
     return [{'type': 'text', 'text': 'Unknown command. Use /help to see commands.'}]
 
 
+def configure(store):
+    url = public_url()
+    if not url:
+        raise HTTPException(503, 'Set ORA_PUBLIC_URL to the HTTPS backend origin.')
+    me = bot_call('getMe')
+    if not me.get('is_bot') or not me.get('username'):
+        raise HTTPException(503, 'Telegram did not return a usable bot username.')
+    bot_call('setWebhook', {'url': url + '/api/v2/telegram/webhook',
+                            'secret_token': webhook_secret(), 'allowed_updates': ['message'],
+                            'max_connections': 1})
+    def save(s):
+        telegram = s.setdefault('telegram', {})
+        if telegram.get('bot_id') != me['id']:
+            for key in ('chat_id', 'user_id', 'first_name', 'pairing'):
+                telegram.pop(key, None)
+            s['telegram_updates'] = []
+        telegram.update(bot_id=me['id'], username=me['username'])
+    store.mutate(save)
+    return {'ok': True, 'username': me['username']}
+
+
+def automatic_setup(store):
+    if not token() or not public_url():
+        return
+    try:
+        configure(store)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            'Telegram webhook registration failed; retry from ORA Connections.')
+
+
 def install(app, store_factory, owner, chat, Chat, limited):
     @app.get('/api/v2/telegram/status')
     def status(auth=Depends(owner)):
@@ -133,24 +169,7 @@ def install(app, store_factory, owner, chat, Chat, limited):
 
     @app.post('/api/v2/telegram/setup')
     def setup(auth=Depends(owner)):
-        url = public_url()
-        if not url:
-            raise HTTPException(503, 'Set ORA_PUBLIC_URL to the HTTPS Render backend origin.')
-        me = bot_call('getMe')
-        if not me.get('is_bot') or not me.get('username'):
-            raise HTTPException(503, 'Telegram did not return a usable bot username.')
-        bot_call('setWebhook', {'url': url + '/api/v2/telegram/webhook',
-                                'secret_token': webhook_secret(), 'allowed_updates': ['message'],
-                                'max_connections': 1})
-        def save(s):
-            telegram = s.setdefault('telegram', {})
-            if telegram.get('bot_id') != me['id']:
-                for key in ('chat_id', 'user_id', 'first_name', 'pairing'):
-                    telegram.pop(key, None)
-                s['telegram_updates'] = []
-            telegram.update(bot_id=me['id'], username=me['username'])
-        store_factory().mutate(save)
-        return {'ok': True, 'username': me['username']}
+        return configure(store_factory())
 
     @app.post('/api/v2/telegram/pairing-code')
     def pairing_code(auth=Depends(owner)):
