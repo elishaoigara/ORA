@@ -181,8 +181,9 @@ def install(app, store_factory, owner, chat, Chat, limited):
         if not token() or not hmac.compare_digest(x_telegram_bot_api_secret_token, webhook_secret()):
             raise HTTPException(403, 'Invalid webhook credentials.')
         body = await request.body()
-        if len(body) > 16384:
-            raise HTTPException(413, 'Telegram update is too large.')
+        if len(body) > 131072:
+            # Acknowledge unsupported oversized updates so Telegram does not retry forever.
+            return {'ok': True}
         try:
             import json
             update = json.loads(body)
