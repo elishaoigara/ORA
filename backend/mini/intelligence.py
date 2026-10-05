@@ -48,10 +48,30 @@ Use tools for factual lookups and requested actions. Read tools execute and retu
 For requested files, gather live evidence with research.sources or web.read when needed, cite source URLs in the file text, then prepare documents.create, presentations.create or spreadsheets.create. Use documents.list/read and the matching edit tool for revisions; use current versions and replace content only after review. DOCX, PDF, PPTX and XLSX are rendered for download after approval. Do not imply a file exists before the creation tool completes. Spreadsheet strings are literal text and cannot run formulas.'''
 
 
+def ai_provider():
+    """Select the chat provider without exposing a secret to clients or logs."""
+    name = os.getenv('ORA_AI_PROVIDER', '').strip().lower()
+    if not name:
+        name = 'deepseek' if os.getenv('DEEPSEEK_API_KEY', '').strip() else 'groq'
+    if name == 'deepseek':
+        return {'name': name, 'key': os.getenv('DEEPSEEK_API_KEY', '').strip(),
+                'model': os.getenv('DEEPSEEK_MODEL', 'deepseek-flash'),
+                'url': 'https://api.deepseek.com/chat/completions'}
+    if name == 'groq':
+        return {'name': name, 'key': os.getenv('GROQ_API_KEY', '').strip(),
+                'model': os.getenv('GROQ_MODEL_PRIMARY', 'llama-3.3-70b-versatile'),
+                'url': 'https://api.groq.com/openai/v1/chat/completions'}
+    return {'name': name, 'key': '', 'model': '', 'url': ''}
+
+
 def respond(state, text, execute=None):
-    key = os.getenv('GROQ_API_KEY', '')
-    if not key:
-        raise RuntimeError('AI is not configured. Add GROQ_API_KEY to the backend.')
+    provider = ai_provider()
+    if provider['name'] not in ('deepseek', 'groq'):
+        raise RuntimeError('Set ORA_AI_PROVIDER to deepseek or groq on the backend.')
+    if not provider['key']:
+        raise RuntimeError('AI is not configured. Add ' +
+                           ('DEEPSEEK_API_KEY' if provider['name'] == 'deepseek' else 'GROQ_API_KEY') +
+                           ' to the Render backend.')
     messages = [{'role': 'system', 'content': SYSTEM + '\nWorkspace: ' + json.dumps(context(state, text), ensure_ascii=False)}]
     messages += [{'role': m['role'], 'content': m['text'][:1400]} for m in state['messages'][-8:] if m['role'] in ('user','assistant')]
     # The caller has not yet inserted this user turn.
@@ -62,10 +82,20 @@ def respond(state, text, execute=None):
     unified=tool('use_tool','Execute a read tool or prepare a write approval. Never approves writes.',{'name':{'type':'string','enum':[t['name'] for t in available]},'arguments':{'type':'string','description':'A JSON object with tool arguments.'}},['name','arguments'])
     proposals=[]
     for turn in range(3):
-        payload={'model':os.getenv('GROQ_MODEL_PRIMARY','llama-3.3-70b-versatile'),'messages':messages,
+        payload={'model':provider['model'],'messages':messages,
                  'temperature':0.3,'max_tokens':1800}
+        if provider['name'] == 'deepseek':
+            # Keep chat and tool calls within ORA's short webhook request window.
+            payload['thinking'] = {'type': 'disabled'}
         if turn<2:payload.update(tools=TOOLS+([unified] if execute else []),tool_choice='auto')
-        response=requests.post('https://api.groq.com/openai/v1/chat/completions',headers={'Authorization':'Bearer '+key},json=payload,timeout=(5,25))
+        try:
+            response=requests.post(provider['url'],headers={'Authorization':'Bearer '+provider['key']},json=payload,timeout=(5,25))
+        except requests.RequestException:
+            raise RuntimeError('ORA’s AI provider is unavailable. Try again in a moment.')
+        if response.status_code in (401, 403):
+            raise RuntimeError('The '+provider['name']+' API key was rejected. Check the key on Render.')
+        if response.status_code == 402:
+            raise RuntimeError('The '+provider['name']+' account has insufficient API balance.')
         if not response.ok:raise RuntimeError('ORA’s AI provider is busy or unavailable. Check Tools & activity for any actions already prepared.')
         message=response.json()['choices'][0]['message']
         calls=message.get('tool_calls',[])
