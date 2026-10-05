@@ -18,7 +18,7 @@ from fastapi import FastAPI, Depends, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from mini.store import Store, now
-from mini.intelligence import respond, suggestions
+from mini.intelligence import respond, suggestions, ai_provider
 from mini.tools import Runtime, catalog, visible, BY_NAME, public_run, allowed_repos
 from mini.artifacts import metadata as file_metadata, render as render_file
 from mini.companion import weather_check, dispatch, alert
@@ -124,8 +124,10 @@ def new_session(state, device_id=None):
 
 @app.get('/api/health')
 def health():
+    provider = ai_provider()
     return {'ok': store is not None, 'release': 'ora-mini-2', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
-            'companion_release': '2.2', 'work_release': '1.0', 'reminders': 'android-local', 'ai_configured': bool(os.getenv('GROQ_API_KEY'))}
+            'companion_release': '2.2', 'work_release': '1.0', 'reminders': 'android-local',
+            'ai_provider': provider['name'], 'ai_configured': bool(provider['key'])}
 
 
 @app.post('/api/v2/session')
