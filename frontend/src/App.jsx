@@ -1051,6 +1051,9 @@ export default function App() {
                 <button className="text-button" disabled={busy} onClick={refreshTelegram}>
                   Check Telegram connection
                 </button>
+                {telegram?.username && (
+                  <p className="muted">Bot: @{telegram.username}</p>
+                )}
                 {telegram?.setup_error && (
                   <p role="alert" className="error">{telegram.setup_error}</p>
                 )}
@@ -1060,8 +1063,23 @@ export default function App() {
                 {telegram?.delivery_error && (
                   <p role="alert" className="error">Telegram delivery: {telegram.delivery_error}</p>
                 )}
+                {telegram?.webhook_error && (
+                  <p role="alert" className="error">ORA webhook: {telegram.webhook_error}</p>
+                )}
                 {telegram?.pending_updates > 0 && (
                   <p className="muted">{telegram.pending_updates} Telegram update(s) waiting for delivery.</p>
+                )}
+                {telegram?.configured && telegram?.public_url_configured && (
+                  <button
+                    disabled={busy}
+                    className="button ghost"
+                    onClick={() => run(async () => {
+                      await api("/telegram/setup", {});
+                      await refreshTelegram();
+                    })}
+                  >
+                    {telegram.webhook_active ? "Refresh Telegram webhook" : "Activate Telegram webhook"}
+                  </button>
                 )}
                 {telegram?.linked ? (
                   <>
@@ -1089,16 +1107,6 @@ export default function App() {
                     )}
                     {telegram?.configured && telegram?.public_url_configured && (
                       <>
-                        <button
-                          disabled={busy}
-                          className="button ghost"
-                          onClick={() => run(async () => {
-                            await api("/telegram/setup", {});
-                            await refreshTelegram();
-                          })}
-                        >
-                          {telegram.webhook_active ? "Refresh Telegram webhook" : "Activate Telegram webhook"}
-                        </button>
                         {telegram.webhook_active && (
                           <button
                             disabled={busy}
