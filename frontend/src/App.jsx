@@ -1051,6 +1051,18 @@ export default function App() {
                 <button className="text-button" disabled={busy} onClick={refreshTelegram}>
                   Check Telegram connection
                 </button>
+                {telegram?.setup_error && (
+                  <p role="alert" className="error">{telegram.setup_error}</p>
+                )}
+                {telegram?.webhook_active === false && telegram?.configured && (
+                  <p className="muted">Telegram webhook is inactive. Use Activate Telegram webhook below to retry.</p>
+                )}
+                {telegram?.delivery_error && (
+                  <p role="alert" className="error">Telegram delivery: {telegram.delivery_error}</p>
+                )}
+                {telegram?.pending_updates > 0 && (
+                  <p className="muted">{telegram.pending_updates} Telegram update(s) waiting for delivery.</p>
+                )}
                 {telegram?.linked ? (
                   <>
                     <p>Connected as {telegram.first_name || "your Telegram account"}.</p>

@@ -88,6 +88,8 @@ Send text to the bot. It uses the same ORA Mini workspace, AI request budget, an
 
 To validate, send `/help` from the linked private chat, create a task request, approve it in ORA, and check `/tasks`. Send the same command from another account; it must receive no workspace data. If setup reports a token error, check that the value on Render is a BotFather bot token. If you set `ORA_PUBLIC_URL` manually, it must point to this API rather than the Vercel frontend.
 
+If the bot stays silent, send `/start`. An unlinked private chat receives pairing instructions when the webhook is delivering updates. In web **Connections → Telegram**, use **Check Telegram connection** to see webhook state, delivery errors, and pending updates. If `/start` is also silent, inspect the latest Render deploy and startup logs; the bot token may be invalid or the webhook may still point elsewhere.
+
 Add a task, refresh, and check that it survives. Ask ORA for a reminder; approve the proposal. The task must appear exactly once.
 
 ## 5. Android APK

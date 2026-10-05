@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from requests import ConnectionError as RequestConnectionError
+from fastapi import HTTPException
 
 os.environ['APP_ENV'] = 'test'
 os.environ['ORA_API_TOKEN'] = 'telegram-test-owner-key'
@@ -85,6 +86,9 @@ class TelegramTests(unittest.TestCase):
     def test_owner_only_setup_and_one_time_private_pairing(self):
         self.assertEqual(self.client.post('/api/v2/telegram/setup').status_code, 401)
         self.assertEqual(self.update(1, text='Hello').status_code, 200)
+        self.assertEqual(self.update(2, text='/start').status_code, 200)
+        self.assertIn('pair this chat', self.sent[-1][1]['text'])
+        self.sent.clear()
         self.assertEqual(self.client.post('/api/v2/telegram/webhook', json={}).status_code, 403)
         code = self.pair()
         self.assertEqual(len(self.sent), 1)
@@ -169,6 +173,14 @@ class TelegramTests(unittest.TestCase):
             self.assertFalse(self.client.get('/api/v2/telegram/status', headers=self.owner).json()['linked'])
             self.assertEqual(self.update(150, user=123456, text='/tasks').status_code, 200)
             self.assertEqual(self.sent, [])
+
+    def test_failed_automatic_setup_is_visible_to_owner(self):
+        with patch('mini.telegram.bot_call', side_effect=HTTPException(503, 'Telegram rejected bot credentials.')):
+            automatic_setup(api.store)
+        status = self.client.get('/api/v2/telegram/status', headers=self.owner).json()
+        self.assertEqual(status['setup_error'], 'Telegram rejected bot credentials.')
+        self.assertFalse(status['webhook_active'])
+        self.assertNotIn('123:testing', str(status))
 
 
 if __name__ == '__main__':

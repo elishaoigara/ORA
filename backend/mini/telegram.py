@@ -150,6 +150,7 @@ def configure(store):
                 telegram.pop(key, None)
             s['telegram_updates'] = []
         telegram.update(bot_id=me['id'], username=me['username'])
+        telegram.pop('setup_error', None)
         if legacy_chat and not telegram.get('chat_id') and not telegram.get('legacy_link_disabled'):
             telegram.update(legacy_chat)
     store.mutate(save)
@@ -161,7 +162,12 @@ def automatic_setup(store):
         return
     try:
         configure(store)
-    except Exception:
+    except Exception as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else 'Telegram setup could not finish. Retry from Connections.'
+        try:
+            store.mutate(lambda s: s.setdefault('telegram', {}).update(setup_error=str(detail)[:240]))
+        except Exception:
+            pass
         logging.getLogger(__name__).warning(
             'Telegram webhook registration failed; retry from ORA Connections.')
 
@@ -172,14 +178,17 @@ def install(app, store_factory, owner, chat, Chat, limited):
         state = store_factory().read().get('telegram', {})
         result = {'configured': bool(token()), 'public_url_configured': bool(public_url()),
                   'linked': bool(state.get('chat_id')), 'username': state.get('username'),
-                  'first_name': state.get('first_name')}
+                  'first_name': state.get('first_name'),
+                  'setup_error': state.get('setup_error')}
         if token() and public_url():
             try:
                 info = bot_call('getWebhookInfo')
                 result['webhook_active'] = info.get('url') == public_url() + '/api/v2/telegram/webhook'
                 result['pending_updates'] = info.get('pending_update_count', 0)
-            except HTTPException:
+                result['delivery_error'] = str(info.get('last_error_message') or '')[:240]
+            except HTTPException as exc:
                 result['webhook_active'] = False
+                result['setup_error'] = exc.detail
         return result
 
     @app.post('/api/v2/telegram/setup')
@@ -263,6 +272,13 @@ def install(app, store_factory, owner, chat, Chat, limited):
             if (not re.fullmatch(r'[A-F0-9]{20}', code) or
                     pairing.get('expires_at', '') <= now() or
                     not hmac.compare_digest(pairing.get('hash', ''), hashlib.sha256(code.encode()).hexdigest())):
+                if incoming.strip().split('@', 1)[0] == '/start':
+                    try:
+                        limited('telegram-unpaired:' + str(peer['id']), 2)
+                    except HTTPException:
+                        return {'ok': True}
+                    bot_call('sendMessage', {'chat_id': room['id'],
+                                             'text': 'ORA is private. Open ORA web → Connections → Telegram to pair this chat.'})
                 return {'ok': True}
             def link(s):
                 row = s.setdefault('telegram', {})
