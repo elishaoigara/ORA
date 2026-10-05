@@ -132,6 +132,25 @@ class TelegramTests(unittest.TestCase):
             model.assert_called_once()
         self.assertEqual(self.sent[-1][1]['text'], 'A durable reply.')
 
+    def test_ai_outage_is_acknowledged_so_later_commands_arrive(self):
+        self.pair()
+        with patch.object(api, 'respond', side_effect=RuntimeError('AI provider unavailable')):
+            self.assertEqual(self.update(121, text='Hello').status_code, 200)
+        self.assertIn('temporarily unavailable', self.sent[-1][1]['text'])
+        self.assertEqual(self.update(122, text='/tasks').status_code, 200)
+        self.assertEqual(self.sent[-1][1]['text'], 'No open tasks.')
+        self.assertIsNone(self.client.get('/api/v2/telegram/status', headers=self.owner).json()['webhook_error'])
+
+    def test_failed_reply_exposes_safe_owner_only_webhook_diagnostic(self):
+        self.pair()
+        self.fail_send = True
+        self.assertEqual(self.update(123, text='/tasks').status_code, 503)
+        status = self.client.get('/api/v2/telegram/status', headers=self.owner).json()
+        self.assertIn('Telegram is unavailable', status['webhook_error'])
+        self.assertNotIn('123:testing', str(status))
+        self.assertEqual(self.update(123, text='/tasks').status_code, 200)
+        self.assertIsNone(self.client.get('/api/v2/telegram/status', headers=self.owner).json()['webhook_error'])
+
     def test_file_download_and_wrong_bot_reset(self):
         self.pair()
         api.store.mutate(lambda s: s['documents'].append(

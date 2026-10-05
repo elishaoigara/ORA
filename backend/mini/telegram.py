@@ -179,7 +179,8 @@ def install(app, store_factory, owner, chat, Chat, limited):
         result = {'configured': bool(token()), 'public_url_configured': bool(public_url()),
                   'linked': bool(state.get('chat_id')), 'username': state.get('username'),
                   'first_name': state.get('first_name'),
-                  'setup_error': state.get('setup_error')}
+                  'setup_error': state.get('setup_error'),
+                  'webhook_error': state.get('webhook_error')}
         if token() and public_url():
             try:
                 info = bot_call('getWebhookInfo')
@@ -331,9 +332,15 @@ def install(app, store_factory, owner, chat, Chat, limited):
                                   if result.get('actions') else '')
                         parts = [{'type': 'text', 'text': chunk} for chunk in chunks(result['reply'] + suffix)]
                     except HTTPException as exc:
-                        if exc.status_code not in (400, 413, 422, 429):
-                            raise
-                        parts = [{'type': 'text', 'text': str(exc.detail)}]
+                        # A model outage must not keep this update ahead of all later
+                        # commands in Telegram's retry queue. The user can retry the
+                        # message after ORA's AI is available again.
+                        if exc.status_code >= 500:
+                            parts = [{'type': 'text', 'text':
+                                      'ORA’s AI is temporarily unavailable. Please try that message again later. '
+                                      '/help, /tasks and /files still work.'}]
+                        else:
+                            parts = [{'type': 'text', 'text': str(exc.detail)}]
                 def ready(s):
                     row = next(r for r in s['telegram_updates'] if r['id'] == update_id)
                     row.update(status='ready', parts=parts)
@@ -352,12 +359,18 @@ def install(app, store_factory, owner, chat, Chat, limited):
                 row['status'] = 'done'
                 row.pop('parts', None)
                 row.pop('lease_until', None)
+                s.setdefault('telegram', {}).pop('webhook_error', None)
             store.mutate(done)
             return {'ok': True}
-        except Exception:
+        except Exception as exc:
             def retry(s):
                 row = next((r for r in s.get('telegram_updates', []) if r['id'] == update_id), None)
                 if row:
                     row['lease_until'] = 0
+                # This owner-only diagnostic avoids exposing bot credentials or
+                # private message content while identifying a failing API call.
+                error = (str(exc.detail)[:240] if isinstance(exc, HTTPException)
+                         else 'Webhook processing failed (' + type(exc).__name__ + ').')
+                s.setdefault('telegram', {})['webhook_error'] = error
             store.mutate(retry)
             raise
