@@ -16,13 +16,17 @@ services:
         sync: false
       - key: ORA_API_TOKEN
         sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      # Optional Groq credential for voice and image analysis only.
       - key: GROQ_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: CORS_ORIGINS
         sync: false
-      - key: GROQ_MODEL_PRIMARY
-        value: llama-3.3-70b-versatile
+      - key: DEEPSEEK_MODEL
+        value: deepseek-flash
       - key: ORA_DAILY_AI_REQUESTS
         value: "100"
+

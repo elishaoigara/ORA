@@ -125,7 +125,8 @@ def new_session(state, device_id=None):
 @app.get('/api/health')
 def health():
     return {'ok': store is not None, 'release': 'ora-mini-2', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
-            'companion_release': '2.2', 'work_release': '1.0', 'reminders': 'android-local', 'ai_configured': bool(os.getenv('GROQ_API_KEY'))}
+            'companion_release': '2.2', 'work_release': '1.0', 'reminders': 'android-local', 'ai_configured': bool(os.getenv('DEEPSEEK_API_KEY')), 'ai_provider': 'deepseek',
+            'ai_model': os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')}
 
 
 @app.post('/api/v2/session')
@@ -652,3 +653,4 @@ from mini.desktop import install as install_desktop
 install_desktop(app, db, identity, owner, limited)
 from mini.telegram import install as install_telegram
 install_telegram(app, db, owner, chat, Chat, limited)
+

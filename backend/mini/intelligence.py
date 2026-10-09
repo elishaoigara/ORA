@@ -49,9 +49,9 @@ For requested files, gather live evidence with research.sources or web.read when
 
 
 def respond(state, text, execute=None):
-    key = os.getenv('GROQ_API_KEY', '')
+    key = os.getenv('DEEPSEEK_API_KEY', '')
     if not key:
-        raise RuntimeError('AI is not configured. Add GROQ_API_KEY to the backend.')
+        raise RuntimeError('AI is not configured. Add DEEPSEEK_API_KEY to the backend.')
     messages = [{'role': 'system', 'content': SYSTEM + '\nWorkspace: ' + json.dumps(context(state, text), ensure_ascii=False)}]
     messages += [{'role': m['role'], 'content': m['text'][:1400]} for m in state['messages'][-8:] if m['role'] in ('user','assistant')]
     # The caller has not yet inserted this user turn.
@@ -62,10 +62,10 @@ def respond(state, text, execute=None):
     unified=tool('use_tool','Execute a read tool or prepare a write approval. Never approves writes.',{'name':{'type':'string','enum':[t['name'] for t in available]},'arguments':{'type':'string','description':'A JSON object with tool arguments.'}},['name','arguments'])
     proposals=[]
     for turn in range(3):
-        payload={'model':os.getenv('GROQ_MODEL_PRIMARY','llama-3.3-70b-versatile'),'messages':messages,
-                 'temperature':0.3,'max_tokens':1800}
+        payload={'model':os.getenv('DEEPSEEK_MODEL','deepseek-flash'),'messages':messages,
+                 'temperature':0.3,'max_tokens':1800,'thinking':{'type':'disabled'}}
         if turn<2:payload.update(tools=TOOLS+([unified] if execute else []),tool_choice='auto')
-        response=requests.post('https://api.groq.com/openai/v1/chat/completions',headers={'Authorization':'Bearer '+key},json=payload,timeout=(5,25))
+        response=requests.post('https://api.deepseek.com/chat/completions',headers={'Authorization':'Bearer '+key},json=payload,timeout=(5,25))
         if not response.ok:raise RuntimeError('ORA’s AI provider is busy or unavailable. Check Tools & activity for any actions already prepared.')
         message=response.json()['choices'][0]['message']
         calls=message.get('tool_calls',[])
@@ -86,3 +86,4 @@ def respond(state, text, execute=None):
             if len(encoded)>14000:encoded=json.dumps({'truncated':True,'excerpt':encoded[:14000],'note':'Inspect the complete result in Tools & activity; narrow further reads.'})
             messages.append({'role':'tool','tool_call_id':call['id'],'content':encoded})
     return 'I prepared the available results. Open Tools & activity to review any pending actions.',proposals
+
