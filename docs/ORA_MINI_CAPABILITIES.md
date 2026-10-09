@@ -27,7 +27,7 @@ The active workspace holds at most 500 tasks, 300 recent conversation turns, 200
 
 Android's saved workspace and outbox live in app-private AsyncStorage. The access credential lives in SecureStore. The native notification queue is app-private and bounded to 30 events; redaction is heuristic, not a guarantee that all sensitive text is removed. Use metadata-only access in future refinements if broader sources are added; this UI configures redacted previews only. Logout clears the Mini cache/outbox and cancels local reminders. Browser caches are tab-scoped.
 
-AI inputs are sent to your configured Groq account. Only confirmed memory, selected recent phone context, a small task snapshot and relevant document excerpts enter context. Uploaded/phone content is explicitly marked untrusted; prompts inside it must not grant tool authority. Model-generated tasks, memories and outgoing drafts remain approval-gated.
+Chat and tool reasoning inputs are sent to your configured DeepSeek account. Voice recordings and image-analysis uploads still use Groq when configured. Only confirmed memory, selected recent phone context, a small task snapshot and relevant document excerpts enter context. Uploaded/phone content is explicitly marked untrusted; prompts inside it must not grant tool authority. Model-generated tasks, memories and outgoing drafts remain approval-gated.
 
 ## Legacy functionality
 
@@ -38,3 +38,4 @@ Old Gmail/Calendar/Drive OAuth, M-Pesa ingestion, Telegram polling, WhatsApp sid
 The next meaningful expansion is durable provider OAuth and event-based synchronization, then an Android background worker with a battery-aware, consented outbox. Full-time cloud intelligence requires an always-running service or another event platform; Render Free cannot supply that property. Additional phone powers must be implemented and tested individually through Android-supported APIs. Do not add accessibility-service automation or bypass app isolation to simulate “access to everything.”
 
 Mutation receipts are retained in a separate private table to prevent duplicate operations after reconnects; they can contain the original operation response. Deleting an active memory or document removes it from the active assistant context, not from provider backups or historical conversation/receipt records. A full retention and history-erasure policy is separate work before any multi-user release.
+
