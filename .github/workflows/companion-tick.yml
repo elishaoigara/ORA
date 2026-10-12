@@ -1,4 +1,4 @@
-name: Companion weather and push dispatch
+name: Companion weather and Telegram alerts
 on:
   workflow_dispatch:
   schedule:
@@ -18,8 +18,8 @@ jobs:
           ORA_CRON_TOKEN: ${{ secrets.ORA_CRON_TOKEN }}
         run: |
           if [ -z "$ORA_BACKEND_URL" ] || [ -z "$ORA_CRON_TOKEN" ]; then
-            echo "Set ORA_BACKEND_URL and ORA_CRON_TOKEN repository secrets to enable dispatch."
-            exit 0
+            echo "::error::Set ORA_BACKEND_URL and ORA_CRON_TOKEN repository secrets to enable dispatch."
+            exit 1
           fi
           curl --fail --silent --show-error --max-time 360 \
             --request POST --header "Authorization: Bearer $ORA_CRON_TOKEN" \

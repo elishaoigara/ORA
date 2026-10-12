@@ -1,8 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 import * as N from "expo-notifications";
-import Constants from "expo-constants";
 import { router } from "expo-router";
-import { makeId, readLocal, request, writeLocal } from "./api";
+import { makeId, readLocal, writeLocal } from "./api";
 const processing = new Set<string>();
 export type LocalAlert = {
   id: string;
@@ -21,21 +20,6 @@ export async function channels() {
       importance: N.AndroidImportance.DEFAULT,
       sound: "default",
     });
-}
-export async function registerPush() {
-  await writeLocal("pushEnabled", true);
-  await channels();
-  if ((await N.getPermissionsAsync()).status !== "granted")
-    throw new Error("Enable notifications first.");
-  const projectId = Constants.expoConfig?.extra?.eas?.projectId;
-  if (!projectId) throw new Error("EAS project is not linked.");
-  const token = (await N.getExpoPushTokenAsync({ projectId })).data;
-  await request("/operations", {
-    request_id: makeId(),
-    kind: "companion.push",
-    payload: { token, private: await readLocal("privateNotifications", true) },
-  });
-  await writeLocal("pushRegistered", new Date().toISOString());
 }
 export async function localTest() {
   await channels();
@@ -60,7 +44,6 @@ export async function notificationHealth() {
       .map((c) => c.name + ": " + (c.importance === 0 ? "blocked" : "enabled"))
       .join("\n"),
     lastSync: await readLocal("lastSync", "Never"),
-    push: await readLocal("pushRegistered", "Not registered"),
     error: await readLocal("notificationError", ""),
   };
 }
@@ -155,11 +138,6 @@ export function notificationListeners(
   const response = N.addNotificationResponseReceivedListener((r) => {
     void handle(r);
   });
-  const token = N.addPushTokenListener(() => {
-    void registerPush().catch((e) =>
-      writeLocal("notificationError", String(e)),
-    );
-  });
   void N.getLastNotificationResponseAsync().then((r) => r && handle(r));
   void N.getPresentedNotificationsAsync()
     .then((ns) => Promise.all(ns.map(record)))
@@ -168,6 +146,5 @@ export function notificationListeners(
     alive = false;
     received.remove();
     response.remove();
-    token.remove();
   };
 }

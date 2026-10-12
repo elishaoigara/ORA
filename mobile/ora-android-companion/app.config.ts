@@ -10,9 +10,6 @@ const config: ExpoConfig = {
   icon: "./assets/images/ora-horus.png",
   android: {
     package: "com.app.oraandroidcompanion",
-    ...(process.env.GOOGLE_SERVICES_JSON
-      ? { googleServicesFile: process.env.GOOGLE_SERVICES_JSON }
-      : {}),
     permissions: [
       "POST_NOTIFICATIONS",
       "com.android.alarm.permission.SET_ALARM",
@@ -30,7 +27,7 @@ const config: ExpoConfig = {
     "expo-secure-store",
     [
       "expo-notifications",
-      { color: "#e4bc73", defaultChannel: "ora-reminders" },
+      { color: "#a5b4fc", defaultChannel: "ora-reminders" },
     ],
     [
       "expo-audio",
@@ -86,3 +83,4 @@ const config: ExpoConfig = {
   },
 };
 export default config;
+

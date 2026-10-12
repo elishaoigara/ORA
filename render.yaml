@@ -16,6 +16,8 @@ services:
         sync: false
       - key: ORA_API_TOKEN
         sync: false
+      - key: ORA_CRON_TOKEN
+        sync: false
       - key: DEEPSEEK_API_KEY
         sync: false
       # Optional Groq credential for voice and image analysis only.

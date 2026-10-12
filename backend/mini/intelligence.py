@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 def suggestions(state):
     tasks = [t for t in state['tasks'] if not t['done']]
-    tasks.sort(key=lambda t: (t.get('due_at') or '9999', -t.get('priority', 2)))
+    tasks.sort(key=lambda t: (t.get('due_at') or '9999', t.get('priority', 2)))
     overdue = [t for t in tasks if t.get('due_at') and t['due_at'] < datetime.now(timezone.utc).isoformat()]
     cards = []
     if overdue:

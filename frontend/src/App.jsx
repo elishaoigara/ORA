@@ -142,6 +142,7 @@ export default function App() {
   const [memory, setMemory] = useState("");
   const [pairCode, setPairCode] = useState("");
   const [telegram, setTelegram] = useState(null);
+  const [readiness, setReadiness] = useState(null);
   const [telegramLink, setTelegramLink] = useState(null);
   const [voices, setVoices] = useState([]);
   const [voice, setVoice] = useState(localStorage.getItem("ora:voice") || "");
@@ -154,6 +155,13 @@ export default function App() {
   const bottom = useRef(null);
   const syncing = useRef(false);
   const busyRef = useRef(false);
+  const refreshReadiness = useCallback(async () => {
+    try {
+      setReadiness(await api("/readiness"));
+    } catch (e) {
+      setError(e.message);
+    }
+  }, []);
   const refreshTelegram = useCallback(async () => {
     try {
       setTelegram(await api("/telegram/status"));
@@ -215,8 +223,11 @@ export default function App() {
     };
   }, [authenticated, sync]);
   useEffect(() => {
-    if (authenticated && page === "settings") refreshTelegram();
-  }, [authenticated, page, refreshTelegram]);
+    if (authenticated && page === "settings") {
+      refreshTelegram();
+      refreshReadiness();
+    }
+  }, [authenticated, page, refreshTelegram, refreshReadiness]);
   useEffect(() => {
     save("draft", draft);
   }, [draft]);
@@ -367,7 +378,7 @@ export default function App() {
         <small>{dateLabel(t.due_at)}</small>
       </div>
       <span className={`priority p${t.priority}`}>
-        {["", "Low", "Normal", "Focus"][t.priority]}
+        {["", "High", "Normal", "Low"][t.priority]}
       </span>
       {page === "tasks" && (
         <button
@@ -563,7 +574,7 @@ export default function App() {
                       })
                       .toUpperCase()}
                   </span>
-                  <h1>Your day, with a little clarity.</h1>
+                  <h1>Your day, in focus.</h1>
                   <p className="muted">
                     Hey {data?.settings?.name || "there"}. What’s on your mind?
                   </p>
@@ -682,7 +693,7 @@ export default function App() {
               <div className="chat-heading">
                 <Orb small active={busy} />
                 <div>
-                  <h1>Think out loud.</h1>
+                  <h1>Talk to ORA</h1>
                   <p className="muted">A conversation that stays with you.</p>
                 </div>
                 <button
@@ -694,7 +705,7 @@ export default function App() {
                 </button>
               </div>
               <div className="conversation" aria-live="polite">
-                {!data?.messages?.length && (
+                {!(data?.messages || []).some((m) => !m.project_id) && (
                   <div className="chat-welcome">
                     <Icon name="spark" size={36} />
                     <h2>Big idea? Busy mind?</h2>
@@ -712,7 +723,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {(data?.messages || []).map((m) => (
+                {(data?.messages || []).filter((m) => !m.project_id).map((m) => (
                   <article key={m.id} className={`message ${m.role}`}>
                     <span className="message-label">
                       {m.role === "user" ? "YOU" : "ORA"}
@@ -742,7 +753,7 @@ export default function App() {
                 {busy && (
                   <div className="thinking">
                     <span />
-                    ORA is thinking. A sleeping server can take a minute.
+                    ORA is working on your reply…
                   </div>
                 )}
                 <div className="approval-grid">{approvalCards}</div>
@@ -964,12 +975,28 @@ export default function App() {
               <div className="page-heading">
                 <div>
                   <span className="eyebrow">MAKE ORA YOURS</span>
-                  <h1>One mind. Your world.</h1>
+                  <h1>Your connections</h1>
                   <p className="muted">
                     Choose the voice. Connect your phone. Stay in control.
                   </p>
                 </div>
               </div>
+              <section className="panel settings-panel readiness-panel">
+                <div className="section-heading">
+                  <h2>Connection health</h2>
+                  <button className="text-button" disabled={busy} onClick={refreshReadiness}>Refresh status</button>
+                </div>
+                {readiness ? <>
+                  <p><strong>AI connection:</strong> {readiness.ai_configured ? "Key configured · send a message to verify a reply." : "Needs setup on the backend."}</p>
+                  <p><strong>Automation:</strong> {readiness.scheduler_configured ? "Scheduler credential configured." : "Scheduler credential missing."}</p>
+                  <p className="muted">Last completed run: {readiness.scheduler_last_completed_at ? dateLabel(readiness.scheduler_last_completed_at) : "No completed run recorded yet."}</p>
+                </> : <p className="muted">Checking connection status…</p>}
+                <p className="muted">Phone reminders work after your Android has synced and scheduled them. Weather and routine alerts use your connected Telegram chat and an active scheduler.</p>
+                <div className="button-row">
+                  <button className="button ghost" onClick={() => setPage("tools")}>Tools & activity</button>
+                  <button className="button ghost" onClick={() => setPage("work")}>Projects & desktop</button>
+                </div>
+              </section>
               <div className="two-columns">
                 <section className="panel settings-panel">
                   <h2>A voice you connect with</h2>
@@ -1130,7 +1157,7 @@ export default function App() {
                     )}
                   </>
                 )}
-                {telegram?.linked && <p className="muted">Use /help in Telegram for commands. Generated files are available with /files after approval.</p>}
+                {telegram?.linked && <p className="muted">Send text or a voice note in Telegram. Use /voice on for spoken previews, /alerts on for daily check-ins, and /status to check delivery. Phone calls are optional and need Twilio setup. Enable phone weather and routine alerts in the Android notification center. Generated files are available with /files after approval.</p>}
               </section>
               <section className="panel settings-panel">
                 <h2>Your rhythm</h2>
@@ -1287,7 +1314,7 @@ export default function App() {
         </footer>
       </main>
       <nav className="mobile-nav">
-        {nav.map(([id, label, icon]) => (
+        {nav.filter(([id]) => !["tools", "work"].includes(id)).map(([id, label, icon]) => (
           <button
             key={id}
             className={page === id ? "selected" : ""}

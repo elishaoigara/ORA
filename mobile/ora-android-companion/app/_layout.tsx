@@ -4,6 +4,8 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ShareIntentProvider } from "expo-share-intent";
 import { AppLock } from "@/lib/mini/app-lock";
 import { MiniProvider } from "@/lib/mini/provider";
+import { colors } from "@/lib/mini/theme";
+export { ErrorBoundary } from "expo-router";
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
@@ -14,7 +16,7 @@ export default function RootLayout() {
             <Stack
               screenOptions={{
                 headerShown: false,
-                contentStyle: { backgroundColor: "#090e14" },
+                contentStyle: { backgroundColor: colors.background },
               }}
             />
           </AppLock>

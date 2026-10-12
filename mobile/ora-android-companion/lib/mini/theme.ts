@@ -1,10 +1,10 @@
 export const colors = {
-  background: "#090e14",
-  surface: "#111922",
-  raised: "#18222e",
-  border: "#26313e",
-  text: "#edf3f6",
-  muted: "#96a6b8",
-  cyan: "#e4bc73",
-  violet: "#c8ad86",
+  background: "#10131d",
+  surface: "#191e2c",
+  raised: "#22293a",
+  border: "#343d52",
+  text: "#f5f7fc",
+  muted: "#a8b3c8",
+  cyan: "#a5b4fc",
+  violet: "#5eead4",
 };

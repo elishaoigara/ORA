@@ -9,7 +9,9 @@ export default function TabLayout() {
         tabBarActiveTintColor: c.cyan,
         tabBarInactiveTintColor: c.muted,
         tabBarStyle: { backgroundColor: c.surface, borderTopColor: c.border },
-        tabBarLabelStyle: { fontSize: 11 },
+        tabBarLabelStyle: { fontSize: 12, fontWeight: "600" },
+        tabBarActiveBackgroundColor: c.raised,
+        tabBarItemStyle: { borderRadius: 16, marginHorizontal: 2 },
         sceneStyle: { backgroundColor: c.background },
       }}
     >

@@ -21,7 +21,7 @@ from mini.store import Store, now
 from mini.intelligence import respond, suggestions
 from mini.tools import Runtime, catalog, visible, BY_NAME, public_run, allowed_repos
 from mini.artifacts import metadata as file_metadata, render as render_file
-from mini.companion import weather_check, dispatch, alert
+from mini.companion import weather_check, dispatch, alert, telegram_check, delivery_status, enabled as telegram_alerts_enabled
 import re
 
 store = None
@@ -49,7 +49,7 @@ async def lifespan(app):
 app = FastAPI(title='ORA Mini', version='2.0.0', lifespan=lifespan,
               docs_url=None if os.getenv('APP_ENV') == 'production' else '/docs')
 app.add_middleware(CORSMiddleware, allow_origins=[s.strip() for s in os.getenv('CORS_ORIGINS', 'http://localhost:5173').split(',') if s.strip()],
-                   allow_methods=['GET', 'POST', 'DELETE'], allow_headers=['Authorization', 'Content-Type'])
+                   allow_methods=['GET', 'HEAD', 'POST', 'DELETE'], allow_headers=['Authorization', 'Content-Type'])
 
 
 def limited(key, limit=15):
@@ -122,11 +122,31 @@ def new_session(state, device_id=None):
     return token
 
 
-@app.get('/api/health')
+@app.api_route('/', methods=['GET', 'HEAD'])
+def root():
+    return {'service': 'ORA', 'health': '/api/health'}
+
+
+@app.api_route('/api/health', methods=['GET', 'HEAD'])
 def health():
-    return {'ok': store is not None, 'release': 'ora-mini-2', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
-            'companion_release': '2.2', 'work_release': '1.0', 'reminders': 'android-local', 'ai_configured': bool(os.getenv('DEEPSEEK_API_KEY')), 'ai_provider': 'deepseek',
+    try:
+        if not db().healthy():
+            raise RuntimeError('Missing workspace')
+    except Exception:
+        raise HTTPException(503, 'Workspace storage is unavailable.') from None
+    return {'ok': True, 'release': 'ora-mini-2.3', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
+            'companion_release': '2.3', 'work_release': '1.0', 'reminders': 'android-local', 'ai_configured': bool(os.getenv('DEEPSEEK_API_KEY')), 'ai_provider': 'deepseek',
             'ai_model': os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')}
+
+
+@app.get('/api/v2/readiness')
+def readiness(auth=Depends(identity)):
+    state = db().read()
+    return {'ai_configured': bool(os.getenv('DEEPSEEK_API_KEY')),
+            'scheduler_configured': len(os.getenv('ORA_CRON_TOKEN', '')) >= 32,
+            'scheduler_last_started_at': state.get('scheduler_at'),
+            'scheduler_last_completed_at': state.get('scheduler_completed_at'),
+            'reminders': 'android-local', 'delivery': delivery_status(state)}
 
 
 @app.post('/api/v2/session')
@@ -176,10 +196,13 @@ def pair(payload: Pair, request: Request):
 def snapshot(state, auth):
     data = {k: state[k] for k in ('revision', 'tasks', 'messages', 'memories', 'actions', 'settings')}
     data['documents'] = [file_metadata(d) for d in state['documents']]
-    data['devices'] = [{k: v for k, v in d.items() if k not in ('push_token', 'weather')} | {'push_registered': bool(d.get('push_token')), 'weather': {k: v for k, v in d.get('weather', {}).items() if k not in ('latitude', 'longitude')}} for d in state['devices'] if not d.get('revoked')]
-    data['alerts'] = [{k: v for k, v in a.items() if k not in ('ticket', 'key')} for a in state.get('alerts', []) if not auth.get('device_id') or a['device_id'] == auth['device_id']]
+    data['devices'] = [{k: v for k, v in d.items() if k not in ('push_token', 'weather', 'telegram_alerts_chat_id', 'telegram_alerts_enabled')} | {'telegram_alerts_enabled': telegram_alerts_enabled(d, state), 'weather': {k: v for k, v in d.get('weather', {}).items() if k not in ('latitude', 'longitude')}} for d in state['devices'] if not d.get('revoked')]
+    data['alerts'] = [{k: v for k, v in a.items() if k not in ('ticket', 'key', 'telegram_chat_id', 'lease')} for a in state.get('alerts', []) if not auth.get('device_id') or a['device_id'] == auth['device_id']]
+    data['delivery'] = delivery_status(state)
     data['scheduler_at'] = state.get('scheduler_at')
-    data['events'] = [e for e in state['events'] if e['expires_at'] > now()][-30:]
+    data['scheduler_completed_at'] = state.get('scheduler_completed_at')
+    data['events'] = [e for e in state['events'] if e['expires_at'] > now()
+                      and (not auth.get('device_id') or e['device_id'] == auth['device_id'])][-30:]
     data['suggestions'] = suggestions(state)
     data['synced_at'] = now()
     data['device_id'] = auth.get('device_id')
@@ -426,6 +449,8 @@ def phone_event(payload: PhoneEvent, auth=Depends(identity)):
     if not auth.get('device_id'):
         raise HTTPException(403, 'Pair an Android device first.')
     observed = due(payload.observed_at)
+    if observed is None:
+        raise HTTPException(422, 'Event time must include a timezone.')
     stamp = datetime.fromisoformat(observed)
     age = (datetime.now(timezone.utc) - stamp).total_seconds()
     if age < -300 or age > 86400:
@@ -506,13 +531,27 @@ def export(auth=Depends(owner)):
 def companion_operation(state, kind, p, auth):
     device = next((d for d in state['devices'] if d['id'] == auth.get('device_id') and not d.get('revoked')), None)
     if not device: raise HTTPException(403, 'Use a paired phone for companion settings.')
-    if kind == 'companion.push':
-        token = p.get('token', '')
-        if token and not re.fullmatch(r'(?:Exponent|Expo)PushToken\[[A-Za-z0-9_-]{10,200}\]', token):
-            raise HTTPException(422, 'Invalid Expo push token.')
-        if token: device['push_token'] = token
-        else: device.pop('push_token', None)
-        device['private_notifications'] = bool(p.get('private', True))
+    if kind in ('companion.push', 'companion.push.test'):
+        if kind == 'companion.push' and not p.get('token'):
+            device.pop('push_token', None)
+        else:
+            raise HTTPException(410, 'Remote alerts now use Telegram. Install the updated ORA app.')
+    elif kind == 'companion.telegram':
+        if type(p.get('enabled')) is not bool or type(p.get('private', True)) is not bool:
+            raise HTTPException(422, 'Choose whether to enable Telegram alerts and private contents.')
+        if p['enabled']:
+            status = delivery_status(state)
+            if not status['configured'] or not status['linked']:
+                raise HTTPException(409, 'Connect your Telegram account in web Connections first, then enable alerts here.')
+            device['telegram_alerts_chat_id'] = state['telegram']['chat_id']
+        else:
+            device.pop('telegram_alerts_chat_id', None)
+            for a in state.get('alerts', []):
+                if a['device_id'] == device['id'] and a['delivery'] in ('pending', 'retry', 'sending'):
+                    a['delivery'] = 'cancelled'
+        device['telegram_alerts_enabled'] = p['enabled']
+        device['private_notifications'] = p.get('private', True)
+        device.pop('push_token', None)
     elif kind == 'companion.weather':
         if not p.get('enabled'):
             device.pop('weather', None); device.pop('forecast', None)
@@ -529,8 +568,10 @@ def companion_operation(state, kind, p, auth):
             if a['device_id'] == device['id'] and (p.get('id') == a['id'] or p.get('all') is True): a['read'] = True
     elif kind == 'companion.alert.clear':
         state['alerts'] = [a for a in state.get('alerts', []) if a['device_id'] != device['id']]
-    elif kind == 'companion.push.test':
-        alert(state, device['id'], 'test:'+uuid.uuid4().hex, 'ORA · Push test', 'Your remote notification reached this phone.', 'alerts')
+    elif kind == 'companion.telegram.test':
+        if not telegram_alerts_enabled(device, state) or not delivery_status(state)['configured']:
+            raise HTTPException(409, 'Connect Telegram and enable alerts on this phone first.')
+        alert(state, device['id'], 'test:'+uuid.uuid4().hex, 'ORA · Telegram test', 'Your ORA Telegram alert connection works.', 'alerts')
     else: raise HTTPException(422, 'Unknown companion operation.')
     return {'ok': True}
 
@@ -562,7 +603,9 @@ def companion_tick(authorization: str = Header(default='')):
             except Exception: failures += 1
         from mini.routines import tick_routines
         tick_routines(db())
+        telegram_check(db())
         sent = dispatch(db())
+        db().mutate(lambda s: s.update(scheduler_completed_at=now()))
         return {'processed': sent, 'weather_failures': failures}
     finally:
         db().mutate(lambda s: s.update(cron_lease=0))

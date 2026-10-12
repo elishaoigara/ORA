@@ -6,19 +6,19 @@
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-  color: #edf3f6;
-  background: #090e14;
+  color: #f5f7fc;
+  background: #10131d;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --bg: #090e14;
-  --surface: #111922;
-  --raised: #18222e;
-  --border: #26313e;
-  --text: #edf3f6;
-  --muted: #96a6b8;
-  --cyan: #e4bc73;
-  --violet: #c8ad86;
+  --bg: #10131d;
+  --surface: #191e2c;
+  --raised: #22293a;
+  --border: #343d52;
+  --text: #f5f7fc;
+  --muted: #a8b3c8;
+  --cyan: #a5b4fc;
+  --violet: #5eead4;
 }
 * {
   box-sizing: border-box;
@@ -66,7 +66,7 @@ select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #0b121b;
+  background: #141824;
   color: var(--text);
   padding: 12px 14px;
   outline: none;
@@ -76,19 +76,19 @@ input:focus,
 textarea:focus,
 select:focus {
   border-color: var(--cyan);
-  box-shadow: 0 0 0 3px #87e8dc10;
+  box-shadow: 0 0 0 3px #a5b4fc20;
 }
 textarea {
   resize: vertical;
 }
 input::placeholder,
 textarea::placeholder {
-  color: #7f90a3;
+  color: #9aa6bc;
 }
 label {
   display: block;
   font-size: 0.875rem;
-  color: #bac6d4;
+  color: #c5cde0;
 }
 label input,
 label textarea,
@@ -123,7 +123,7 @@ small {
   display: block;
 }
 ::selection {
-  background: #87e8dc40;
+  background: #a5b4fc40;
 }
 .muted {
   color: var(--muted);

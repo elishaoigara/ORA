@@ -69,6 +69,14 @@ class Store:
         finally:
             conn.close()
 
+    def healthy(self):
+        """Check the workspace row without loading personal data into a health probe."""
+        conn = self.connect()
+        try:
+            return conn.execute("SELECT 1 FROM ora_mini_workspace WHERE id=1").fetchone() is not None
+        finally:
+            conn.close()
+
     def read(self):
         conn = self.connect()
         try:

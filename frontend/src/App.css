@@ -1122,3 +1122,43 @@
 @keyframes brand-breathe { to { filter: brightness(1.18); } }
 @media (prefers-reduced-motion: reduce) { .brand-emblem.active img { animation: none; } }
 .tools-page h1{font-size:2.3rem;margin:12px 0}.tool-cockpit,.tool-result,.tool-main form{padding:22px;border:1px solid var(--border);border-radius:18px;background:var(--surface);margin-bottom:20px}.tool-workspace{display:grid;grid-template-columns:220px minmax(0,1fr);gap:22px}.tool-workspace aside{max-height:70vh;overflow:auto}.tools-page button{padding:10px 14px;border:1px solid var(--border);border-radius:9px;background:var(--raised);color:var(--text);cursor:pointer;margin:4px}.tools-page button:disabled{opacity:.45;cursor:default}.tool-workspace aside button{display:block;text-align:left;width:95%}.tools-page small{display:block;color:var(--muted)}.tool-workspace .selected{border-color:var(--cyan);color:var(--cyan)}.tools-page label{display:block;margin:12px 0}.tools-page textarea,.tools-page select,.tools-page input{display:block;box-sizing:border-box;width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;margin-top:5px}.tool-shortcuts{display:flex;flex-wrap:wrap;gap:6px}.tool-values{margin:8px 0}.tool-values dt{font-size:.75rem;color:var(--muted);text-transform:uppercase}.tool-values dd{margin:3px 0 12px;overflow-wrap:anywhere}.tool-values pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:450px;overflow:auto;background:var(--bg);padding:12px;font-size:.8rem}.tool-result-item{padding:10px;border-bottom:1px solid var(--border)}.tool-history{display:block;width:100%;text-align:left}.tool-file-list{max-height:450px;overflow:auto}.tool-file-list button{display:block;text-align:left}.tool-error{color:#ffaaa5}.tools-page a{color:var(--cyan)}@media(max-width:760px){.tool-workspace{grid-template-columns:1fr}.tool-workspace aside{max-height:190px}.tool-cockpit,.tool-result,.tool-main form{padding:15px}}
+
+/* Shared ORA palette: quiet navy, soft indigo and mint accents. */
+.sidebar { background: #141824; }
+.sidebar-caption, .sidebar nav button { color: var(--muted); }
+.sidebar nav button { border-radius: 13px; min-height: 48px; }
+.sidebar nav button.selected { background: #262e49; color: var(--cyan); }
+.sidebar nav button:hover { background: var(--raised); }
+.panel { border-radius: 20px; }
+.presence { border-radius: 26px; background: linear-gradient(125deg, #252d48, #1a2432); border-color: #414e6b; }
+.presence h2 { font-weight: 600; }
+.button { min-height: 46px; border-radius: 13px; }
+.button.primary:hover { background: #bac6ff; color: var(--bg); }
+.suggestion { border-radius: 16px; }
+.suggestion:hover { background: var(--raised); border-color: #52617e; }
+.message { max-width: min(90%, 760px); }
+.message-body { background: var(--surface); border: 1px solid var(--border); border-radius: 20px 20px 20px 6px; padding: 18px 20px; }
+.message.user .message-body { background: #29344e; border-color: #46587d; border-radius: 20px 20px 6px 20px; }
+.message-label { color: var(--muted); }
+.composer { background: #191e2c; border-color: #46516c; border-radius: 22px; }
+.composer textarea { background: transparent; }
+.chips button { border-color: var(--border); background: var(--surface); color: var(--text); border-radius: 999px; }
+.readiness-panel p { margin-bottom: 10px; }
+.readiness-panel .section-heading { margin-top: 0; gap: 16px; }
+.readiness-panel .button-row { flex-wrap: wrap; }
+.tool-history { padding: 12px 16px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); color: var(--cyan); min-height: 46px; }
+.tool-history:hover { background: var(--raised); }
+@media (max-width: 800px) {
+  .mobile-nav { grid-template-columns: repeat(5, minmax(0, 1fr)); background: #141824; }
+  .mobile-nav button { min-width: 0; padding-inline: 4px; border-radius: 14px; }
+  .mobile-nav button.selected { background: #262e49; color: var(--cyan); }
+  .mobile-nav span { font-size: 11px; white-space: nowrap; }
+  .message { max-width: 96%; }
+  .message-body { padding: 15px; }
+  .presence { border-radius: 22px; }
+  .readiness-panel .section-heading { align-items: flex-start; }
+}
+@media (max-width: 420px) {
+  .presence .orb { display: none; }
+  .readiness-panel .section-heading { flex-direction: column; }
+}

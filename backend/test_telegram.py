@@ -62,7 +62,7 @@ class TelegramTests(unittest.TestCase):
         if method == 'getChat':
             return Reply({'id': payload['chat_id'], 'type': self.chat_type,
                           'first_name': 'Elisha'})
-        if method in ('sendMessage', 'sendDocument'):
+        if method in ('sendMessage', 'sendDocument', 'sendVoice'):
             if self.fail_send:
                 self.fail_send = False
                 raise RequestConnectionError('Simulated Telegram outage')
@@ -200,6 +200,55 @@ class TelegramTests(unittest.TestCase):
         self.assertEqual(status['setup_error'], 'Telegram rejected bot credentials.')
         self.assertFalse(status['webhook_active'])
         self.assertNotIn('123:testing', str(status))
+
+    def voice_update(self, update_id, user=11, note=None):
+        return self.client.post('/api/v2/telegram/webhook', headers={'X-Telegram-Bot-Api-Secret-Token': webhook_secret()},
+            json={'update_id': update_id, 'message': {'from': {'id': user}, 'chat': {'id': user, 'type': 'private'},
+                'voice': note or {'file_id': 'voice-file', 'duration': 12, 'file_size': 1000}}})
+
+    def test_voice_inbound_outbound_and_retry_without_repeating_model(self):
+        self.pair()
+        with patch.dict(os.environ, {'GROQ_API_KEY': 'test-groq'}):
+            self.update(201, text='/voice on')
+        with patch('mini.telegram.transcribe_note', return_value='Plan my morning') as transcribe, patch('mini.telegram.speech', return_value=b'OggSvoice'), patch.object(api, 'respond', return_value=('Here is your plan.', [])) as model:
+            self.assertEqual(self.voice_update(202, user=22).status_code, 200)
+            transcribe.assert_not_called()
+            self.assertEqual(self.voice_update(202).status_code, 200)
+            self.assertEqual(self.voice_update(202).status_code, 200)
+            transcribe.assert_called_once();model.assert_called_once()
+        self.assertEqual(self.sent[-1][0], 'sendVoice')
+        self.assertEqual(self.sent[-1][2]['voice'][1], b'OggSvoice')
+        self.assertNotIn('transcript',str(api.store.read()['telegram_updates']))
+
+    def test_failed_voice_does_not_block_later_text(self):
+        self.pair()
+        with patch('mini.telegram.transcribe_note', side_effect=HTTPException(503, 'Voice unavailable.')):
+            self.assertEqual(self.voice_update(210).status_code, 200)
+        self.assertEqual(self.sent[-1][1]['text'], 'Voice unavailable.')
+        self.assertEqual(self.update(211,text='/tasks').status_code,200)
+
+    def test_primary_telegram_briefing_needs_no_android_device(self):
+        from mini.companion import telegram_check, dispatch
+        self.pair();self.update(220,text='/alerts on')
+        api.store.mutate(lambda s:s['settings'].update(briefing_hour=0,quiet_start=0,quiet_end=0))
+        telegram_check(api.store);telegram_check(api.store)
+        self.assertEqual(len(api.store.read()['alerts']),1)
+        self.assertEqual(api.store.read()['devices'],[])
+        dispatch(api.store)
+        self.assertEqual(api.store.read()['alerts'][0]['delivery'],'sent_to_telegram')
+        self.update(221,text='/alerts off')
+        self.assertFalse(api.store.read()['telegram']['alerts_enabled'])
+
+    def test_voice_fallback_and_preferences_reset_on_unlink(self):
+        self.pair()
+        api.store.mutate(lambda s:s['telegram'].update(voice_replies=True,alerts_enabled=True,daily_calls=True))
+        with patch.object(api,'respond',return_value=('Reply text survives.',[])), patch('mini.telegram.speech',side_effect=HTTPException(503,'Private provider URL')):
+            self.assertEqual(self.update(230,text='Hello').status_code,200)
+        self.assertIn('Spoken reply unavailable',self.sent[-1][1]['text'])
+        self.assertNotIn('Private provider URL',str(self.sent))
+        self.client.delete('/api/v2/telegram/link',headers=self.owner)
+        self.assertFalse(api.store.read()['telegram'].get('daily_calls'))
+        self.assertFalse(api.store.read()['telegram'].get('alerts_enabled'))
 
 
 if __name__ == '__main__':
