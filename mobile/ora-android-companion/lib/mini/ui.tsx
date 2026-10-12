@@ -975,7 +975,7 @@ function ConnectionHealth() {
       <Text style={s.small}>Last completed run: {status.scheduler_last_completed_at ? new Date(status.scheduler_last_completed_at).toLocaleString() : "No completed run recorded yet"}</Text>
     </>}
     {!!error && <Text accessibilityRole="alert" style={s.noticeText}>{error}</Text>}
-    <Text style={s.small}>Send a message to verify the AI connection. Scheduled local reminders work after this phone has synced; remote alerts also need push enabled.</Text>
+    <Text style={s.small}>Send a message to verify the AI connection. Scheduled local reminders work after this phone has synced; weather and routine alerts need Telegram enabled in the notification center.</Text>
     <Button title={busy ? "Checking…" : "Refresh status"} disabled={busy} ghost onPress={() => void refresh()} />
   </Card>;
 }
