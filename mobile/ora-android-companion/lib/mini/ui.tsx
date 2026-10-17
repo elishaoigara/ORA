@@ -69,7 +69,7 @@ export function Button({
 function BrandMark({ size = 32 }: { size?: number }) {
   return (
     <Image
-      source={require("../../assets/images/ora-horus.png")}
+      source={require("../../assets/images/ora-mark.png")}
       accessibilityLabel="ORA"
       style={{ width: size, height: size, borderRadius: size / 2 }}
       resizeMode="contain"

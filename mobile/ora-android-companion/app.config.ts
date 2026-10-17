@@ -7,7 +7,7 @@ const config: ExpoConfig = {
   scheme: "ora",
   orientation: "portrait",
   userInterfaceStyle: "dark",
-  icon: "./assets/images/ora-horus.png",
+  icon: "./assets/images/ora-launcher.png",
   android: {
     package: "com.app.oraandroidcompanion",
     permissions: [
@@ -16,8 +16,9 @@ const config: ExpoConfig = {
       "SCHEDULE_EXACT_ALARM",
     ],
     adaptiveIcon: {
-      foregroundImage: "./assets/images/ora-adaptive.png",
-      backgroundColor: "#000000",
+      foregroundImage: "./assets/images/ora-adaptive-modern.png",
+      monochromeImage: "./assets/images/ora-monochrome.png",
+      backgroundColor: "#10131d",
     },
   },
   ios: { bundleIdentifier: "com.app.oraandroidcompanion" },
@@ -52,10 +53,10 @@ const config: ExpoConfig = {
     [
       "expo-splash-screen",
       {
-        image: "./assets/images/ora-horus.png",
+        image: "./assets/images/ora-mark.png",
         imageWidth: 200,
         resizeMode: "contain",
-        backgroundColor: "#000000",
+        backgroundColor: "#10131d",
       },
     ],
     ["expo-build-properties", { android: { minSdkVersion: 26 } }],
@@ -83,4 +84,3 @@ const config: ExpoConfig = {
   },
 };
 export default config;
-

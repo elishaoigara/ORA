@@ -91,7 +91,7 @@ function Icon({ name, size = 20 }) {
 function BrandMark({ size = 36 }) {
   return (
     <img
-      src="/ora-horus.webp"
+      src="/ora-mark.webp"
       alt="ORA"
       width={size}
       height={size}
@@ -105,7 +105,7 @@ function Orb({ small = false, active = false }) {
       aria-hidden="true"
       className={`orb brand-emblem ${small ? "small" : ""} ${active ? "active" : ""}`}
     >
-      <img src="/ora-horus.webp" alt="" width="220" height="220" />
+      <img src="/ora-mark.webp" alt="" width="220" height="220" />
     </div>
   );
 }

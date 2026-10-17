@@ -1,9 +1,9 @@
-# ORA brand
+# ORA brand — geometric sunrise
 
-The approved identity is the realistic black-stone pyramid, gold sun, circular gold rim, and small Eye of Horus. Keep the medallion intact; do not stretch, recolor, crop the circle, or replace it with a modern geometric mark.
+The current identity simplifies the original circular pyramid and rising sun into a flat geometric emblem. This replaces the previous gold medallion direction at the user's request.
 
-Primary palette: charcoal #090e14, antique gold #e4bc73, warm secondary #c8ad86, readable light text #edf3f6. Use the full-color mark as the default across web and Android. On light surfaces retain its dark medallion background. A future monochrome variant should preserve the silhouette and is reserved for constrained print or system surfaces. Status colors remain semantic.
+Use periwinkle #a5b4fc on navy #10131d. Supporting surfaces are #191e2c and #22293a; text is #f5f7fc and mint #5eead4 remains a secondary accent. Keep the circular ring, split pyramid and sun together. Do not stretch, add texture, gold, shadows or gradients to the mark. Preserve clear space around the ring.
 
-Web: compressed WebP for interface marks; PNG favicon, Apple touch icon, install manifest, and social preview. Android: 1024px launcher/splash asset and padded adaptive asset to keep the circle inside launcher masks. Native notification small icons require a separate monochrome silhouette; the detailed image is not suitable there.
+The design draws on the geometric reduction explored in Jens Müller's Logo Modernism, rather than reproducing a mark from the book. Option A (Sunrise) was selected by the user. The concept was developed with imagegen and rebuilt as a precise SVG master; the two pyramid faces have a shared downward-pointing base. Use ora-mark.svg as the master. Interface assets have transparent backgrounds; launcher and web installation assets have opaque navy backgrounds. Adaptive foregrounds keep the complete symbol within Android's central safe zone. The monochrome adaptive asset uses the same silhouette.
 
-Web branding appears after the Vercel production deployment. Android launcher and splash changes require a new EAS build and installation; an already installed APK cannot receive these through a web deployment.
+Web branding appears after deployment. Android launcher and splash changes require a new APK build and installation. Previously installed launchers or browser shortcuts may retain cached icons until reinstalled.
