@@ -11,7 +11,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r backend/requirements-mini.txt httpx
-      - run: python -m unittest test_mini test_companion test_tools test_artifacts test_telegram test_deepseek test_workspaces test_readiness test_voice_calls -v
+      - run: python -m unittest test_mini test_companion test_tools test_artifacts test_telegram test_deepseek test_workspaces test_readiness test_voice_calls test_google_workspace -v
         working-directory: backend
   web:
     runs-on: ubuntu-latest
@@ -43,3 +43,4 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
+

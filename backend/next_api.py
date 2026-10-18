@@ -697,3 +697,7 @@ install_desktop(app, db, identity, owner, limited)
 from mini.telegram import install as install_telegram
 install_telegram(app, db, owner, chat, Chat, limited)
 
+
+
+from mini.google_workspace import install as install_google_workspace
+install_google_workspace(app, db, identity, owner, limited)

@@ -12,6 +12,7 @@ import {
 import "./App.css";
 import ToolsPage from "./ToolsPage";
 import WorkPage from "./WorkPage";
+import GoogleConnection from "./GoogleConnection";
 
 const nav = [
   ["today", "Today", "sun"],
@@ -985,6 +986,7 @@ export default function App() {
                   </p>
                 </div>
               </div>
+              <GoogleConnection />
               <section className="panel settings-panel readiness-panel">
                 <div className="section-heading">
                   <h2>Connection health</h2>
@@ -1341,3 +1343,4 @@ export default function App() {
     </div>
   );
 }
+
