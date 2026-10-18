@@ -923,8 +923,32 @@ export function MemoryScreen() {
       {m.data?.documents.map((d) => (
         <Card key={d.id}>
           <Text style={s.body}>{d.name}</Text>
+          <Button
+            title="Delete document"
+            ghost
+            icon="trash-outline"
+            disabled={busy}
+            onPress={() =>
+              Alert.alert(
+                "Delete document?",
+                `Remove "${d.name}" from ORA's knowledge on web and phone? This does not delete the original file on your device or existing chat messages. If offline, deletion takes effect after syncing.`,
+                [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: () =>
+                      run(() => m.mutate("document.delete", { id: d.id })),
+                  },
+                ],
+              )
+            }
+          />
         </Card>
       ))}
+      {m.data && m.data.documents.length === 0 && (
+        <Text style={s.muted}>No uploaded documents.</Text>
+      )}
       <Text style={s.heading}>Recent phone context</Text>
       {m.data?.events.length ? (
         m.data.events.map((e) => (
