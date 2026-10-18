@@ -960,11 +960,15 @@ export default function App() {
                   <button
                     className="text-button"
                     disabled={busy}
-                    onClick={() =>
-                      run(() => change("document.delete", { id: d.id }))
-                    }
+                    onClick={() => {
+                      if (window.confirm(
+                        `Delete "${d.name}" from ORA's knowledge on web and phone? This does not delete the original file on your device or existing chat messages. If offline, deletion takes effect after syncing.`,
+                      )) {
+                        run(() => change("document.delete", { id: d.id }));
+                      }
+                    }}
                   >
-                    Remove
+                    Delete document
                   </button>
                 </div>
               ))}
