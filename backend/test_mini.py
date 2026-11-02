@@ -8,7 +8,8 @@ os.environ['APP_ENV']='test'
 os.environ['ORA_API_TOKEN']='test-key-not-a-secret'
 from fastapi.testclient import TestClient
 import next_api as api
-from mini.store import Store
+from mini.store import Store, initial
+from mini.intelligence import respond
 
 class MiniTests(unittest.TestCase):
  def setUp(self):
@@ -88,4 +89,40 @@ class MiniTests(unittest.TestCase):
   r=self.client.post('/api/v2/documents',headers=self.owner,files={'file':('plan.md',b'# ORA\nBuild deliberately.','text/markdown')})
   self.assertEqual(r.status_code,200);self.assertNotIn('text',self.state()['documents'][0])
   self.assertIn('Build deliberately',self.client.get('/api/v2/export',headers=self.owner).json()['documents'][0]['text'])
+class AIProviderTests(unittest.TestCase):
+ def test_deepseek_chat_and_tool_round_trip(self):
+  from unittest.mock import Mock
+  tool_call={'id':'call-1','type':'function','function':{'name':'propose_task',
+             'arguments':'{"title":"Plan launch","due_at":"","priority":2}'}}
+  replies=[Mock(status_code=200,ok=True,json=lambda:{'choices':[{'message':{'role':'assistant','content':None,'tool_calls':[tool_call]}}]}),
+           Mock(status_code=200,ok=True,json=lambda:{'choices':[{'message':{'role':'assistant','content':'Please review the task.'}}]})]
+  with patch.dict(os.environ,{'DEEPSEEK_API_KEY':'test-deepseek-key','GROQ_API_KEY':'test-groq-key','ORA_AI_PROVIDER':''}):
+   with patch('mini.intelligence.requests.post',side_effect=replies) as post:
+    reply,proposals=respond(initial(),'Plan my launch')
+   self.assertEqual(api.health()['ai_provider'],'deepseek')
+   self.assertTrue(api.health()['ai_configured'])
+  self.assertEqual(reply,'Please review the task.')
+  self.assertEqual(proposals[0]['kind'],'task')
+  self.assertEqual(post.call_args_list[0].args[0],'https://api.deepseek.com/chat/completions')
+  self.assertEqual(post.call_args_list[0].kwargs['json']['model'],'deepseek-flash')
+  self.assertEqual(post.call_args_list[0].kwargs['json']['thinking'],{'type':'disabled'})
+  self.assertEqual(post.call_args_list[1].kwargs['json']['messages'][-1]['tool_call_id'],'call-1')
+
+ def test_explicit_provider_and_missing_key(self):
+  with patch.dict(os.environ,{'DEEPSEEK_API_KEY':'test-deepseek-key','GROQ_API_KEY':'test-groq-key','ORA_AI_PROVIDER':'groq'}):
+   from mini.intelligence import ai_provider
+   self.assertEqual(ai_provider()['url'],'https://api.groq.com/openai/v1/chat/completions')
+  with patch.dict(os.environ,{'DEEPSEEK_API_KEY':'','GROQ_API_KEY':'test-groq-key','ORA_AI_PROVIDER':'deepseek'}):
+   self.assertFalse(api.health()['ai_configured'])
+   with self.assertRaisesRegex(RuntimeError,'DEEPSEEK_API_KEY'):
+    respond(initial(),'Hello')
+
+ def test_rejected_deepseek_key_does_not_expose_secret(self):
+  from unittest.mock import Mock
+  with patch.dict(os.environ,{'DEEPSEEK_API_KEY':'private-test-key','ORA_AI_PROVIDER':'deepseek'}):
+   with patch('mini.intelligence.requests.post',return_value=Mock(status_code=401,ok=False)):
+    with self.assertRaisesRegex(RuntimeError,'API key was rejected') as error:
+     respond(initial(),'Hello')
+  self.assertNotIn('private-test-key',str(error.exception))
+
 if __name__=='__main__':unittest.main()

@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from mini.store import Store, now
-from mini.intelligence import respond, suggestions
+from mini.intelligence import respond, suggestions, ai_provider
 from mini.tools import Runtime, catalog, visible, BY_NAME, public_run, allowed_repos
 from mini.artifacts import metadata as file_metadata, render as render_file
 from mini.companion import weather_check, dispatch, alert, telegram_check, delivery_status, enabled as telegram_alerts_enabled
@@ -132,6 +132,10 @@ def root():
 
 @app.api_route('/api/health', methods=['GET', 'HEAD'])
 def health():
+    provider = ai_provider()
+    return {'ok': store is not None, 'release': 'ora-mini-2', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
+            'companion_release': '2.2', 'work_release': '1.0', 'reminders': 'android-local',
+            'ai_provider': provider['name'], 'ai_configured': bool(provider['key'])}
     try:
         if not db().healthy():
             raise RuntimeError('Missing workspace')

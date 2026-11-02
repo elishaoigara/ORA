@@ -36,6 +36,10 @@ Configure these environment variables:
 | `APP_ENV` | `production` |
 | `DATABASE_URL` | Secret external Postgres URL |
 | `ORA_API_TOKEN` | Long random owner key, generated in your password manager or locally |
+| `DEEPSEEK_API_KEY` | DeepSeek API key for chat and tools; setting it selects DeepSeek by default |
+| `DEEPSEEK_MODEL` | `deepseek-flash` by default; `deepseek-v4-pro` is another supported option |
+| `ORA_AI_PROVIDER` | Optional `deepseek` or `groq` override; otherwise DeepSeek when its key is present, Groq when it is not |
+| `GROQ_API_KEY` | Optional when DeepSeek handles chat; keep it for voice transcription and Groq vision |
 | `DEEPSEEK_API_KEY` | Your DeepSeek API key for chat and tools |
 | `GROQ_API_KEY` | Optional Groq key for voice transcription and image analysis |
 | `CORS_ORIGINS` | Exact Vercel origin; comma-separate any explicitly allowed preview origins |
@@ -48,7 +52,9 @@ Configure these environment variables:
 
 Do not add wildcard browser origins. `ORA_API_TOKEN` is not a Google or Supabase token. Keep one worker: it bounds inference concurrency and avoids simultaneous model requests from multiple clients. Durable database transactions still protect task mutations.
 
-Open `/api/health` and check `release: ora-mini-2`, `storage: postgres`, and `ai_configured: true`. A missing database makes production startup fail deliberately rather than silently losing your data.
+Open `/api/health` and check `release: ora-mini-2`, `storage: postgres`, `ai_provider: deepseek`, and `ai_configured: true` after setting a DeepSeek key. This checks that the key is present, not that DeepSeek accepted it; send a chat message to verify the connection. A missing database makes production startup fail deliberately rather than silently losing your data.
+
+DeepSeek chat and tools use the key only on the Render backend. Add `DEEPSEEK_API_KEY` to the Render web service Environment and redeploy; do not add it to Vercel, `VITE_*` variables, source control, or chat. If the key on DeepSeek's API keys page is masked and you did not save its full value when creating it, create a new one and copy it directly into Render. Keep `GROQ_API_KEY` if you want ORA's existing voice transcription and Groq vision features; DeepSeek chat does not change those separate endpoints.
 
 A first request after sleep may take around a minute. The clients wait up to 115 seconds and preserve unsent drafts. They do not generate fake keep-alive traffic. Only visible/foreground clients synchronize every 60 seconds.
 

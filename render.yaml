@@ -23,6 +23,10 @@ services:
       # Optional Groq credential for voice and image analysis only.
       - key: GROQ_API_KEY
         sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_MODEL
+        value: deepseek-flash
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       # Optional WhatsApp owner notifications (requires the WA sidecar service).
