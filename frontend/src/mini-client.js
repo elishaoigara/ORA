@@ -2,6 +2,10 @@ const base = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(
   /\/$/,
   "",
 );
+// The last ETag served for /sync. Re-syncing an unchanged workspace then costs a
+// bodyless 304 instead of the whole snapshot, which is the difference between a
+// few hundred bytes and a few hundred kilobytes on every poll.
+let syncEtag = null;
 export const uid = () => crypto.randomUUID();
 export const saved = (key, fallback = null) => {
   try {
@@ -17,6 +21,7 @@ export async function api(path, body, method = body ? "POST" : "GET") {
   const timer = setTimeout(() => controller.abort(), 115000);
   try {
     const token = saved("token");
+    const conditional = method === "GET" && path === "/sync" && syncEtag;
     const response = await fetch(`${base}/api/v2${path}`, {
       method,
       signal: controller.signal,
@@ -25,6 +30,7 @@ export async function api(path, body, method = body ? "POST" : "GET") {
           ? { "Content-Type": "application/json" }
           : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(conditional ? { "If-None-Match": syncEtag } : {}),
       },
       body: body
         ? body instanceof FormData
@@ -32,6 +38,11 @@ export async function api(path, body, method = body ? "POST" : "GET") {
           : JSON.stringify(body)
         : undefined,
     });
+    if (path === "/sync" && response.status === 304) {
+      // Nothing changed: the caller keeps the snapshot it already has.
+      return null;
+    }
+    if (path === "/sync") syncEtag = response.headers.get("ETag") || syncEtag;
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       const error = new Error(
@@ -84,6 +95,7 @@ export async function downloadDocument(id, name) {
   }
 }
 export function clearLocal() {
+  syncEtag = null;
   for (const key of Object.keys(sessionStorage))
     if (key.startsWith("ora2:")) sessionStorage.removeItem(key);
 }

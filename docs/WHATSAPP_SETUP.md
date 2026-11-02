@@ -18,7 +18,13 @@ read as time-sensitive, so routine chatter never becomes notification noise.
 
 ## 1. Deploy the sidecar
 
-`render.yaml` already declares the service (`ora-whatsapp`, root `whatsapp-sidecar/`).
+**This requires a paid Render instance.** The sidecar has to stay connected to
+WhatsApp, so it never gets to sleep; a free web service uses ~730 instance hours a
+month, and Render Free gives the whole workspace 750. Adding it next to the ORA
+backend suspends both services before the month ends. Use
+`whatsapp-sidecar/render.yaml` (`plan: starter`) or the manual settings below. See
+[the free-tier budget](RENDER_FREE_BUDGET.md).
+
 If you deploy manually instead:
 
 | Setting | Value |

@@ -1,0 +1,122 @@
+# Staying inside Render Free
+
+ORA Mini is designed for one owner on a Render Free web service. The free plan is
+generous but it is metered in a way that punishes "just keep it warm" habits, so
+this page records the budget, the decisions that protect it, and the rules for
+future changes.
+
+## What Render Free actually gives you
+
+| Resource | Free allowance | What it means for ORA |
+| --- | --- | --- |
+| Instance hours | **750 per workspace per month**, shared by *all* free services | One service running non-stop already uses ~730 h |
+| Sleep | Spins down after **15 minutes without inbound traffic** | Any polling client keeps it awake indefinitely |
+| Cold start | ~1 minute after sleep | Clients must tolerate a slow first request |
+| CPU / RAM | ~0.1 CPU and 512 MB | Keep one worker, cap concurrency, avoid heavy startup work |
+| Outbound traffic | Small monthly allowance on a Hobby workspace | Compress JSON, do not re-download unchanged snapshots |
+| Postgres | 1 GB, **expires 30 days after creation** | Use an external durable database (Supabase) instead |
+| Cron / workers | Not available on Free | Scheduling happens through an external tick, not a Render cron |
+
+When the workspace runs out of hours, **every free service is suspended until the
+next calendar month**. Unused hours do not roll over.
+
+> **One change lives in a workflow file.** `.github/workflows/companion-tick.yml`
+> still schedules `cron: '17,47 * * * *'`. Change it to
+> `cron: '47 4,10,16 * * *'` in the GitHub UI (or with a token that has the
+> `workflow` scope). Until that line changes, the service still wakes 48 times a
+> day and the "before" numbers below still apply to your workspace.
+
+## The budget before this cleanup
+
+| Behaviour | Monthly cost |
+| --- | --- |
+| GitHub Actions tick every 30 minutes (48 wakes/day) | 48 × 15 min ≈ **360 h** |
+| Second free web service (WhatsApp sidecar) held connected | ≈ **730 h** |
+| User traffic | whatever is left |
+| **Total before a single user request** | **≈ 1,090 h vs a 750 h budget** |
+
+Two habits caused almost all of it:
+
+1. **A 30-minute cron.** Render sleeps 15 minutes after the last request, so a
+   tick every 30 minutes keeps the service awake half the time. A cron does not
+   cost "one request"; it costs a *wake window*.
+2. **A second free service.** The WhatsApp sidecar must hold a connection to
+   WhatsApp to be useful, which means it never gets to sleep. Two free services
+   cannot both fit in 750 hours, no matter how efficient the code is.
+
+## The budget after this cleanup
+
+| Behaviour | Monthly cost |
+| --- | --- |
+| Tick three times a day (once the schedule below is applied) | 3 × 15 min/day ≈ **22 h** |
+| One free web service | no background cost while asleep |
+| Typical owner usage (a few sessions a day) | ~20–60 h |
+| **Expected total** | **well under 100 h of 750** |
+
+The leftover headroom is the point: normal use cannot exhaust the workspace.
+
+## What changed in the code
+
+- **Blueprint** (`render.yaml`): one free service only. The WhatsApp sidecar moved
+  to `whatsapp-sidecar/render.yaml` and is marked `plan: starter`, because it is
+  the one component that genuinely needs to run continuously.
+- **Tick schedule** (`.github/workflows/companion-tick.yml`): set
+  `cron: '47 4,10,16 * * *'` instead of `cron: '17,47 * * * *'`. That is 07:47,
+  13:47 and 19:47 in Africa/Nairobi, which still covers the morning briefing, a
+  midday check and the evening outlook. Weather forecasts are cached for an hour
+  server-side. This one-line edit is the largest single saving in the table above.
+- **Compression** (`backend/next_api.py`): gzip for JSON responses above 500 bytes.
+  Workspace snapshots are highly repetitive JSON and shrink by roughly 80%.
+  Downloads are skipped because they are already compressed.
+- **Conditional sync** (`/api/v2/sync`): the snapshot now carries an `ETag`. A
+  client that already has the current workspace receives an empty `304`, not the
+  whole payload. The tag changes on every mutation, per device scope, and at
+  least every five minutes so clock-derived suggestions still refresh.
+- **Client polling** (`frontend/src/App.jsx`, `ToolsPage.jsx`): one self-scheduling
+  loop instead of fixed intervals. It polls every 60 s while the tab is active,
+  every 3 min after two idle minutes, and **stops entirely** when the tab is
+  hidden or after ten minutes without input. Any click, key press, scroll or tab
+  focus resumes it immediately. A hidden tab therefore lets Render sleep.
+- **Store** (`backend/mini/store.py`): pooled Postgres connections (no TLS
+  handshake per request) and a five-second read cache that every mutation
+  refreshes. One request used to parse the whole workspace three or four times.
+- **Startup**: the Telegram webhook is re-registered at most once a week (or after
+  a URL change or failure) instead of on every cold start.
+- **Server flags**: `--workers 1 --limit-concurrency 32 --timeout-keep-alive 5`,
+  which protects 512 MB of RAM without changing behaviour.
+
+## Rules for future changes
+
+1. **Do not add a keep-alive.** No uptime pinger, no cron-job.org warm-up, no
+   self-ping. They work by spending the whole monthly allowance.
+2. **Do not add a second free service.** Upgrade to a paid instance or combine the
+   work into this process.
+3. **Budget a wake pattern before adding it.** A schedule that fires every N
+   minutes costs about `1440 × 15 / N` hours a month (the 15-minute idle window):
+
+   | Interval | Approx. hours/month |
+   | --- | --- |
+   | 5 min | 4,320 (impossible on Free) |
+   | 30 min | 720 |
+   | 1 h | 360 |
+   | 2 h | 180 |
+   | 3× per day | 22 |
+
+   Anything more frequent than a few times a day is a deliberate trade against
+   user traffic.
+4. **Clients poll only while visible and active.** New screens must reuse the
+   visibility gate rather than adding a `setInterval`.
+5. **Prefer a 304 over a payload.** Add an `ETag` to any endpoint a client polls.
+6. **Keep one worker.** It bounds model concurrency and memory; the database
+   transactions, not multiple workers, provide safety.
+
+## Verifying usage
+
+Open the Render Dashboard → **Billing** and read *Free instance hours* for the
+workspace. A healthy month stays in the low tens of hours. If the number climbs,
+the cause is almost always one of: a new polling client, a shortened cron, or a
+second service.
+
+`GET /api/health` reports `free_tier: true` when `ORA_FREE_TIER=1` is set (the
+blueprint sets it), which is a quick way to confirm a deployment carries this
+configuration.

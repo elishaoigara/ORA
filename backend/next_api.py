@@ -17,8 +17,9 @@ from dotenv import load_dotenv
 load_dotenv()
 from fastapi import FastAPI, Depends, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
+from starlette.middleware.gzip import GZipMiddleware
 from mini.store import Store, now
 from mini.intelligence import respond, suggestions, ai_provider
 from mini.tools import Runtime, catalog, visible, BY_NAME, public_run, allowed_repos
@@ -46,13 +47,35 @@ async def lifespan(app):
     if os.getenv('RENDER_EXTERNAL_URL') and os.getenv('TELEGRAM_BOT_TOKEN'):
         from mini.telegram import automatic_setup
         threading.Thread(target=automatic_setup, args=(store,), daemon=True).start()
-    yield
+    try:
+        yield
+    finally:
+        store.close()
 
 
 app = FastAPI(title='ORA Mini', version='2.0.0', lifespan=lifespan,
               docs_url=None if os.getenv('APP_ENV') == 'production' else '/docs')
 app.add_middleware(CORSMiddleware, allow_origins=[s.strip() for s in os.getenv('CORS_ORIGINS', 'http://localhost:5173').split(',') if s.strip()],
                    allow_methods=['GET', 'HEAD', 'POST', 'DELETE'], allow_headers=['Authorization', 'Content-Type'])
+
+
+class CompactGZipMiddleware(GZipMiddleware):
+    """Compress JSON snapshots, but never spend a free instance's CPU on files.
+
+    The workspace snapshot repeats the same task, memory and device keys on every
+    sync. Compression cuts that traffic by roughly 80%, which matters far more on
+    Render Free than the few milliseconds of CPU it costs. Downloads are already
+    compressed formats, so they skip it.
+    """
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] == 'http' and scope['path'].endswith('/download'):
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
+app.add_middleware(CompactGZipMiddleware, minimum_size=500, compresslevel=6)
 
 
 def limited(key, limit=15):
@@ -132,18 +155,23 @@ def root():
 
 @app.api_route('/api/health', methods=['GET', 'HEAD'])
 def health():
-    provider = ai_provider()
-    return {'ok': store is not None, 'release': 'ora-mini-2', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
-            'companion_release': '2.2', 'work_release': '1.0', 'reminders': 'android-local',
-            'ai_provider': provider['name'], 'ai_configured': bool(provider['key'])}
+    """Cheap probe that still fails when the workspace is unreachable.
+
+    The workspace row is checked (one pooled round trip), never the personal
+    payload. This is what Render polls after a deploy, so it must not do more
+    work than that on a 0.1-CPU instance.
+    """
     try:
         if not db().healthy():
             raise RuntimeError('Missing workspace')
     except Exception:
         raise HTTPException(503, 'Workspace storage is unavailable.') from None
-    return {'ok': True, 'release': 'ora-mini-2.3', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
-            'companion_release': '2.3', 'work_release': '1.0', 'reminders': 'android-local', 'ai_configured': bool(os.getenv('DEEPSEEK_API_KEY')), 'ai_provider': 'deepseek',
-            'ai_model': os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')}
+    provider = ai_provider()
+    return {'ok': True, 'release': 'ora-mini-2.4', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
+            'companion_release': '2.3', 'work_release': '1.0', 'reminders': 'android-local',
+            'ai_provider': provider['name'], 'ai_configured': bool(provider['key']),
+            'ai_model': provider['model'],
+            'free_tier': os.getenv('ORA_FREE_TIER', '') not in ('', '0', 'false', 'False')}
 
 
 @app.get('/api/v2/readiness')
@@ -218,9 +246,26 @@ def snapshot(state, auth):
     return data
 
 
+def sync_etag(state, auth):
+    """ETag that changes with data, device scope, and (at most) every five minutes.
+
+    The time bucket keeps slow-moving, clock-derived content such as suggestions
+    from being suppressed forever when nothing is mutated. A sync that changes
+    nothing then costs a bodyless 304 instead of a full workspace download.
+    """
+    bucket = int(time.time() // 300)
+    scope = auth.get('device_id') or 'owner'
+    seed = f"{state.get('revision', 0)}:{scope}:{bucket}"
+    return '"' + hashlib.sha256(seed.encode()).hexdigest()[:32] + '"'
+
+
 @app.get('/api/v2/sync')
-def sync(auth=Depends(identity)):
-    return snapshot(db().read(), auth)
+def sync(request: Request, auth=Depends(identity)):
+    state = db().read()
+    headers = {'ETag': sync_etag(state, auth), 'Cache-Control': 'private, no-cache'}
+    if request.headers.get('if-none-match', '').strip() == headers['ETag']:
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(snapshot(state, auth), headers=headers)
 
 
 def clean_text(value, max_length):
@@ -533,7 +578,8 @@ async def upload(file: UploadFile = File(...), auth=Depends(identity)):
 
 @app.get('/api/v2/export')
 def export(auth=Depends(owner)):
-    return snapshot(db().read(), auth) | {'documents': db().read()['documents']}
+    state = db().read()
+    return snapshot(state, auth) | {'documents': state['documents']}
 
 
 def companion_operation(state, kind, p, auth):

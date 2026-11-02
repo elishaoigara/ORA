@@ -208,7 +208,8 @@ def configure(store):
             for key in ('chat_id', 'user_id', 'first_name', 'pairing', 'daily_calls', 'alerts_enabled', 'voice_replies', 'private_alerts'):
                 telegram.pop(key, None)
             s['telegram_updates'] = []
-        telegram.update(bot_id=me['id'], username=me['username'])
+        telegram.update(bot_id=me['id'], username=me['username'],
+                        public_url=url, webhook_checked_at=time.time())
         telegram.pop('setup_error', None)
         if legacy_chat and not telegram.get('chat_id') and not telegram.get('legacy_link_disabled'):
             telegram.update(legacy_chat)
@@ -216,10 +217,24 @@ def configure(store):
     return {'ok': True, 'username': me['username']}
 
 
+WEBHOOK_RECHECK_SECONDS = 7 * 86400
+
+
 def automatic_setup(store):
+    """Register the webhook once per week, not on every cold start.
+
+    A free instance is restarted many times a day, and each boot used to make two
+    Telegram API calls before doing any user work. Re-registering weekly (or after
+    a URL change or a recorded failure) keeps the webhook fresh without that cost.
+    """
     if not token() or not public_url():
         return
     try:
+        telegram = store.read().get('telegram', {})
+        if (telegram.get('public_url') == public_url()
+                and not telegram.get('setup_error')
+                and telegram.get('webhook_checked_at', 0) > time.time() - WEBHOOK_RECHECK_SECONDS):
+            return
         configure(store)
     except Exception as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else 'Telegram setup could not finish. Retry from Connections.'

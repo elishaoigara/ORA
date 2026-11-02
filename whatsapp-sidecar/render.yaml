@@ -1,0 +1,35 @@
+# Optional WhatsApp sidecar — deploy this blueprint ONLY on a paid instance.
+#
+# Why it is not part of the root render.yaml: a web service that must stay
+# connected to WhatsApp runs continuously, which costs ~730 instance hours a
+# month. Render Free grants 750 hours per workspace to ALL free services combined,
+# so running this beside the ORA backend would suspend both services before the
+# end of the month. On a paid instance (plan: starter) it does not consume free
+# hours.
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> point at this directory, or copy
+# this service into the root render.yaml after upgrading the workspace.
+services:
+  - type: web
+    name: ora-whatsapp
+    runtime: node
+    plan: starter
+    rootDir: .
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.22.3
+      # Must match the backend's WA_API_SECRET; the sidecar refuses weak or default values.
+      - key: WA_API_SECRET
+        sync: false
+      # Enables the inbound webhook back into the backend (X-ORA-Token).
+      - key: ORA_BACKEND_URL
+        sync: false
+      - key: ORA_INTERNAL_TOKEN
+        sync: false
+      # Optional: restores a linked session after a redeploy on an ephemeral disk.
+      - key: WA_SESSION_B64
+        sync: false
+      # Set to /data only when a persistent disk is mounted there.

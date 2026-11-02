@@ -27,7 +27,7 @@ Charcoal surfaces, quiet cyan accents, restrained violet, generous spacing and a
 ## Architecture
 
 - **Vercel:** static React/Vite web client. No secrets are compiled into the client.
-- **Render Free:** one FastAPI worker, demand-driven requests. No always-running inference, cron loop, keep-alive traffic or local production database.
+- **Render Free:** one FastAPI worker, demand-driven requests. No always-running inference, cron loop, keep-alive traffic or local production database. The workspace shares 750 instance hours a month, so compressed snapshots, `ETag`/`304` syncs, visible-tab-only polling and a three-times-a-day tick keep normal use in the low tens of hours. See [the free-tier budget](docs/RENDER_FREE_BUDGET.md).
 - **External Postgres:** durable workspace, hashed session/device credentials and mutation receipts. A Supabase session pooler is one compatible option. Enable SSL. The API initializes its two private tables and enables row-level security with no public policies.
 - **Android:** Expo SDK 56, native notification module, local notification scheduling, secure credential storage and a device-local cached workspace/outbox.
 - **AI:** DeepSeek (`deepseek-flash` by default), up to three bounded inference calls per chat request. A compact context and limited history control input size. `ORA_DAILY_AI_REQUESTS` provides a durable daily request cap (default 100). This is a request cap, not a guaranteed token or cost ceiling.

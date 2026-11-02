@@ -75,7 +75,9 @@ def connected():
     try:
         c = credential()
         return bool(configured() and c and c.get('refresh_token') and set(SCOPES) <= set(c.get('scopes', [])))
-    except HTTPException:
+    except Exception:
+        # A missing key or unreachable workspace must report "not connected",
+        # never break chat or the tool catalog.
         return False
 
 

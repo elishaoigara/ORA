@@ -1,3 +1,15 @@
+# ORA on Render Free.
+#
+# Budget reality (Render Free = 750 instance hours per WORKSPACE per month):
+#   * one always-running web service .......... ~730 h/month (all of it)
+#   * the backend + the WhatsApp sidecar ...... ~1460 h/month (over budget)
+#   * a 30-minute scheduler tick ............... ~360 h/month (half the clock)
+#
+# So this blueprint intentionally deploys ONE free service. The WhatsApp sidecar
+# lives in its own blueprint (whatsapp-sidecar/render.yaml) and is meant for a paid
+# instance; adding it to this file spends the whole monthly allowance twice over.
+# See docs/RENDER_FREE_BUDGET.md before adding services, keep-alive pings or
+# sub-15-minute cron schedules.
 services:
   - type: web
     name: ora-backend
@@ -5,13 +17,17 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install -r requirements-mini.txt
-    startCommand: uvicorn next_api:app --host 0.0.0.0 --port $PORT --workers 1
+    # One worker keeps inference concurrency bounded. The concurrency cap protects
+    # the 512 MB free instance, and the short keep-alive releases idle sockets.
+    startCommand: uvicorn next_api:app --host 0.0.0.0 --port $PORT --workers 1 --limit-concurrency 32 --timeout-keep-alive 5
     healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
       - key: APP_ENV
         value: production
+      - key: ORA_FREE_TIER
+        value: "1"
       - key: DATABASE_URL
         sync: false
       - key: ORA_API_TOKEN
@@ -20,17 +36,15 @@ services:
         sync: false
       - key: DEEPSEEK_API_KEY
         sync: false
+      - key: DEEPSEEK_MODEL
+        value: deepseek-flash
       # Optional Groq credential for voice and image analysis only.
       - key: GROQ_API_KEY
         sync: false
-      - key: DEEPSEEK_API_KEY
-        sync: false
-      - key: DEEPSEEK_MODEL
-        value: deepseek-flash
       - key: TELEGRAM_BOT_TOKEN
         sync: false
-      # Optional WhatsApp owner notifications (requires the WA sidecar service).
-      # Points at the ora-whatsapp sidecar service below.
+      # Optional WhatsApp owner notifications. Only set these when the paid
+      # sidecar in whatsapp-sidecar/render.yaml is deployed and awake.
       - key: WA_SIDECAR_URL
         sync: false
       - key: WA_API_SECRET
@@ -40,32 +54,5 @@ services:
         sync: false
       - key: CORS_ORIGINS
         sync: false
-      - key: DEEPSEEK_MODEL
-        value: deepseek-flash
       - key: ORA_DAILY_AI_REQUESTS
         value: "100"
-
-
-  - type: web
-    name: ora-whatsapp
-    runtime: node
-    plan: free
-    rootDir: whatsapp-sidecar
-    buildCommand: npm ci --omit=dev
-    startCommand: node src/server.js
-    healthCheckPath: /health
-    envVars:
-      - key: NODE_VERSION
-        value: 22.22.3
-      # Must match the backend's WA_API_SECRET; the sidecar refuses weak or default values.
-      - key: WA_API_SECRET
-        sync: false
-      # Enables the inbound webhook back into the backend (X-ORA-Token).
-      - key: ORA_BACKEND_URL
-        sync: false
-      - key: ORA_INTERNAL_TOKEN
-        sync: false
-      # Optional: restores a linked session after a redeploy on an ephemeral disk.
-      - key: WA_SESSION_B64
-        sync: false
-      # Set to /data only when a persistent disk is mounted there.

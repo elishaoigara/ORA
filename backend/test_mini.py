@@ -99,8 +99,10 @@ class AIProviderTests(unittest.TestCase):
   with patch.dict(os.environ,{'DEEPSEEK_API_KEY':'test-deepseek-key','GROQ_API_KEY':'test-groq-key','ORA_AI_PROVIDER':''}):
    with patch('mini.intelligence.requests.post',side_effect=replies) as post:
     reply,proposals=respond(initial(),'Plan my launch')
-   self.assertEqual(api.health()['ai_provider'],'deepseek')
-   self.assertTrue(api.health()['ai_configured'])
+   with patch.object(api,'db') as workspace:
+    workspace.return_value.healthy.return_value=True
+    self.assertEqual(api.health()['ai_provider'],'deepseek')
+    self.assertTrue(api.health()['ai_configured'])
   self.assertEqual(reply,'Please review the task.')
   self.assertEqual(proposals[0]['kind'],'task')
   self.assertEqual(post.call_args_list[0].args[0],'https://api.deepseek.com/chat/completions')
@@ -113,7 +115,10 @@ class AIProviderTests(unittest.TestCase):
    from mini.intelligence import ai_provider
    self.assertEqual(ai_provider()['url'],'https://api.groq.com/openai/v1/chat/completions')
   with patch.dict(os.environ,{'DEEPSEEK_API_KEY':'','GROQ_API_KEY':'test-groq-key','ORA_AI_PROVIDER':'deepseek'}):
-   self.assertFalse(api.health()['ai_configured'])
+   # The probe also checks storage; this test only asserts provider configuration.
+   with patch.object(api,'db') as workspace:
+    workspace.return_value.healthy.return_value=True
+    self.assertFalse(api.health()['ai_configured'])
    with self.assertRaisesRegex(RuntimeError,'DEEPSEEK_API_KEY'):
     respond(initial(),'Hello')
 
@@ -126,3 +131,8 @@ class AIProviderTests(unittest.TestCase):
   self.assertNotIn('private-test-key',str(error.exception))
 
 if __name__=='__main__':unittest.main()
+
+
+# The Render Free budget gates live in their own module. Importing the classes
+# here keeps the existing CI gate running them without editing the workflow file.
+from test_free_tier import FreeTierTests, StoreEfficiencyTests  # noqa: E402,F401
