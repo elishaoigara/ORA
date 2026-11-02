@@ -19,12 +19,14 @@ def telegram_notify(text: str, is_alert: bool = False):
 def whatsapp_notify(text: str) -> bool:
     """Send a WhatsApp message to the owner via the WA sidecar. No-op unless configured.
 
-    Set ORA_WA_NOTIFY_NUMBER to a phone number with country code (e.g. 2547XXXXXXXX)
-    or an exact WhatsApp contact name. Requires WA_SIDECAR_URL to be reachable.
+    Requires BOTH ORA_WA_NOTIFY_NUMBER (phone w/ country code, e.g. 2547XXXXXXXX, or an
+    exact contact name) and WA_SIDECAR_URL (reachable sidecar). Checking both here means
+    a deleted/unreachable sidecar never costs a notification cycle a slow HTTP timeout.
     Never raises — mirrors telegram_notify so WhatsApp can never kill the scheduler.
     """
     number = os.getenv("ORA_WA_NOTIFY_NUMBER", "").strip()
-    if not number:
+    sidecar = os.getenv("WA_SIDECAR_URL", "").strip()
+    if not number or not sidecar:
         return False
     try:
         from connectors.whatsapp import send_message
@@ -34,7 +36,7 @@ def whatsapp_notify(text: str) -> bool:
             return False
         return True
     except Exception as e:
-        print(f"[NOTIFIER] whatsapp_notify failed: {e}")
+        print(f"[NOTIFIER] whatsapp_notify failed: {type(e).__name__}")
         return False
 
 _sent_today: set = set()

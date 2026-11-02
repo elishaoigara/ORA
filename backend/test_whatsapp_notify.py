@@ -16,14 +16,17 @@ from intelligence import notifier
 
 class WhatsAppNotifyTests(unittest.TestCase):
     def setUp(self):
-        self._old_env = os.environ.get("ORA_WA_NOTIFY_NUMBER")
+        self._old_env = {k: os.environ.get(k) for k in ("ORA_WA_NOTIFY_NUMBER", "WA_SIDECAR_URL")}
+        os.environ["ORA_WA_NOTIFY_NUMBER"] = "254700000000"
+        os.environ["WA_SIDECAR_URL"] = "https://sidecar.example.com"
         self.calls = []
 
     def tearDown(self):
-        if self._old_env is None:
-            os.environ.pop("ORA_WA_NOTIFY_NUMBER", None)
-        else:
-            os.environ["ORA_WA_NOTIFY_NUMBER"] = self._old_env
+        for key, value in self._old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         sys.modules.pop("connectors.whatsapp", None)
 
     def _stub_whatsapp(self, result=None, raises=None):
@@ -46,19 +49,24 @@ class WhatsAppNotifyTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_sends_to_configured_number(self):
-        os.environ["ORA_WA_NOTIFY_NUMBER"] = "254700000000"
         self._stub_whatsapp({"ok": True})
         result = notifier.whatsapp_notify("hello owner")
         self.assertTrue(result)
         self.assertEqual(self.calls, [("254700000000", "hello owner")])
 
+    def test_noop_without_sidecar_url(self):
+        """Number set but sidecar URL missing (e.g. deleted service) -> no HTTP, no-op."""
+        os.environ.pop("WA_SIDECAR_URL", None)
+        self._stub_whatsapp({"ok": True})
+        result = notifier.whatsapp_notify("hi")
+        self.assertFalse(result)
+        self.assertEqual(self.calls, [])
+
     def test_sidecar_error_is_swallowed(self):
-        os.environ["ORA_WA_NOTIFY_NUMBER"] = "254700000000"
         self._stub_whatsapp({"ok": False, "error": "WA_SIDECAR_URL not set"})
         self.assertFalse(notifier.whatsapp_notify("hi"))
 
     def test_exception_never_propagates(self):
-        os.environ["ORA_WA_NOTIFY_NUMBER"] = "254700000000"
         self._stub_whatsapp(raises=RuntimeError("sidecar down"))
         self.assertFalse(notifier.whatsapp_notify("hi"))
 
@@ -69,8 +77,9 @@ class WhatsAppNotifyTests(unittest.TestCase):
 
 class DualNotifyWhatsAppTests(unittest.TestCase):
     def setUp(self):
-        self._old_env = os.environ.get("ORA_WA_NOTIFY_NUMBER")
+        self._old_env = {k: os.environ.get(k) for k in ("ORA_WA_NOTIFY_NUMBER", "WA_SIDECAR_URL")}
         os.environ["ORA_WA_NOTIFY_NUMBER"] = "254700000000"
+        os.environ["WA_SIDECAR_URL"] = "https://sidecar.example.com"
         self.sent = {"telegram": [], "whatsapp": [], "fcm": []}
 
         tg = types.ModuleType("telegram_bot")
@@ -90,10 +99,11 @@ class DualNotifyWhatsAppTests(unittest.TestCase):
         sys.modules["fcm"] = fcm
 
     def tearDown(self):
-        if self._old_env is None:
-            os.environ.pop("ORA_WA_NOTIFY_NUMBER", None)
-        else:
-            os.environ["ORA_WA_NOTIFY_NUMBER"] = self._old_env
+        for key, value in self._old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         for name in ("telegram_bot", "connectors.whatsapp", "fcm"):
             sys.modules.pop(name, None)
 

@@ -201,7 +201,7 @@ def snapshot(state, auth):
     data = {k: state[k] for k in ('revision', 'tasks', 'messages', 'memories', 'actions', 'settings')}
     data['documents'] = [file_metadata(d) for d in state['documents']]
     data['devices'] = [{k: v for k, v in d.items() if k not in ('push_token', 'weather', 'telegram_alerts_chat_id', 'telegram_alerts_enabled')} | {'telegram_alerts_enabled': telegram_alerts_enabled(d, state), 'weather': {k: v for k, v in d.get('weather', {}).items() if k not in ('latitude', 'longitude')}} for d in state['devices'] if not d.get('revoked')]
-    data['alerts'] = [{k: v for k, v in a.items() if k not in ('ticket', 'key', 'telegram_chat_id', 'lease')} for a in state.get('alerts', []) if not auth.get('device_id') or a['device_id'] == auth['device_id']]
+    data['alerts'] = [{k: v for k, v in a.items() if k not in ('ticket', 'key', 'telegram_chat_id', 'lease', 'whatsapp_done')} for a in state.get('alerts', []) if not auth.get('device_id') or a['device_id'] == auth['device_id']]
     data['delivery'] = delivery_status(state)
     data['scheduler_at'] = state.get('scheduler_at')
     data['scheduler_completed_at'] = state.get('scheduler_completed_at')
