@@ -22,7 +22,7 @@ A personal AI workspace for Elisha: a restrained cyberpunk web app and Android c
 
 ## Design
 
-Charcoal surfaces, quiet cyan accents, restrained violet, generous spacing and a small abstract ORA orb. Both clients have Today, Talk, Plan, Memory and Settings. `shared/theme.json` records the palette; web CSS and Android StyleSheet tokens match it.
+A quiet personal workspace on the documented navy canvas, with periwinkle as the ORA brand accent and mint as a secondary accent. The geometric sunrise mark is used without effects. The web Mini client offers Today, Talk, Plan, Memory, Tools & activity, Projects & desktop, and Connections; `shared/theme.json` records the shared brand and status palette.
 
 ## Architecture
 

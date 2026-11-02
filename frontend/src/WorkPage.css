@@ -1,185 +1,220 @@
-/* ORA // COMMAND DECK — projects & desktop console.
-   Shares the core palette: deep navy, lavender-indigo, mint. */
+/* Projects & desktop share the Mini design system. */
 .ora-work {
-  max-width: 1100px;
-  margin: auto;
-}
-.ora-work h1 {
-  font-size: clamp(28px, 4vw, 42px);
-  background: linear-gradient(180deg, #ffffff 20%, #cdd5f6 62%, #93a1d8);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-.ora-work h2 {
-  font-size: 22px;
-}
-.ora-work p {
-  line-height: 1.6;
-}
-.work-layout {
-  display: grid;
-  grid-template-columns: 230px minmax(0, 1fr);
-  gap: 22px;
-  margin-top: 24px;
-}
-.work-panel {
-  position: relative;
-  border: 1px solid rgba(52, 61, 82, 0.7);
-  border-radius: 16px;
-  padding: 22px;
-  margin-bottom: 20px;
-  background: linear-gradient(
-    165deg,
-    rgba(30, 36, 54, 0.68),
-    rgba(18, 22, 35, 0.72)
-  );
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.035),
-    0 26px 55px -38px rgba(0, 0, 0, 0.9);
   min-width: 0;
 }
-.work-panel::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 22px;
-  right: 22px;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(165, 180, 252, 0.28),
-    transparent
-  );
-  pointer-events: none;
+
+.ora-work > header {
+  margin-bottom: 22px;
 }
+
+.ora-work > header h1 {
+  margin-bottom: 9px;
+}
+
+.ora-work > header p:not(.eyebrow) {
+  max-width: 720px;
+  color: var(--color-text-secondary);
+}
+
+.work-layout {
+  display: grid;
+  grid-template-columns: minmax(230px, 290px) minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.work-layout > aside,
+.work-layout > div {
+  min-width: 0;
+}
+
+.work-panel {
+  min-width: 0;
+  margin-bottom: 16px;
+  padding: 20px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  overflow-wrap: anywhere;
+}
+
+.work-panel h2 {
+  margin-bottom: 12px;
+}
+
+.work-panel h3 {
+  margin-top: 20px;
+}
+
+.work-panel p {
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+.work-panel small {
+  color: var(--color-text-muted);
+}
+
 .work-panel label {
-  display: block;
-  margin: 14px 0 8px;
-  color: #b6c2dd;
-  letter-spacing: 0.04em;
+  margin: 12px 0;
 }
-.work-panel input:not([type="checkbox"]),
+
+.work-panel input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
 .work-panel textarea,
 .work-panel select {
-  display: block;
   width: 100%;
-  box-sizing: border-box;
-  margin-top: 8px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(13, 17, 28, 0.75);
-  color: var(--text);
-  font: inherit;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  margin-top: 7px;
 }
-.work-panel input:not([type="checkbox"]):focus,
-.work-panel textarea:focus,
-.work-panel select:focus {
-  border-color: rgba(165, 180, 252, 0.75);
-  box-shadow:
-    0 0 0 3px var(--glow-indigo-soft),
-    0 0 24px -8px var(--glow-indigo);
-  outline: none;
-}
+
 .work-panel textarea {
-  min-height: 90px;
-  resize: vertical;
+  min-height: 94px;
 }
+
 .work-panel button,
-.ora-work header button {
-  padding: 10px 14px;
-  border: 1px solid rgba(165, 180, 252, 0.3);
-  border-radius: 8px;
-  background: rgba(34, 41, 58, 0.6);
-  color: var(--indigo-strong);
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  cursor: pointer;
-  margin: 6px 8px 6px 0;
-  transition: all 0.2s ease;
+.ora-work header > button {
+  min-height: 44px;
+  margin: 4px 6px 4px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  color: var(--color-text-primary);
+  font-size: 0.9rem;
+  font-weight: 570;
+  line-height: 1.35;
+  text-align: left;
+  transition: border-color var(--motion-fast), background-color var(--motion-fast), color var(--motion-fast);
 }
-.work-panel button:hover,
-.ora-work header button:hover {
-  border-color: rgba(165, 180, 252, 0.6);
-  box-shadow: 0 0 18px -8px var(--glow-indigo);
+
+.work-panel button:hover:not(:disabled),
+.ora-work header > button:hover:not(:disabled) {
+  border-color: rgba(165, 180, 252, 0.62);
+  background: rgba(165, 180, 252, 0.1);
+  color: var(--color-brand-strong);
 }
+
 .work-panel button[aria-pressed="true"] {
-  background: linear-gradient(135deg, #dde2ff, #a5b4fc 60%, #8b9ef0);
-  border-color: transparent;
-  color: #0c1020;
-  font-weight: 700;
-  box-shadow: 0 0 22px -6px rgba(165, 180, 252, 0.6);
+  border-color: rgba(165, 180, 252, 0.62);
+  background: rgba(165, 180, 252, 0.13);
+  color: var(--color-brand-strong);
 }
-.work-panel button:disabled {
-  opacity: 0.5;
-  cursor: wait;
+
+.work-panel button:disabled,
+.ora-work header > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
-.work-panel aside button,
+
 .work-layout > aside > button {
   display: block;
   width: 100%;
+  margin: 5px 0;
   text-align: left;
 }
+
 .work-panel article {
-  border-top: 1px solid rgba(52, 61, 82, 0.45);
-  padding: 15px 0;
+  min-width: 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--color-border-subtle);
+  overflow-wrap: anywhere;
 }
+
+.work-panel article:first-of-type {
+  margin-top: 8px;
+}
+
 .work-panel pre {
+  max-width: 100%;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-inset);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 12px;
-  max-height: 340px;
-  overflow: auto;
-  background: #0a0e18;
-  border: 1px solid rgba(94, 234, 212, 0.18);
-  border-radius: 8px;
-  padding: 12px;
-  color: #b7c6ff;
 }
+
 .work-panel .work-check {
   display: flex;
-  gap: 10px;
+  min-height: 44px;
   align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  color: var(--color-text-primary);
+  cursor: pointer;
 }
-.work-panel .work-check input {
-  accent-color: var(--cyan);
+
+.work-panel .work-check input[type="checkbox"] {
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--color-brand);
 }
+
 .work-panel a {
-  color: var(--indigo-strong);
-}
-.work-panel small {
-  color: var(--muted);
-  line-height: 1.6;
-}
-.work-error {
-  color: var(--danger);
-}
-.work-panel code {
+  color: var(--color-brand-strong);
   overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  color: #9fe8dd;
 }
-@media (max-width: 750px) {
+
+.work-panel code {
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.work-panel details {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.work-panel summary {
+  min-height: 36px;
+  padding: 4px 0;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.work-panel .status-pill {
+  margin: 4px 0;
+}
+
+.work-panel .work-check:focus-within {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 3px;
+}
+
+.work-error {
+  padding: 12px;
+  border: 1px solid rgba(255, 150, 145, 0.5);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 150, 145, 0.08);
+}
+
+@media (max-width: 760px) {
   .work-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
   }
+
   .work-panel {
     padding: 16px;
   }
+
   .work-layout > aside {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+    display: block;
   }
-  .work-layout > aside h2 {
-    width: 100%;
-  }
+
   .work-layout > aside > button {
-    width: auto;
+    width: 100%;
   }
 }
