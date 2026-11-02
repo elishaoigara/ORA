@@ -119,6 +119,87 @@ class GoogleTests(unittest.TestCase):
             self.assertEqual(result['status'], 'needs_review')
             write.assert_not_called()
 
+    def test_setup_reports_every_missing_setting_without_values(self):
+        with patch.dict(os.environ, {}, clear=False):
+            for key in ('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'ORA_GOOGLE_TOKEN_KEY'):
+                os.environ.pop(key, None)
+            detail = google.setup_detail('https://backend.test/')
+            self.assertFalse(detail['ready'])
+            self.assertEqual(set(detail['problems']), {'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
+                                                       'GOOGLE_REDIRECT_URI', 'ORA_GOOGLE_TOKEN_KEY'})
+            self.assertEqual(detail['expected_redirect_uri'], 'https://backend.test/api/v2/google/callback')
+            self.assertTrue(all(check['state'] == 'missing' for check in detail['checks']))
+            response = self.client.get('/api/v2/google/status', headers=self.auth)
+            self.assertFalse(response.json()['configured'])
+            self.assertEqual(len(response.json()['setup']['checks']), 4)
+
+    def test_setup_marks_present_but_invalid_values(self):
+        with patch.dict(os.environ, {'GOOGLE_CLIENT_ID': 'cid-should-not-leak',
+                                     'GOOGLE_CLIENT_SECRET': 'csecret-should-not-leak',
+                                     'GOOGLE_REDIRECT_URI': 'https://ora-tan-three.vercel.app/api/v2/google/callback',
+                                     'ORA_GOOGLE_TOKEN_KEY': 'not-a-fernet-key'}):
+            detail = google.setup_detail()
+            self.assertFalse(detail['ready'])
+            self.assertEqual(detail['problems'], {'ORA_GOOGLE_TOKEN_KEY': 'invalid'})
+            status = self.client.get('/api/v2/google/status', headers=self.auth).text
+            for secret in ('cid-should-not-leak', 'csecret-should-not-leak', 'not-a-fernet-key'):
+                self.assertNotIn(secret, status)
+        with patch.dict(os.environ, {'GOOGLE_REDIRECT_URI': 'http://backend.test/api/v2/google/callback',
+                                     'ORA_GOOGLE_TOKEN_KEY': Fernet.generate_key().decode()}):
+            self.assertEqual(google.redirect_problem(), 'invalid')
+
+    def test_redirect_uri_and_credentials_are_trimmed(self):
+        with patch.dict(os.environ, {'GOOGLE_CLIENT_ID': ' client ', 'GOOGLE_CLIENT_SECRET': ' secret\n',
+                                     'GOOGLE_REDIRECT_URI': ' https://backend.test/api/v2/google/callback/ ',
+                                     'ORA_GOOGLE_TOKEN_KEY': Fernet.generate_key().decode() + '\n'}):
+            self.assertTrue(google.configured())
+            self.assertEqual(google.redirect_uri(), 'https://backend.test/api/v2/google/callback')
+            self.assertEqual(google.client_id(), 'client')
+            self.assertEqual(google.client_secret(), 'secret')
+            started = self.client.get(self.client.post('/api/v2/google/connect', headers=self.auth).json()['url'])
+            query = parse_qs(urlparse(started.headers['location']).query)
+            self.assertEqual(query['client_id'], ['client'])
+            self.assertEqual(query['redirect_uri'], ['https://backend.test/api/v2/google/callback'])
+        # A working configuration still reports ready once the moved key is back.
+        self.assertTrue(google.configured())
+
+    def test_check_probe_reports_google_reachability(self):
+        _, state = self.begin()
+        token = {'refresh_token': 'private-refresh', 'access_token': 'private-access', 'scope': ' '.join(google.SCOPES)}
+        with patch.object(google, 'token_post', return_value=token), patch.object(google.requests, 'get', return_value=Mock(ok=True, json=lambda: {'email': 'owner@example.com'})):
+            self.client.get('/api/v2/google/callback', params={'state': state, 'code': 'code'})
+        with patch.object(google, 'access_token', return_value='fresh'), \
+                patch.object(google.requests, 'get', return_value=Mock(ok=True, json=lambda: {'email': 'owner@example.com'})):
+            result = self.client.get('/api/v2/google/check', headers=self.auth)
+            self.assertTrue(result.json()['ok'])
+            self.assertEqual(result.json()['email'], 'owner@example.com')
+        with patch.object(google, 'access_token', return_value='fresh'), \
+                patch.object(google.requests, 'get', return_value=Mock(ok=False, status_code=401)):
+            result = self.client.get('/api/v2/google/check', headers=self.auth)
+            self.assertFalse(result.json()['ok'])
+            self.assertIn('Reconnect', result.json()['message'])
+        self.assertEqual(self.client.get('/api/v2/google/check', headers={'Authorization': 'phone'}).status_code, 403)
+
+    def test_check_reports_disabled_cloud_apis(self):
+        _, state = self.begin()
+        token = {'refresh_token': 'private-refresh', 'access_token': 'private-access', 'scope': ' '.join(google.SCOPES)}
+        with patch.object(google, 'token_post', return_value=token), patch.object(google.requests, 'get', return_value=Mock(ok=True, json=lambda: {'email': 'owner@example.com'})):
+            self.client.get('/api/v2/google/callback', params={'state': state, 'code': 'code'})
+
+        def fake_get(url, **_):
+            if 'sheets' in url:
+                return Mock(status_code=403, ok=False,
+                            json=lambda: {'error': {'errors': [{'reason': 'accessNotConfigured'}]}})
+            return Mock(status_code=200, ok=True, json=lambda: {'email': 'owner@example.com'})
+
+        with patch.object(google, 'access_token', return_value='fresh'), \
+                patch.object(google.requests, 'get', side_effect=fake_get):
+            result = self.client.get('/api/v2/google/check', headers=self.auth).json()
+        self.assertFalse(result['ok'])
+        self.assertIn('Sheets API', result['message'])
+        self.assertEqual({item['api']: item['enabled'] for item in result['apis']},
+                         {'Calendar API': True, 'Drive API': True, 'Docs API': True, 'Sheets API': False})
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -17,6 +17,8 @@ Open ORA on the web, then **Connections → Google Workspace → Connect Google*
 
 6. Redeploy the backend, then connect from ORA's web owner session. Do not put these secrets in Vercel frontend variables, the APK, GitHub source, chat, or screenshots.
 
+The Connections page reads the backend's own readiness report, so it tells you which of these four settings is still missing or invalid instead of a single generic note. It also prints the redirect URI the backend expects for your deployment; copy that value into the Google client rather than typing it, and confirm the host is the Render service. Surrounding whitespace and one accidental trailing slash are trimmed, because Google compares the redirect URI exactly.
+
 The OAuth refresh token is obtained automatically and encrypted in the existing workspace database. Ensure Render's existing `DATABASE_URL` is configured for durable storage. No `GOOGLE_REFRESH_TOKEN` is needed for this flow. Legacy Gmail uses its separate environment-token integration and is not included in this consent flow. Calendar now uses the new Workspace connection rather than the legacy manual token.
 
 ## Permissions and limits
@@ -42,6 +44,17 @@ Google's External Testing refresh tokens generally expire after seven days for t
 Use Tools & activity for exact previews and approvals. A file-creation request may leave an empty Doc if its subsequent text insertion fails; check Google before retrying. ORA does not automatically retry ambiguous writes. Reconnecting or disconnecting invalidates previously prepared Google write approvals.
 
 Disconnect removes ORA's stored credentials and attempts to revoke access at Google. It does not delete files, events, or previously saved chat/tool results. If revocation cannot reach Google, remove ORA from https://myaccount.google.com/connections as well.
+
+## If Connect Google stays disabled
+
+Open **Connections → Google Workspace** and read the checklist. Each row is one backend setting, marked _Ready_, _Missing on the backend_, or _Set, but not valid_:
+
+- **Missing on the backend** — the variable was not saved on the Render service that serves the API, or the service has not redeployed since. Saving an environment variable, then **Manual Deploy → Deploy latest commit**, is what makes it visible to the running container. Vercel variables do not reach the backend.
+- **`GOOGLE_REDIRECT_URI` set, but not valid** — it must be `https://` and end at exactly `/api/v2/google/callback` with no query string. A Vercel address, a port, or an extra path segment is rejected here rather than failing later on Google's error page.
+- **`ORA_GOOGLE_TOKEN_KEY` set, but not valid** — the value must be the whole Fernet key, not the `b'...'` repr, a password, or a truncated copy. Regenerate it only if it was never used; replacing a working key requires reconnecting Google.
+- **Ready, but Google still refuses** — check the client's authorized redirect URI matches the printed value character for character, then reconnect. `redirect_uri_mismatch` comes from Google, not ORA.
+
+Once status shows **Connected**, press **Test connection**. It refreshes the stored token, reads the account email, then sends one cheap read-only request to each of the Calendar, Drive, Docs and Sheets APIs. The result proves the saved authorization still works and shows which Cloud APIs are enabled, so a forgotten enable step surfaces here instead of in the middle of a task. Reconnect whenever Google revokes the grant or a Testing-mode refresh token expires.
 
 ## Verification
 
