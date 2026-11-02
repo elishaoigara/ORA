@@ -136,14 +136,12 @@ async def lifespan(app: FastAPI):
         def daily_summary():
             _send_context_summary("ORA Daily Summary", evening=True)
 
+        weather_last_temp = None
+        weather_last_alert_signature = None
+
         def weather_monitor():
-            """
-            Runs every 30 min. Alerts Elisha when:
-            - Rain / storm is approaching in the next 3 hours (≥60% probability)
-            - Temperature drops >4°C from last reading
-            - Weather code jumps to severe (thunderstorm, heavy rain)
-            - Morning forecast (8am) — what to expect today
-            """
+            """Check every 30 minutes for approaching rain and significant weather changes."""
+            nonlocal weather_last_temp, weather_last_alert_signature
             try:
                 from connectors.weather import get_weather, get_weather_forecast, _code_to_icon
                 from intelligence.notifier import dual_notify
@@ -185,10 +183,14 @@ async def lifespan(app: FastAPI):
                     t     = first.get("time","soon")
                     icon  = first.get("icon","🌧")
                     cond  = first.get("condition","Rain")
-                    dual_notify(
-                        title=f"{icon} Rain Alert — Juja",
-                        body=f"{cond} expected around *{t}* ({pct}% probability)\n☂️ _You may want an umbrella._",
-                    )
+                    signature = f"rain:{now_eat.date()}:{t}:{cond}"
+                    if signature != weather_last_alert_signature:
+                        dual_notify(
+                            title=f"{icon} Rain Alert — Juja",
+                            body=f"{cond} expected around *{t}* ({pct}% probability)\n☂️ _You may want an umbrella._",
+                            is_alert=True,
+                        )
+                        weather_last_alert_signature = signature
                     return
 
                 # ── Severe weather now ────────────────────────────────
@@ -197,20 +199,35 @@ async def lifespan(app: FastAPI):
                     icon = current.get("icon","⛈️")
                     cond = current.get("condition","Severe weather")
                     temp = current.get("temp","—")
-                    dual_notify(
-                        title=f"{icon} Weather Alert — Juja",
-                        body=f"*{cond}* right now in Juja, Kiambu\nTemp: {temp}°C\n⚠️ _Stay safe._",
-                        is_alert=True,
-                    )
+                    signature = f"severe:{code}:{cond}"
+                    if signature != weather_last_alert_signature:
+                        dual_notify(
+                            title=f"{icon} Weather Alert — Juja",
+                            body=f"*{cond}* right now in Juja, Kiambu\nTemp: {temp}°C\n⚠️ _Stay safe._",
+                            is_alert=True,
+                        )
+                        weather_last_alert_signature = signature
+                elif not rain_soon:
+                    weather_last_alert_signature = None
+
+                # Alert on an abrupt temperature drop as another meaningful change.
+                try:
+                    temperature = float(current.get("temp"))
+                    if weather_last_temp is not None and weather_last_temp - temperature >= 4:
+                        dual_notify(
+                            title="🌡️ Sudden Temperature Drop — Juja",
+                            body=f"Temperature fell from {weather_last_temp:.1f}°C to {temperature:.1f}°C since the last check.",
+                            is_alert=True,
+                        )
+                    weather_last_temp = temperature
+                except (TypeError, ValueError):
+                    pass
 
             except Exception:
                 print(f"[WEATHER MONITOR] {traceback.format_exc()}")
 
         def wa_morning_summary():
-            """
-            Runs at 8:30am EAT. Sends a WhatsApp unread summary to Telegram.
-            Only fires if there are unread messages.
-            """
+            """Send the existing unread-message digest to the configured channels."""
             try:
                 from connectors.whatsapp import format_unread_summary, is_connected
                 from intelligence.notifier import dual_notify
@@ -221,6 +238,42 @@ async def lifespan(app: FastAPI):
                     dual_notify(title="", body=summary)
             except Exception:
                 print(f"[WA MORNING] {traceback.format_exc()}")
+
+        def wa_six_hour_update():
+            """Send a concise personal status update directly to the owner's WhatsApp."""
+            try:
+                from intelligence.notifier import whatsapp_notify
+                if not os.getenv("ORA_WA_NOTIFY_NUMBER", "").strip():
+                    return
+                from personal_context import build_personal_context
+
+                context = build_personal_context(force=True)
+                summary = context.get("summary", {})
+                tasks = context.get("tasks", [])
+                overdue = context.get("overdue", [])
+                lines = [f"ORA update · {datetime.now().strftime('%d %b, %H:%M')}"]
+                if context.get("focus"):
+                    lines.append(f"Focus: {context['focus']}")
+                lines.append(f"Pending tasks: {summary.get('pending_tasks', len(tasks))}")
+                if overdue:
+                    lines.append(f"Overdue: {len(overdue)}")
+                    lines.extend(f"• {task.get('title', 'Untitled')[:70]}" for task in overdue[:3])
+                elif tasks:
+                    lines.append("Next up:")
+                    lines.extend(f"• {task.get('title', 'Untitled')[:70]}" for task in tasks[:3])
+                else:
+                    lines.append("No pending tasks — all clear.")
+                google = context.get("google", {}) or {}
+                events = google.get("calendar_today", [])
+                if events:
+                    lines.append(f"Calendar today: {len(events)} event(s)")
+                    lines.extend(f"• {str(event.get('start', ''))[:16].replace('T', ' ')} — {event.get('title', 'Untitled')}"
+                                 for event in events[:3])
+                if context.get("weather_summary"):
+                    lines.append(f"Weather: {context['weather_summary']}")
+                whatsapp_notify("\n".join(lines))
+            except Exception:
+                print(f"[WA SIX-HOUR UPDATE] {traceback.format_exc()}")
 
         start_scheduler([
             # Core agent loop
@@ -241,6 +294,8 @@ async def lifespan(app: FastAPI):
             {"trigger": "interval", "minutes": 15, "fn": sync_gmail,                   "name": "gmail_sync",   "enabled_if": _google_is_authorized},
             {"trigger": "interval", "minutes": 30, "fn": weather_monitor,              "name": "weather_monitor"},
             {"trigger": "cron",     "hour": 8, "minute": 30, "fn": wa_morning_summary, "name": "wa_morning_summary"},
+            # Owner check-in to WhatsApp every six hours (requires WA sidecar + destination).
+            {"trigger": "interval", "hours": 6, "fn": wa_six_hour_update, "name": "wa_six_hour_update"},
         ])
         print("[ORA] Scheduler started")
     except Exception:
