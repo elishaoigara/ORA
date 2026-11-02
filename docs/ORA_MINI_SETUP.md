@@ -59,7 +59,7 @@ DeepSeek chat and tools use the key only on the Render backend. Add `DEEPSEEK_AP
 
 A first request after sleep may take around a minute. The clients wait up to 115 seconds and preserve unsent drafts. They do not generate fake keep-alive traffic. Only visible and recently active clients synchronize: every 60 seconds while you are using the app, every 3 minutes when it is idle, and not at all when the tab is hidden or has been untouched for ten minutes. Unchanged workspaces return an empty `304`, and JSON snapshots are gzipped.
 
-A free workspace shares 750 instance hours a month. Schedule the companion tick a few times a day, not every 30 minutes, and never add a second free service: see [the free-tier budget](RENDER_FREE_BUDGET.md). The WhatsApp sidecar needs a paid instance (`whatsapp-sidecar/render.yaml`) because it must stay connected all the time.
+A free workspace shares 750 instance hours a month, and one always-on service already uses ~730 of them. Never add a second free service: run additional processes inside this one. The WhatsApp bridge does exactly that — it is embedded in the backend container, so WhatsApp costs no extra hours and catches up on the messages WhatsApp queued while the service slept. Keep the companion tick at 30 minutes if you want that catch-up twice an hour, or stretch it to a few times a day to save ~340 h: see [the free-tier budget](RENDER_FREE_BUDGET.md) and [WhatsApp setup](WHATSAPP_SETUP.md).
 
 ## 3. Migrate available old data
 

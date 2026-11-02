@@ -16,9 +16,18 @@ from typing import Optional
 
 import requests
 
-SIDECAR_URL = os.getenv("WA_SIDECAR_URL", "").rstrip("/")
+if os.getenv("WA_SIDECAR_URL", "").strip():
+    SIDECAR_URL = os.environ["WA_SIDECAR_URL"].strip().rstrip("/")
+elif os.getenv("WA_EMBEDDED", "") == "1":
+    # The bridge runs inside this container, so talk to it on loopback: the public
+    # port belongs to the API and the bridge is never exposed directly.
+    SIDECAR_URL = "http://127.0.0.1:" + (os.getenv("WA_SIDECAR_PORT", "8080").strip() or "8080")
+else:
+    SIDECAR_URL = ""
 API_SECRET  = os.getenv("WA_API_SECRET", "ora-wa-secret-change-me")
-TIMEOUT     = 12
+# A loopback bridge answers in milliseconds or not at all; long timeouts on a
+# 0.1-CPU instance only buy wasted wall-clock while the service is awake.
+TIMEOUT     = 5 if SIDECAR_URL.startswith("http://127.0.0.1") else 12
 
 _status_cache: dict = {}
 _STATUS_TTL   = 30

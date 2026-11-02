@@ -20,11 +20,13 @@ future changes.
 When the workspace runs out of hours, **every free service is suspended until the
 next calendar month**. Unused hours do not roll over.
 
-> **One change lives in a workflow file.** `.github/workflows/companion-tick.yml`
-> still schedules `cron: '17,47 * * * *'`. Change it to
-> `cron: '47 4,10,16 * * *'` in the GitHub UI (or with a token that has the
-> `workflow` scope). Until that line changes, the service still wakes 48 times a
-> day and the "before" numbers below still apply to your workspace.
+> **The tick interval is a product decision, not just a cost knob.**
+> `.github/workflows/companion-tick.yml` currently schedules
+> `cron: '17,47 * * * *'`. Every tick wakes the service, so it is also the
+> WhatsApp catch-up interval: 30 minutes means WhatsApp is reachable (and catches
+> up) twice an hour, for ~360 h/month; `cron: '47 4,10,16 * * *'` costs ~22 h but
+> only catches up three times a day. Both fit the budget — pick the one you want.
+> The workflow file can only be edited with a token that has the `workflow` scope.
 
 ## The budget before this cleanup
 
@@ -46,25 +48,40 @@ Two habits caused almost all of it:
 
 ## The budget after this cleanup
 
+The second service is gone: the WhatsApp bridge now runs inside the backend's
+container (`backend/mini/wa_bridge.py`, built by the root `Dockerfile`), so the
+workspace pays for one service no matter how many processes it hosts.
+
 | Behaviour | Monthly cost |
 | --- | --- |
-| Tick three times a day (once the schedule below is applied) | 3 × 15 min/day ≈ **22 h** |
-| One free web service | no background cost while asleep |
+| One free web service (API + embedded WhatsApp bridge) | no background cost while asleep |
+| Tick every 30 min — WhatsApp catch-up twice an hour | 48 × 15 min ≈ **360 h** |
+| …or tick three times a day — WhatsApp catches up 3×/day | ≈ **22 h** |
 | Typical owner usage (a few sessions a day) | ~20–60 h |
-| **Expected total** | **well under 100 h of 750** |
+| **Expected total** | **~420 h at the 30-minute cadence, ~80 h otherwise, of 750** |
 
-The leftover headroom is the point: normal use cannot exhaust the workspace.
+Both columns fit. The 30-minute option buys WhatsApp responsiveness; the 3×/day
+option buys headroom. What does *not* fit is a second always-on service — that was
+the 730 h line in the table above, and no amount of tuning removes it.
 
 ## What changed in the code
 
-- **Blueprint** (`render.yaml`): one free service only. The WhatsApp sidecar moved
-  to `whatsapp-sidecar/render.yaml` and is marked `plan: starter`, because it is
-  the one component that genuinely needs to run continuously.
-- **Tick schedule** (`.github/workflows/companion-tick.yml`): set
-  `cron: '47 4,10,16 * * *'` instead of `cron: '17,47 * * * *'`. That is 07:47,
-  13:47 and 19:47 in Africa/Nairobi, which still covers the morning briefing, a
-  midday check and the evening outlook. Weather forecasts are cached for an hour
-  server-side. This one-line edit is the largest single saving in the table above.
+- **One container** (`Dockerfile`, `render.yaml`): the Python API and the Node
+  WhatsApp bridge are built into a single image and deployed as one Docker web
+  service. `backend/mini/wa_bridge.py` supervises the bridge, restarts it if it
+  dies, and shuts it down cleanly. A separate sidecar is still possible
+  (`whatsapp-sidecar/render.yaml`, `plan: starter`) for a paid plan, but it is no
+  longer the default and no longer needed on Free.
+- **WhatsApp that survives sleep** (`backend/next_api.py`,
+  `whatsapp-sidecar/src/session.js`): the linked-device credentials are saved to
+  the `ora_mini_kv` table (debounced, ≤ 512 KB, never in a snapshot or export) and
+  restored on boot, so a wake-up costs a reconnect instead of a QR pairing. The
+  bridge is loopback-only; `/api/whatsapp/pairing?token=…` proxies the QR (and the
+  pairing code) to the owner without exposing the sidecar secret.
+- **Tick schedule** (`.github/workflows/companion-tick.yml`): deliberately left at
+  30 minutes because that is now the WhatsApp catch-up cadence. Change it to
+  `cron: '47 4,10,16 * * *'` if you would rather have the ~340 h back than
+  twice-hourly WhatsApp catch-up (07:47, 13:47, 19:47 in Africa/Nairobi).
 - **Compression** (`backend/next_api.py`): gzip for JSON responses above 500 bytes.
   Workspace snapshots are highly repetitive JSON and shrink by roughly 80%.
   Downloads are skipped because they are already compressed.
@@ -90,7 +107,7 @@ The leftover headroom is the point: normal use cannot exhaust the workspace.
 1. **Do not add a keep-alive.** No uptime pinger, no cron-job.org warm-up, no
    self-ping. They work by spending the whole monthly allowance.
 2. **Do not add a second free service.** Upgrade to a paid instance or combine the
-   work into this process.
+   work into this process — that is exactly what the WhatsApp bridge does now.
 3. **Budget a wake pattern before adding it.** A schedule that fires every N
    minutes costs about `1440 × 15 / N` hours a month (the 15-minute idle window):
 

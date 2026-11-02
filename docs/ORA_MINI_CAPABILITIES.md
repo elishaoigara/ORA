@@ -31,7 +31,7 @@ Chat and tool reasoning inputs are sent to your configured DeepSeek account. Voi
 
 ## Legacy functionality
 
-Old Gmail/Calendar/Drive OAuth, M-Pesa ingestion, Telegram polling, knowledge agents and roadmap modules remain in source for reference and rollback. They are not loaded by `next_api.py`. WhatsApp is the exception: companion alerts mirror to the owner's WhatsApp through `mini/whatsapp.py` when `ORA_WA_NOTIFY_NUMBER` and `WA_SIDECAR_URL` are configured, and the bridge itself lives in `whatsapp-sidecar/`. Do not advertise them as connected to the new durable workspace. The new phone's Gmail/WhatsApp notification awareness is distinct from direct service integrations.
+Old Gmail/Calendar/Drive OAuth, M-Pesa ingestion, Telegram polling, knowledge agents and roadmap modules remain in source for reference and rollback. They are not loaded by `next_api.py`. WhatsApp is the exception: companion alerts mirror to the owner's WhatsApp through `mini/whatsapp.py` when `ORA_WA_NOTIFY_NUMBER` is set and a bridge is reachable — by default the embedded bridge that runs inside the backend container (`WA_EMBEDDED=1`, supervised by `mini/wa_bridge.py`), with `whatsapp-sidecar/` still usable as a standalone service. Do not advertise them as connected to the new durable workspace. The new phone's Gmail/WhatsApp notification awareness is distinct from direct service integrations.
 
 ## What comes after the physical-device gate
 

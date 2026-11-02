@@ -1,145 +1,210 @@
-# WhatsApp for ORA — sidecar setup
+# WhatsApp for ORA on Render Free
 
-ORA talks to WhatsApp through a small self-hosted bridge (`whatsapp-sidecar/`) instead of
-embedding a WhatsApp client in the backend. The bridge holds the linked-device session;
-ORA reaches it over HTTP with a shared secret.
+ORA talks to WhatsApp through a small self-hosted bridge (`whatsapp-sidecar/`) that
+holds the linked-device session. On Render Free the bridge does **not** get its own
+service: it runs as a supervised child process of the backend, inside the same
+container. That is what makes WhatsApp affordable on the free plan.
 
 ```
-             cron (external)                      HTTPS + x-api-secret
-Render  ──►  /api/companion/tick  ──►  dispatch()  ────────────────►  ora-whatsapp sidecar  ──►  WhatsApp
-   │                                    │                                   ▲
-   │                                    └── Telegram (primary)              │
-   └── POST /api/whatsapp/incoming  ◄──── inbound webhook (X-ORA-Token) ────┘
+                    ONE free web service (750 h/month for the whole workspace)
+   ┌──────────────────────────────────────────────────────────────────────────┐
+   │  uvicorn  next_api.py        ──►  /api/companion/tick, /api/v2/*          │
+   │      │  supervises (mini/wa_bridge.py)                                    │
+   │      ▼                                                                    │
+   │  node  whatsapp-sidecar  ──►  connected WhatsApp device  (loopback :8080) │
+   │      │                                                                    │
+   │      ├── POST /api/whatsapp/incoming        inbound urgency alerts        │
+   │      ├── PUT  /api/whatsapp/session         saves the linked device       │
+   │      └── GET  /api/whatsapp/session         restores it after a sleep     │
+   └──────────────────────────────────────────────────────────────────────────┘
+                                    │
+                          Telegram (primary channel)
 ```
 
-Outbound is a **mirror**: every companion alert that goes to Telegram is also sent to
-WhatsApp when the channel is configured. Inbound messages only become an alert when they
-read as time-sensitive, so routine chatter never becomes notification noise.
+The old design needed a second always-on service. A bridge that holds a socket uses
+~730 instance hours a month on its own and the backend uses the rest, so the
+workspace (750 h) ran out and **both** services were suspended. Sharing one process
+removes that cost entirely: WhatsApp is available whenever ORA is awake, and costs
+nothing extra.
 
-## 1. Deploy the sidecar
+## 1. Turn it on
 
-**This requires a paid Render instance.** The sidecar has to stay connected to
-WhatsApp, so it never gets to sleep; a free web service uses ~730 instance hours a
-month, and Render Free gives the whole workspace 750. Adding it next to the ORA
-backend suspends both services before the month ends. Use
-`whatsapp-sidecar/render.yaml` (`plan: starter`) or the manual settings below. See
-[the free-tier budget](RENDER_FREE_BUDGET.md).
+Everything below belongs to the single `ora-backend` service (`render.yaml` already
+declares it).
 
-If you deploy manually instead:
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `WA_EMBEDDED` | yes | `1` starts the bridge inside the service. Without it nothing new runs. |
+| `WA_API_SECRET` | yes | Shared secret for the loopback bridge. 12+ characters, never the public default. |
+| `ORA_INTERNAL_TOKEN` | yes | 16+ characters. Authenticates the bridge's webhooks **and** its session saves. |
+| `ORA_WA_NOTIFY_NUMBER` | to mirror alerts | Your number with country code (`2547XXXXXXXX`) or an exact WhatsApp contact name. |
+| `WA_PAIR_NUMBER` | for phone-only pairing | Your number with country code. Makes WhatsApp issues an 8-character pairing code instead of requiring a QR scan. |
+| `WA_SIDECAR_PORT` | no | Default `8080`, loopback only. It is never exposed publicly. |
+| `WA_MAX_MESSAGES` | no | In-memory message cache, default `200` here to fit beside the API in 512 MB. |
+| `NODE_OPTIONS` | no | `--max-old-space-size=160` keeps the bridge from crowding the API. |
+| `WA_SESSION_SYNC` | no | `0` disables credential backup to the database (default on). |
+| `WA_SIDECAR_URL` | no | Leave empty for the embedded bridge. Set it only for a standalone sidecar (§6). |
 
-| Setting | Value |
+The bridge only starts when `WA_EMBEDDED=1`, `WA_API_SECRET` (≥ 12 chars),
+`ORA_INTERNAL_TOKEN` (≥ 16 chars) and a `node` binary are all present. Otherwise the
+backend behaves exactly as it did before — no child process, no network I/O, no
+errors.
+
+## 2. Pair the phone
+
+Open, once:
+
+```
+https://ora-oovf.onrender.com/api/whatsapp/pairing?token=<ORA_API_TOKEN>
+```
+
+- The page shows a QR: scan it from WhatsApp → **Settings → Linked devices → Link a device**.
+- If `WA_PAIR_NUMBER` is set, it also shows an 8-character code. Use **Link with
+  phone number** and type it — the only option when the page is open on the very
+  phone that would have to scan the code.
+
+The bridge is loopback-only, so the backend proxies the QR and no sidecar secret ever
+reaches your browser. The owner key does appear in the URL of that one request (and
+therefore in your Render access log, as with the old `/qr?secret=` page); rotate
+`ORA_API_TOKEN` afterwards if that matters to you. Check the state from the app with
+`GET /api/v2/whatsapp/status` (owner session), which returns booleans only:
+
+```json
+{"enabled": true, "linked": true, "state": "open"}
+```
+
+The linked phone number is deliberately never returned to a client.
+
+## 3. Why the link survives sleep
+
+Render Free stops an idle instance after 15 minutes and **destroys its filesystem**.
+A linked-device session kept only on disk is gone after the first nap, which is why
+the old setup asked you to re-pair (or paste `WA_SESSION_B64`) after every restart.
+
+Now the credentials live in the database:
+
+| Direction | Endpoint | Who calls it |
+| --- | --- | --- |
+| Save | `PUT /api/whatsapp/session` | the bridge, after WhatsApp rotates keys (debounced, ≥ 15 s apart) |
+| Restore | `GET /api/whatsapp/session` | the bridge, on boot, before the socket starts |
+
+They are stored in the `ora_mini_kv` table under `whatsapp.session`, capped at 512 KB,
+and are **never** part of a sync snapshot, an export or the workspace read cache.
+
+Boot order: `WA_SESSION_B64` (explicit override) → credentials already on disk (a
+persistent-disk deployment) → the database copy → otherwise wait for a QR. So a wake
+costs a reconnect, not a new pairing.
+
+To unlink deliberately: unlink on the phone, then
+`DELETE /api/whatsapp/session` with `X-ORA-Token: $ORA_INTERNAL_TOKEN` (or
+`?token=<ORA_API_TOKEN>`). Treat a stored session like a password — it is a live
+WhatsApp web session.
+
+## 4. What "works on the free tier" actually means
+
+The service sleeps when nothing talks to it, and the socket sleeps with it. That is
+the one limitation that no amount of code can remove, so ORA is built around it:
+
+| Situation | Behaviour |
 | --- | --- |
-| Runtime | Node 22 |
-| Root directory | `whatsapp-sidecar` |
-| Build command | `npm ci --omit=dev` |
-| Start command | `node src/server.js` |
-| Health check path | `/health` |
+| ORA is awake | Full WhatsApp: read chats, send messages, mirror alerts. A send that lands while the socket is still linking waits up to 15 s instead of failing. |
+| ORA goes to sleep | The socket closes, exactly as if you had closed WhatsApp Web. WhatsApp keeps recent messages for the linked device. |
+| ORA wakes up | The bridge restores the session from Postgres, relinks in a few seconds, and the messages WhatsApp held are delivered. Those that read as urgent become alerts. Messages older than WhatsApp's offline window may not be replayed. |
+| You send while asleep | The request wakes the service (~1 min cold start); the message then goes out normally. |
 
-Or with Docker:
+**The wake-ups are the delivery cadence.** Every companion tick wakes the service,
+so it is also the WhatsApp catch-up interval:
 
-```bash
-docker build -t ora-whatsapp ./whatsapp-sidecar
-docker run -p 8080:8080 -v ora-wa:/data \
-  -e WA_API_SECRET='<same secret as the backend>' \
-  -e ORA_BACKEND_URL='https://ora-oovf.onrender.com' \
-  -e ORA_INTERNAL_TOKEN='<ORA_INTERNAL_TOKEN>' \
-  ora-whatsapp
-```
+- **Tick every 30 minutes** (`cron: '17,47 * * * *'`, the current workflow): WhatsApp
+  catches up twice an hour during the day. Costs ~360 of the 750 h, leaving ~390 h
+  for your own sessions — comfortable.
+- **Tick three times a day**: cheaper (~22 h) but messages that arrive while ORA
+  sleeps wait until the next tick. Only choose this if you do not need WhatsApp
+  promptly.
 
-## 2. Configure both services
-
-**Sidecar (`ora-whatsapp`)**
-
-| Variable | Required | Notes |
-| --- | --- | --- |
-| `WA_API_SECRET` | yes | Same value as the backend's `WA_API_SECRET`. Must be ≥ 12 chars; the service refuses to boot on the public default. |
-| `ORA_BACKEND_URL` | recommended | e.g. `https://ora-oovf.onrender.com` — enables the inbound webhook. |
-| `ORA_INTERNAL_TOKEN` | with the above | Sent as `X-ORA-Token`; the backend rejects short or missing tokens. |
-| `WA_AUTH_DIR` | no | Session directory. Use a persistent disk (`/data`) or `WA_SESSION_B64`. |
-| `WA_SESSION_B64` | no | Restores a pairing after a redeploy — see §4. |
-| `WA_MAX_MESSAGES` | no | In-memory message cache size, default `500`. |
-
-**Backend (`ora-backend`)**
-
-| Variable | Required | Notes |
-| --- | --- | --- |
-| `WA_SIDECAR_URL` | yes | Public URL of the sidecar, e.g. `https://ora-whatsapp.onrender.com`. |
-| `WA_API_SECRET` | yes | Same secret as the sidecar. |
-| `ORA_WA_NOTIFY_NUMBER` | yes | Your own number with country code (`2547XXXXXXXX`) or an exact WhatsApp contact name. |
-| `ORA_INTERNAL_TOKEN` | for inbound | Must match the sidecar's value (≥ 16 chars). |
-
-Nothing happens until **both** `ORA_WA_NOTIFY_NUMBER` and `WA_SIDECAR_URL` are set: the
-mirror performs no network I/O when unconfigured, so a missing or deleted sidecar can never
-delay Telegram delivery. Once configured, ORA sends a concise personal status update to
-that WhatsApp destination every six hours. The first scheduled update runs six hours after
-the backend scheduler starts.
-
-## 3. Pair the device
-
-1. Open `https://<sidecar-host>/qr?secret=<WA_API_SECRET>`.
-2. On your phone: WhatsApp → Settings → Linked devices → Link a device, and scan.
-3. `GET /status` (with the `x-api-secret` header) should report `"state": "open"`.
-
-```bash
-curl -s -H "x-api-secret: $WA_API_SECRET" https://ora-whatsapp.onrender.com/status
-# {"ok":true,"state":"open","me":"2547…","pairedAt":"…"}
-```
-
-## 4. Keep the pairing alive
-
-Render's free plan has an ephemeral disk, so a redeploy or restart loses the linked-device
-session. Two options:
-
-- **Persistent disk** (paid plans): mount a disk at `/data` and set `WA_AUTH_DIR=/data`.
-- **Session backup** (free): while linked, call `GET /session/export` with the secret, then
-  store the returned `b64` value as the `WA_SESSION_B64` environment variable. On boot the
-  sidecar restores it and reconnects without a new QR scan.
-
-Treat `WA_SESSION_B64` like a password: it is a live WhatsApp web session.
+Do not add a keep-alive to get "instant" WhatsApp: a service that never sleeps uses
+the entire monthly allowance and gets suspended, at which point nothing works. See
+[the free-tier budget](RENDER_FREE_BUDGET.md).
 
 ## 5. Verify end to end
 
 ```bash
-# 1. Backend sees the channel configured (dashboard also shows delivery.whatsapp.enabled)
-curl -s -H "Authorization: Bearer $ORA_API_TOKEN" https://ora-oovf.onrender.com/api/v2/sync \
-  | python3 -c 'import json,sys;print(json.load(sys.stdin)["delivery"])'
+# 1. Bridge state, booleans only
+curl -s -H "Authorization: Bearer $TOKEN" https://ora-oovf.onrender.com/api/v2/whatsapp/status
+# {"enabled":true,"linked":true,"state":"open"}
 
-# 2. Send a message through the sidecar directly
-curl -s -X POST -H "x-api-secret: $WA_API_SECRET" -H 'Content-Type: application/json' \
-  -d '{"to":"2547XXXXXXXX","message":"ORA sidecar test"}' \
-  https://ora-whatsapp.onrender.com/send
+# 2. Channel configured (the snapshot reports the mirror as enabled)
+curl -s -H "Authorization: Bearer $TOKEN" https://ora-oovf.onrender.com/api/v2/sync \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["delivery"])'
 ```
 
-Then queue a real alert (any companion notification) and confirm it arrives on both
-Telegram and WhatsApp. Backend logs show `[WHATSAPP] send failed: …` on failure and stay
-silent on success; alert rows carry an internal `whatsapp_done` marker that guarantees at
-most one WhatsApp copy per alert even when Telegram retries.
+Then queue a real companion alert and confirm it reaches both Telegram and WhatsApp.
+Backend logs stay silent on success and print `[WHATSAPP] send failed: …` on failure.
+An alert carries an internal `whatsapp_done` marker, so a Telegram retry never
+duplicates the WhatsApp copy.
 
-## 6. Behaviour and limits
+## 6. Standalone sidecar (optional, paid)
 
-- **At-most-once mirror.** The `whatsapp_done` flag is stamped when an alert is claimed,
-  before any network call. Alerts dispatched before you configure the channel are never
-  replayed to WhatsApp.
+The separate service still works and is unchanged: deploy `whatsapp-sidecar/render.yaml`
+(`plan: starter`), set `WA_SIDECAR_URL` on the backend, and leave `WA_EMBEDDED` unset.
+Use it if you want WhatsApp live 24/7 regardless of whether ORA is awake — a free
+workspace cannot afford two always-on services, so this path is for a paid plan. The
+session endpoints work there too: set `ORA_BACKEND_URL` + `ORA_INTERNAL_TOKEN` and the
+sidecar backs its credentials up to the same database instead of relying on
+`WA_SESSION_B64`.
+
+## 7. Migrating from the standalone sidecar
+
+If you already run `ora-whatsapp`, move the linked device instead of scanning again:
+
+```bash
+# 1. Export the live session from the old service
+curl -s -H "x-api-secret: $WA_API_SECRET" https://ora-whatsapp.onrender.com/session/export \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["b64"])' > session.b64
+
+# 2a. Either store it in the database (preferred, no redeploy)
+curl -s -X PUT https://ora-oovf.onrender.com/api/whatsapp/session \
+  -H "X-ORA-Token: $ORA_INTERNAL_TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"b64\": \"$(cat session.b64)\"}"
+
+# 2b. …or set it as WA_SESSION_B64 on the backend (restored before the DB copy)
+```
+
+Then, once `/api/v2/whatsapp/status` reports `linked: true`, **delete the
+`ora-whatsapp` service** in Render. Two always-on services are what exhausted the
+workspace hours in the first place. Treat the exported `b64` like a password and
+delete it afterwards.
+
+## 8. Behaviour and limits
+
+- **At-most-once mirror.** `whatsapp_done` is stamped when an alert is claimed, before
+  any network call. Alerts dispatched before the channel was configured are never
+  replayed later.
 - **Same privacy text.** Private mode sends "ORA · New update — open ORA to read your
   update", identical to Telegram. Detailed mode sends the full alert (≤ 4000 chars).
-- **Inbound gating.** `/api/whatsapp/incoming` only queues an alert for messages containing
-  words like `urgent`, `asap`, `help`, `call me`, `haraka`, `saidia`, `piga simu`. The
-  queued text names the sender but never repeats the message body.
-- **Memory only.** The sidecar keeps message bodies in RAM for the life of the process;
-  nothing is written to disk except the linked-device credentials.
-- **Free-tier sleep.** An idle Render web service spins down; the first request after that
-  wakes it and the socket reconnects (allow ~30 s). The durable alert queue retries, so
-  nothing is lost.
-- **Security.** Every route except `/health` requires the shared secret; secrets are
-  compared in constant time; `/qr` requires the secret as a header or `?secret=`. Rotate
-  `WA_API_SECRET` on both services at the same time.
+- **Inbound gating.** `/api/whatsapp/incoming` only queues an alert for messages that
+  read as time-sensitive (`urgent`, `asap`, `help`, `call me`, `haraka`, `saidia`,
+  `piga simu`, …). The queued text names the sender but never repeats the body.
+- **Memory only.** Message bodies stay in RAM for the life of the process; the only
+  thing written to storage is the credential bundle.
+- **Share the 512 MB.** The API and the bridge run in one container. `WA_MAX_MESSAGES`
+  and `NODE_OPTIONS` keep the bridge small; raise them only if Render reports OOM.
+- **Loopback only.** The bridge listens on `127.0.0.1:8080`; the only public surface
+  is the API, and pairing is proxied by an owner-authenticated page.
+- **Security.** The bridge requires `x-api-secret` on every route except `/health`;
+  secrets are compared with a constant-time digest; the API requires
+  `X-ORA-Token` for session reads and writes. Rotate `WA_API_SECRET` and
+  `ORA_INTERNAL_TOKEN` together and re-pair.
 
-## 7. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| `[WHATSAPP] send failed: sidecar rejected the message` | `WA_SIDECAR_URL` / secret mismatch, or `/status` is not `open`. |
-| Alerts stop after a redeploy | Session lost — re-pair or set `WA_SESSION_B64`. |
-| No inbound alerts | `ORA_BACKEND_URL` + `ORA_INTERNAL_TOKEN` set on the sidecar, message contains an urgency keyword. |
-| `refusing to start: WA_API_SECRET …` | Secret missing, under 12 chars, or still the public default. |
-| Messages duplicate on WhatsApp | Should not happen; `whatsapp_done` is stamped at claim. File a bug with the alert row's `delivery`/`attempts`. |
+| `/api/v2/whatsapp/status` says `enabled: false` | `WA_EMBEDDED=1`, `WA_API_SECRET` ≥ 12 chars, `ORA_INTERNAL_TOKEN` ≥ 16 chars, and this image (the bridge only exists in the Docker build). |
+| Status says `state: "closed"` for a while | The device was unlinked on the phone, or the session was wiped. Open the pairing page again. |
+| Pairing page shows "Waiting for the bridge" | The service just woke up; the socket needs a few seconds. The page retries. |
+| Alerts mirror to Telegram but not WhatsApp | `ORA_WA_NOTIFY_NUMBER` missing, or `state` is not `open`. |
+| Alerts stop after a few days | The phone unlinked the device (WhatsApp → Linked devices). Re-pair. |
+| `[startup] refusing to start: WA_API_SECRET …` | Secret missing, under 12 chars, or still the public default — the bridge fails closed. |
+| Container restarts repeatedly / OOM | Lower `WA_MAX_MESSAGES` (100) and keep `NODE_OPTIONS=--max-old-space-size=160`. |
+| Messages arrive in bursts | Expected: WhatsApp delivers what it held while ORA was asleep at the first wake-up. Shorten the tick interval to tighten the gap. |

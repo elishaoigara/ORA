@@ -1,7 +1,10 @@
 """ORA Mini API: stateless Render compute, durable workspace, phone-first reminders."""
+import asyncio
+import base64
 import hashlib
 import hmac
 import io
+import json
 import logging
 import os
 import secrets
@@ -25,13 +28,19 @@ from mini.intelligence import respond, suggestions, ai_provider
 from mini.tools import Runtime, catalog, visible, BY_NAME, public_run, allowed_repos
 from mini.artifacts import metadata as file_metadata, render as render_file
 from mini.companion import weather_check, dispatch, alert, telegram_check, delivery_status, enabled as telegram_alerts_enabled
+from mini import wa_bridge
 import re
 
 store = None
+bridge_task = None
 chat_lock = threading.Lock()
 rate_lock = threading.Lock()
 rates = defaultdict(deque)
 logger = logging.getLogger(__name__)
+
+# Private key/value keys (stored outside the workspace snapshot).
+WA_SESSION_KEY = 'whatsapp.session'
+WA_SESSION_MAX_BYTES = 512 * 1024
 
 
 def db():
@@ -42,14 +51,25 @@ def db():
 
 @asynccontextmanager
 async def lifespan(app):
-    global store
+    global store, bridge_task
     store = Store()
     if os.getenv('RENDER_EXTERNAL_URL') and os.getenv('TELEGRAM_BOT_TOKEN'):
         from mini.telegram import automatic_setup
         threading.Thread(target=automatic_setup, args=(store,), daemon=True).start()
+    # One service hosts the API and the WhatsApp bridge. A no-op unless the bridge
+    # is configured, so deployments without WhatsApp are unaffected.
+    bridge_task = asyncio.create_task(wa_bridge.supervise())
     try:
         yield
     finally:
+        bridge_task.cancel()
+        try:
+            await bridge_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+        await wa_bridge.stop()
         store.close()
 
 
@@ -758,6 +778,138 @@ async def whatsapp_incoming(request: Request):
 
     db().mutate(queue)
     return {'ok': True, 'queued': True}
+
+
+# ── WhatsApp bridge: session continuity and pairing ──────────────────────────
+# Render Free is destroyed and recreated around every sleep, so the linked-device
+# credentials cannot live on the container disk. The bridge saves them here and
+# restores them on boot, which is what turns "WhatsApp only works until the first
+# nap" into "WhatsApp reconnects by itself". These keys are deliberately outside
+# the workspace blob: no snapshot, export or read cache ever contains them.
+
+def bridge_token_ok(request):
+    """The bridge authenticates with ORA_INTERNAL_TOKEN, same as its webhooks."""
+    token = os.getenv('ORA_INTERNAL_TOKEN', '')
+    provided = request.headers.get('x-ora-token', '')
+    return len(token) >= 16 and hmac.compare_digest(provided.encode(), token.encode())
+
+
+def owner_token_ok(request, token=''):
+    """Owner-facing auth for browser pages: ?token= or X-ORA-Token with ORA_API_TOKEN."""
+    configured = os.getenv('ORA_API_TOKEN', '')
+    provided = token or request.headers.get('x-ora-token', '')
+    return bool(configured) and hmac.compare_digest(provided.encode(), configured.encode())
+
+
+@app.get('/api/whatsapp/session')
+def whatsapp_session_get(request: Request):
+    if not bridge_token_ok(request):
+        raise HTTPException(401, 'Invalid bridge credentials.')
+    value = db().kv_get(WA_SESSION_KEY)
+    if not value:
+        raise HTTPException(404, 'No saved WhatsApp session.')
+    return {'ok': True, 'b64': value}
+
+
+@app.put('/api/whatsapp/session')
+async def whatsapp_session_put(request: Request):
+    if not bridge_token_ok(request):
+        raise HTTPException(401, 'Invalid bridge credentials.')
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, 'Invalid payload.')
+    b64 = payload.get('b64') if isinstance(payload, dict) else None
+    if not isinstance(b64, str) or not b64 or len(b64) > WA_SESSION_MAX_BYTES:
+        raise HTTPException(400, 'Invalid session backup.')
+    try:
+        files = json.loads(base64.b64decode(b64, validate=True))
+        usable = isinstance(files, dict) and 'creds.json' in files
+    except Exception:
+        usable = False
+    if not usable:
+        raise HTTPException(400, 'Invalid session backup.')
+    db().kv_put(WA_SESSION_KEY, b64)
+    return {'ok': True}
+
+
+@app.delete('/api/whatsapp/session')
+def whatsapp_session_delete(request: Request, token: str = ''):
+    """Forget the saved link. The owner uses this to unlink deliberately."""
+    if not (bridge_token_ok(request) or owner_token_ok(request, token)):
+        raise HTTPException(401, 'Invalid bridge credentials.')
+    db().kv_delete(WA_SESSION_KEY)
+    return {'ok': True}
+
+
+@app.get('/api/v2/whatsapp/status')
+def whatsapp_status(auth=Depends(owner)):
+    """Booleans only: the linked phone number and the bridge URL stay private."""
+    if not wa_bridge.sidecar_base():
+        return {'enabled': False, 'linked': False, 'state': 'disabled'}
+    try:
+        from connectors.whatsapp import get_status
+        status = get_status() or {}
+    except Exception:
+        return {'enabled': True, 'linked': False, 'state': 'unreachable'}
+    state = str(status.get('state') or 'unknown')[:20]
+    return {'enabled': True, 'linked': state == 'open', 'state': state}
+
+
+@app.get('/api/whatsapp/pairing')
+def whatsapp_pairing(request: Request, token: str = ''):
+    """Owner-facing pairing page for the embedded bridge.
+
+    The bridge is loopback-only when it runs inside this service, so its QR cannot
+    be opened directly. Sign in once with
+    /api/whatsapp/pairing?token=<ORA_API_TOKEN> to link the phone. The page holds
+    no secrets: the sidecar secret never reaches the browser.
+    """
+    if not owner_token_ok(request, token):
+        raise HTTPException(401, 'Owner access is required.')
+    base = wa_bridge.sidecar_base()
+    if not base:
+        raise HTTPException(503, 'WhatsApp is not configured on this service.')
+    import requests
+    try:
+        result = requests.get(f'{base}/qr.json',
+                              headers={'x-api-secret': os.getenv('WA_API_SECRET', '')},
+                              timeout=10).json()
+    except Exception:
+        raise HTTPException(503, 'WhatsApp bridge is starting. Reload in a minute.') from None
+    linked = result.get('linked') is True
+    # Only a well-formed PNG data URL or pairing code is echoed into the page.
+    qr = result.get('qr') if isinstance(result.get('qr'), str) else ''
+    if not re.fullmatch(r'data:image/png;base64,[A-Za-z0-9+/=]+', qr):
+        qr = ''
+    code = result.get('code') if isinstance(result.get('code'), str) else ''
+    if not re.fullmatch(r'[A-Za-z0-9-]{4,12}', code):
+        code = ''
+    reload_href = '/api/whatsapp/pairing?token=' + str(token)
+    if linked:
+        body = ('<h1>WhatsApp is linked</h1>'
+                '<p>ORA can now send and receive through your WhatsApp account.</p>')
+    elif qr or code:
+        parts = ['<h1>Pair ORA with WhatsApp</h1>',
+                 '<p>WhatsApp → Settings → Linked devices → Link a device</p>']
+        if qr:
+            parts.append(f'<img alt="pairing QR" src="{qr}" width="320" height="320" />')
+        if code:
+            # Works when this page is open on the phone that cannot scan itself.
+            parts.append('<p>Or choose <strong>Link with phone number</strong> and enter<br>'
+                         f'<code style="font-size:1.5rem;letter-spacing:.2rem">{code}</code></p>')
+        parts.append('<p style="color:#666">This page refreshes automatically. Close it once paired.</p>')
+        body = ''.join(parts)
+    else:
+        body = ('<h1>Waiting for the bridge</h1>'
+                '<p>The WhatsApp bridge is connecting. This page retries automatically.</p>')
+    # Only refresh while pairing; a linked page that reloads forever is noise.
+    refresh = '' if linked else '<meta http-equiv="refresh" content="20">'
+    page = (f'<!doctype html><meta charset="utf-8"><title>ORA WhatsApp</title>{refresh}'
+            f'<body style="font:16px system-ui;padding:2rem;text-align:center;max-width:32rem;margin:auto">'
+            f'{body}<p><a href="{reload_href}" rel="noreferrer">Reload</a></p></body>')
+    return Response(page, media_type='text/html; charset=utf-8',
+                    headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
 
 
 def tool_operation(state, kind, payload, request_id, auth):

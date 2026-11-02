@@ -1,7 +1,7 @@
 """Regression gates for auth, synchronization, proposals and durable mutations."""
-import os, tempfile, unittest
+import base64, json, os, tempfile, unittest
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 os.environ['APP_ENV']='test'
@@ -129,6 +129,151 @@ class AIProviderTests(unittest.TestCase):
     with self.assertRaisesRegex(RuntimeError,'API key was rejected') as error:
      respond(initial(),'Hello')
   self.assertNotIn('private-test-key',str(error.exception))
+
+class WhatsAppBridgeTests(unittest.TestCase):
+    """The WhatsApp bridge shares the one free service, so its link must survive sleep.
+
+    Render Free destroys the container (and its filesystem) after 15 minutes idle.
+    These gates pin the two behaviours that make WhatsApp usable anyway: the
+    linked-device credentials live in Postgres, and the bridge is only ever reached
+    on loopback with the internal token.
+    """
+
+    setUp = MiniTests.setUp
+    tearDown = MiniTests.tearDown
+    state = MiniTests.state
+
+    ENV_KEYS = ('WA_EMBEDDED', 'WA_SIDECAR_URL', 'WA_SIDECAR_PORT', 'WA_API_SECRET', 'ORA_INTERNAL_TOKEN')
+
+    def setUp(self):
+        MiniTests.setUp(self)
+        self._env = {key: os.environ.get(key) for key in self.ENV_KEYS}
+        for key in self.ENV_KEYS:
+            os.environ.pop(key, None)
+        os.environ['ORA_INTERNAL_TOKEN'] = 'internal-token-for-tests-1234'
+        os.environ['WA_API_SECRET'] = 'sidecar-secret-for-tests'
+        self.bridge = {'X-ORA-Token': os.environ['ORA_INTERNAL_TOKEN']}
+
+    def tearDown(self):
+        for key, value in self._env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        MiniTests.tearDown(self)
+
+    @staticmethod
+    def bundle():
+        return base64.b64encode(json.dumps({'creds.json': '{}', 'pre-key-1.json': '{}'}).encode()).decode()
+
+    def test_session_round_trip_survives_a_restart(self):
+        url = '/api/whatsapp/session'
+        self.assertEqual(self.client.get(url).status_code, 401)
+        self.assertEqual(self.client.put(url, json={'b64': self.bundle()}).status_code, 401)
+        self.assertEqual(self.client.put(url, headers=self.bridge, json={'b64': 'not-a-bundle'}).status_code, 400)
+        self.assertEqual(self.client.put(url, headers=self.bridge, json={'b64': self.bundle()}).status_code, 200)
+        self.assertEqual(self.client.get(url, headers=self.bridge).json()['b64'], self.bundle())
+        # Durable, not just cached in the running process.
+        self.assertEqual(Store(url='', path=api.store.path).kv_get('whatsapp.session'), self.bundle())
+        # Deleting needs bridge or owner credentials.
+        self.assertEqual(self.client.request('DELETE', url).status_code, 401)
+        self.assertEqual(self.client.request('DELETE', url, headers=self.bridge).status_code, 200)
+        self.assertEqual(self.client.get(url, headers=self.bridge).status_code, 404)
+
+    def test_session_never_reaches_a_client_snapshot(self):
+        self.client.put('/api/whatsapp/session', headers=self.bridge, json={'b64': self.bundle()})
+        sync = json.dumps(self.state())
+        self.assertNotIn('creds.json', sync)
+        self.assertNotIn(self.bundle()[:24], sync)
+        self.assertNotIn('whatsapp', self.state())
+
+    def test_session_backup_is_size_limited(self):
+        oversized = base64.b64encode(json.dumps({'creds.json': 'x' * api.WA_SESSION_MAX_BYTES}).encode()).decode()
+        self.assertEqual(self.client.put('/api/whatsapp/session', headers=self.bridge,
+                                        json={'b64': oversized}).status_code, 400)
+
+    def test_embedded_bridge_is_addressed_on_loopback(self):
+        from mini import wa_bridge
+        self.assertEqual(wa_bridge.sidecar_base(), '')
+        with patch.dict(os.environ, {'WA_EMBEDDED': '1', 'WA_SIDECAR_PORT': '8080'}):
+            self.assertEqual(wa_bridge.sidecar_base(), 'http://127.0.0.1:8080')
+            self.assertTrue(wa_bridge.child_env()['ORA_BACKEND_URL'].startswith('http://127.0.0.1:'))
+            # The bridge must never bind the port Render gave to the API.
+            self.assertEqual(wa_bridge.child_env()['PORT'], '8080')
+            # …and it must not inherit credentials it has no use for.
+            child = wa_bridge.child_env()
+            self.assertNotIn('DATABASE_URL', child)
+            self.assertNotIn('ORA_API_TOKEN', child)
+            self.assertIn('ORA_INTERNAL_TOKEN', child)
+        with patch.dict(os.environ, {'WA_EMBEDDED': '1', 'WA_SIDECAR_URL': 'https://sidecar.example.com/'}):
+            self.assertEqual(wa_bridge.sidecar_base(), 'https://sidecar.example.com')
+
+    def test_mirror_switches_on_with_the_embedded_bridge(self):
+        from mini import whatsapp
+        with patch.dict(os.environ, {'ORA_WA_NOTIFY_NUMBER': '254700000000', 'WA_EMBEDDED': '1', 'WA_SIDECAR_URL': ''}):
+            self.assertTrue(whatsapp.configured())
+        with patch.dict(os.environ, {'ORA_WA_NOTIFY_NUMBER': '', 'WA_EMBEDDED': '1'}):
+            self.assertFalse(whatsapp.configured())
+
+    def test_status_is_disabled_without_a_bridge_and_private_with_one(self):
+        self.assertEqual(self.client.get('/api/v2/whatsapp/status', headers=self.owner).json(),
+                         {'enabled': False, 'linked': False, 'state': 'disabled'})
+        with patch.dict(os.environ, {'WA_EMBEDDED': '1'}), \
+             patch('connectors.whatsapp.get_status', return_value={'ok': True, 'state': 'open', 'me': '254712345678'}):
+            body = self.client.get('/api/v2/whatsapp/status', headers=self.owner).json()
+        self.assertEqual(body, {'enabled': True, 'linked': True, 'state': 'open'})
+        self.assertNotIn('254712345678', json.dumps(body))
+
+    def test_pairing_page_requires_the_owner_key(self):
+        self.assertEqual(self.client.get('/api/whatsapp/pairing').status_code, 401)
+        self.assertEqual(self.client.get('/api/whatsapp/pairing?token=wrong').status_code, 401)
+        self.assertEqual(self.client.get('/api/whatsapp/pairing?token=' + os.environ['ORA_API_TOKEN']).status_code, 503)
+
+    def test_pairing_page_serves_the_qr_without_the_sidecar_secret(self):
+        reply = Mock(status_code=200)
+        reply.json.return_value = {'ok': True, 'state': 'connecting', 'linked': False,
+                                   'qr': 'data:image/png;base64,AAAA'}
+        with patch.dict(os.environ, {'WA_EMBEDDED': '1'}), patch('requests.get', return_value=reply) as get:
+            page = self.client.get('/api/whatsapp/pairing?token=' + os.environ['ORA_API_TOKEN'])
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('data:image/png;base64,AAAA', page.text)
+        self.assertNotIn(os.environ['WA_API_SECRET'], page.text)
+        self.assertEqual(get.call_args.kwargs['headers']['x-api-secret'], os.environ['WA_API_SECRET'])
+
+    def test_pairing_page_reports_a_linked_device(self):
+        reply = Mock(status_code=200)
+        reply.json.return_value = {'ok': True, 'state': 'open', 'linked': True, 'qr': None}
+        with patch.dict(os.environ, {'WA_EMBEDDED': '1'}), patch('requests.get', return_value=reply):
+            page = self.client.get('/api/whatsapp/pairing?token=' + os.environ['ORA_API_TOKEN'])
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('WhatsApp is linked', page.text)
+        self.assertNotIn('http-equiv="refresh"', page.text)
+
+    def test_pairing_page_offers_a_phone_number_code(self):
+        reply = Mock(status_code=200)
+        reply.json.return_value = {'ok': True, 'state': 'connecting', 'linked': False,
+                                   'qr': None, 'code': 'ABCD-1234'}
+        with patch.dict(os.environ, {'WA_EMBEDDED': '1'}), patch('requests.get', return_value=reply):
+            page = self.client.get('/api/whatsapp/pairing?token=' + os.environ['ORA_API_TOKEN'])
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('ABCD-1234', page.text)
+        self.assertIn('Link with phone number', page.text)
+
+    def test_pairing_page_rejects_markup_from_the_bridge(self):
+        reply = Mock(status_code=200)
+        reply.json.return_value = {'ok': True, 'state': 'connecting', 'linked': False,
+                                   'qr': 'javascript:alert(1)', 'code': '<script>alert(1)</script>'}
+        with patch.dict(os.environ, {'WA_EMBEDDED': '1'}), patch('requests.get', return_value=reply):
+            page = self.client.get('/api/whatsapp/pairing?token=' + os.environ['ORA_API_TOKEN'])
+        self.assertNotIn('javascript:', page.text)
+        self.assertNotIn('<script>', page.text)
+
+    def test_pairing_page_survives_a_bridge_that_is_still_booting(self):
+        with patch.dict(os.environ, {'WA_EMBEDDED': '1'}), patch('requests.get', side_effect=OSError('refused')):
+            page = self.client.get('/api/whatsapp/pairing?token=' + os.environ['ORA_API_TOKEN'])
+        self.assertEqual(page.status_code, 503)
+        self.assertIn('starting', page.json()['detail'].lower())
+
 
 if __name__=='__main__':unittest.main()
 
