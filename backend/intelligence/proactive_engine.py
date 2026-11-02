@@ -11,7 +11,7 @@ Signals watched:
   - Weather: bad weather affecting commute/outdoor plans
 
 Cooldown: per-key via agent_guard (no spam).
-All notifications go through dual_notify (Telegram + FCM push).
+All notifications go through dual_notify (Telegram + WhatsApp + FCM push).
 """
 
 from __future__ import annotations
