@@ -64,7 +64,9 @@ docker run -p 8080:8080 -v ora-wa:/data \
 
 Nothing happens until **both** `ORA_WA_NOTIFY_NUMBER` and `WA_SIDECAR_URL` are set: the
 mirror performs no network I/O when unconfigured, so a missing or deleted sidecar can never
-delay Telegram delivery.
+delay Telegram delivery. Once configured, ORA sends a concise personal status update to
+that WhatsApp destination every six hours. The first scheduled update runs six hours after
+the backend scheduler starts.
 
 ## 3. Pair the device
 
