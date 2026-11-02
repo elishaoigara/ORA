@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 def suggestions(state):
     tasks = [t for t in state['tasks'] if not t['done']]
-    tasks.sort(key=lambda t: (t.get('due_at') or '9999', -t.get('priority', 2)))
+    tasks.sort(key=lambda t: (t.get('due_at') or '9999', t.get('priority', 2)))
     overdue = [t for t in tasks if t.get('due_at') and t['due_at'] < datetime.now(timezone.utc).isoformat()]
     cards = []
     if overdue:
@@ -116,3 +116,4 @@ def respond(state, text, execute=None):
             if len(encoded)>14000:encoded=json.dumps({'truncated':True,'excerpt':encoded[:14000],'note':'Inspect the complete result in Tools & activity; narrow further reads.'})
             messages.append({'role':'tool','tool_call_id':call['id'],'content':encoded})
     return 'I prepared the available results. Open Tools & activity to review any pending actions.',proposals
+

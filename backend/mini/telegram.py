@@ -14,6 +14,8 @@ from fastapi import Depends, Header, HTTPException, Request
 
 from mini.artifacts import metadata as file_metadata, render as render_file
 from mini.store import now
+from mini.voice import transcribe_note, speech
+from mini.calls import configured as calls_configured, call_owner
 
 
 def token():
@@ -73,7 +75,15 @@ def chunks(text):
 
 
 def send_part(chat_id, part, store):
-    if part['type'] == 'document':
+    if part['type'] == 'voice':
+        try:
+            data = speech(part['text'])
+        except HTTPException:
+            bot_call('sendMessage', {'chat_id': chat_id, 'text': 'Spoken reply unavailable; the full text is above. Check Groq TTS access in Render.'})
+            return
+        bot_call('sendVoice', {'chat_id': str(chat_id), 'caption': 'AI voice · spoken preview; full reply above'},
+                 {'voice': ('ora.ogg', data, 'audio/ogg')})
+    elif part['type'] == 'document':
         document = next((d for d in store.read()['documents'] if d['id'] == part['id']), None)
         if not document:
             bot_call('sendMessage', {'chat_id': chat_id, 'text': 'That file is no longer in ORA.'})
@@ -90,15 +100,64 @@ def send_part(chat_id, part, store):
                                  'link_preview_options': {'is_disabled': True}})
 
 
-def command(text, store):
+def command(text, store, update_id=None):
     state = store.read()
     command_name, _, argument = text.partition(' ')
     command_name = command_name.split('@', 1)[0].lower()
     argument = argument.strip()
     if command_name in ('/start', '/help'):
-        return [{'type': 'text', 'text': 'Talk to ORA here, or use /tasks, /pending and /files. '
+        return [{'type': 'text', 'text': 'Talk or send a voice note to ORA. /voice on enables spoken reply previews; /voice off disables them. '
+                 '/alerts on enables a daily Telegram briefing; /alerts off stops it. /briefing reads it now. '
+                 '/privacy off includes task details in alerts; /privacy on hides them. '
+                 '/status checks connections. /call places one spoken phone briefing; /calls on enables daily calls and /calls off stops them. Calls need Twilio setup, follow quiet hours, and are limited to one attempt per 24 hours. '
+                 'Also use /tasks, /pending and /files. '
                  'Research and file requests use the same tools as the web app. '
                  'Review proposed changes in ORA web → Tools & activity; then use /files and /file ID to get a finished file.'}]
+    if command_name in ('/voice', '/alerts', '/privacy', '/calls'):
+        if argument not in ('on', 'off'):
+            return [{'type': 'text', 'text': 'Use ' + command_name + ' on or ' + command_name + ' off.'}]
+        if command_name == '/voice' and argument == 'on' and not os.getenv('GROQ_API_KEY'):
+            return [{'type': 'text', 'text': 'Spoken replies need GROQ_API_KEY on Render. Text chat still works.'}]
+        if command_name == '/calls' and argument == 'on' and not calls_configured():
+            return [{'type': 'text', 'text': 'Configure Twilio and your own destination number on Render first. See the Telegram setup guide in the repository.'}]
+        key = {'/voice': 'voice_replies', '/alerts': 'alerts_enabled', '/privacy': 'private_alerts', '/calls': 'daily_calls'}[command_name]
+        def save(s):
+            s.setdefault('telegram', {})[key] = argument == 'on'
+            if command_name == '/alerts' and argument == 'off':
+                for a in s.get('alerts', []):
+                    if a['device_id'] == 'telegram-owner' and a['delivery'] in ('pending', 'retry', 'sending'):
+                        a['delivery'] = 'cancelled'
+        store.mutate(save)
+        detail = {'/voice': 'Spoken reply previews', '/alerts': 'Daily Telegram briefings',
+                  '/privacy': 'Private alert contents', '/calls': 'Daily spoken phone briefings'}[command_name]
+        return [{'type': 'text', 'text': detail + ' are ' + argument + '.'}]
+    if command_name == '/status':
+        telegram = state.get('telegram', {})
+        return [{'type': 'text', 'text':
+            'Telegram: connected\nAI key: ' + ('configured' if os.getenv('DEEPSEEK_API_KEY') else 'missing') +
+            '\nVoice key: ' + ('configured' if os.getenv('GROQ_API_KEY') else 'missing') +
+            '\nSpoken replies: ' + ('on' if telegram.get('voice_replies') else 'off') +
+            '\nDaily briefings: ' + ('on' if telegram.get('alerts_enabled') else 'off') +
+            '\nCalls: ' + ('configured' if calls_configured() else 'not configured') +
+            '\nDaily calls: ' + ('on' if telegram.get('daily_calls') else 'off') +
+            '\nLast call request: ' + state.get('owner_call', {}).get('status', 'none') +
+            '\nLast scheduler completion: ' + str(state.get('scheduler_completed_at') or 'never') +
+            '\nQuiet hours: ' + str(state['settings'].get('quiet_start', 22)) + ':00–' + str(state['settings'].get('quiet_end', 7)) + ':00 ' + state['settings'].get('timezone', 'Africa/Nairobi') +
+            '\nConfigured keys still require a successful provider request.'}]
+    if command_name in ('/briefing', '/call'):
+        from mini.companion import briefing
+        text = briefing(state)
+        if command_name == '/briefing':
+            return [{'type': 'text', 'text': text}]
+        try:
+            result = call_owner(store, 'telegram-call:' + str(update_id), text)
+            message = {'accepted': 'Twilio accepted your phone call request. This is a spoken briefing, not a two-way call.',
+                       'rejected': 'Twilio rejected the call. Check the account, caller number and destination permissions.',
+                       'unknown': 'Call outcome is uncertain. It will not be redialed automatically.',
+                       'submitting': 'This call was already submitted. It will not be redialed.'}[result]
+        except HTTPException as exc:
+            message = str(exc.detail)
+        return [{'type': 'text', 'text': message}]
     if command_name == '/tasks':
         tasks = [t for t in state['tasks'] if not t.get('done')][:15]
         lines = [f"• {t['title'][:160]}" + (f" — {t['due_at'][:16]}" if t.get('due_at') else '') for t in tasks]
@@ -146,7 +205,7 @@ def configure(store):
     def save(s):
         telegram = s.setdefault('telegram', {})
         if telegram.get('bot_id') != me['id']:
-            for key in ('chat_id', 'user_id', 'first_name', 'pairing'):
+            for key in ('chat_id', 'user_id', 'first_name', 'pairing', 'daily_calls', 'alerts_enabled', 'voice_replies', 'private_alerts'):
                 telegram.pop(key, None)
             s['telegram_updates'] = []
         telegram.update(bot_id=me['id'], username=me['username'])
@@ -180,7 +239,11 @@ def install(app, store_factory, owner, chat, Chat, limited):
                   'linked': bool(state.get('chat_id')), 'username': state.get('username'),
                   'first_name': state.get('first_name'),
                   'setup_error': state.get('setup_error'),
-                  'webhook_error': state.get('webhook_error')}
+                  'webhook_error': state.get('webhook_error'),
+                  'voice_configured': bool(os.getenv('GROQ_API_KEY')),
+                  'voice_replies': bool(state.get('voice_replies')),
+                  'alerts_enabled': bool(state.get('alerts_enabled')),
+                  'calls_configured': calls_configured(), 'daily_calls': bool(state.get('daily_calls'))}
         if token() and public_url():
             try:
                 info = bot_call('getWebhookInfo')
@@ -215,7 +278,7 @@ def install(app, store_factory, owner, chat, Chat, limited):
     def unlink(auth=Depends(owner)):
         def save(s):
             telegram = s.setdefault('telegram', {})
-            for key in ('chat_id', 'user_id', 'first_name', 'pairing'):
+            for key in ('chat_id', 'user_id', 'first_name', 'pairing', 'daily_calls', 'alerts_enabled', 'voice_replies', 'private_alerts'):
                 telegram.pop(key, None)
             telegram['legacy_link_disabled'] = True
             return {'ok': True}
@@ -253,8 +316,6 @@ def install(app, store_factory, owner, chat, Chat, limited):
         telegram = store.read().get('telegram', {})
         incoming = message.get('text')
         if not isinstance(incoming, str):
-            if telegram.get('user_id') != peer['id'] or telegram.get('chat_id') != room['id']:
-                return {'ok': True}
             incoming = ''
         authorized = (telegram.get('chat_id') == room['id'] and
                       telegram.get('user_id') in (None, peer['id']))
@@ -287,6 +348,8 @@ def install(app, store_factory, owner, chat, Chat, limited):
                 if pending.get('expires_at', '') <= now() or not hmac.compare_digest(
                         pending.get('hash', ''), hashlib.sha256(code.encode()).hexdigest()):
                     return False
+                for key in ('daily_calls', 'alerts_enabled', 'voice_replies', 'private_alerts'):
+                    row.pop(key, None)
                 row.update(user_id=peer['id'], chat_id=room['id'],
                            first_name=str(peer.get('first_name', 'Owner'))[:80])
                 row.pop('pairing', None)
@@ -309,7 +372,7 @@ def install(app, store_factory, owner, chat, Chat, limited):
                        'next_part': 0}
                 rows.append(row)
                 rows[:] = rows[-150:]
-            row['lease_until'] = time.time() + 120
+            row['lease_until'] = time.time() + 300
             return row['status']
         previous = store.mutate(claim)
         if previous == 'done':
@@ -318,12 +381,25 @@ def install(app, store_factory, owner, chat, Chat, limited):
             raise HTTPException(503, 'Telegram update is already processing.')
         try:
             if previous != 'ready':
-                if not incoming:
-                    parts = [{'type': 'text', 'text': 'Send text to ORA. Use the web or Android app for voice and uploads.'}]
+                voice_error = None
+                if message.get('voice') and not incoming:
+                    saved = next(r for r in store.read()['telegram_updates'] if r['id'] == update_id)
+                    try:
+                        incoming = saved.get('transcript') or ''
+                        if not incoming:
+                            limited('telegram-voice:' + str(peer['id']), 8)
+                            incoming = transcribe_note(message['voice'])
+                            store.mutate(lambda s: next(r for r in s['telegram_updates'] if r['id'] == update_id).update(transcript=incoming))
+                    except HTTPException as exc:
+                        voice_error = str(exc.detail)
+                if voice_error:
+                    parts = [{'type': 'text', 'text': voice_error}]
+                elif not incoming:
+                    parts = [{'type': 'text', 'text': 'Send text or a voice note (up to three minutes). Use the web or Android app for other uploads.'}]
                 elif len(incoming) > 8000:
                     parts = [{'type': 'text', 'text': 'Please shorten your message to 8000 characters.'}]
                 elif incoming.startswith('/'):
-                    parts = command(incoming, store)
+                    parts = command(incoming, store, update_id)
                 else:
                     try:
                         result = chat(Chat(request_id='telegram-' + update_id.zfill(16),
@@ -341,6 +417,11 @@ def install(app, store_factory, owner, chat, Chat, limited):
                                       '/help, /tasks and /files still work.'}]
                         else:
                             parts = [{'type': 'text', 'text': str(exc.detail)}]
+                if (not voice_error and incoming and (not incoming.startswith('/') or incoming == '/briefing')
+                        and store.read().get('telegram', {}).get('voice_replies')):
+                    spoken = next((p['text'] for p in parts if p['type'] == 'text'), '')
+                    if spoken:
+                        parts.append({'type': 'voice', 'text': spoken[:200]})
                 def ready(s):
                     row = next(r for r in s['telegram_updates'] if r['id'] == update_id)
                     row.update(status='ready', parts=parts)
@@ -348,6 +429,9 @@ def install(app, store_factory, owner, chat, Chat, limited):
             while True:
                 row = next(r for r in store.read()['telegram_updates'] if r['id'] == update_id)
                 if row['next_part'] >= len(row['parts']):
+                    break
+                linked = store.read().get('telegram', {})
+                if linked.get('chat_id') != row['chat_id'] or linked.get('user_id') != peer['id']:
                     break
                 send_part(row['chat_id'], row['parts'][row['next_part']], store)
                 def sent(s):
@@ -358,6 +442,7 @@ def install(app, store_factory, owner, chat, Chat, limited):
                 row = next(r for r in s['telegram_updates'] if r['id'] == update_id)
                 row['status'] = 'done'
                 row.pop('parts', None)
+                row.pop('transcript', None)
                 row.pop('lease_until', None)
                 s.setdefault('telegram', {}).pop('webhook_error', None)
             store.mutate(done)

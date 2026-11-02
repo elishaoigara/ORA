@@ -1,3 +1,7 @@
+/* ============================================================
+   ORA // COMMAND DECK — design tokens & global base
+   Palette preserved: deep space navy + ORA lavender-indigo + mint
+   ============================================================ */
 :root {
   font-family:
     Inter,
@@ -6,29 +10,88 @@
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-  color: #edf3f6;
-  background: #090e14;
+  color: #f5f7fc;
+  background: #10131d;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --bg: #090e14;
-  --surface: #111922;
-  --raised: #18222e;
-  --border: #26313e;
-  --text: #edf3f6;
-  --muted: #96a6b8;
-  --cyan: #e4bc73;
-  --violet: #c8ad86;
+
+  /* Core palette (unchanged) */
+  --bg: #10131d;
+  --surface: #191e2c;
+  --raised: #22293a;
+  --border: #343d52;
+  --text: #f5f7fc;
+  --muted: #a8b3c8;
+  --cyan: #a5b4fc;   /* ORA lavender-indigo accent */
+  --violet: #5eead4; /* ORA mint accent */
+
+  /* Futurism layer — same hues, extended */
+  --bg-deep: #0a0e18;
+  --indigo: #a5b4fc;
+  --indigo-strong: #c6cdff;
+  --mint: #5eead4;
+  --glow-indigo: rgba(165, 180, 252, 0.45);
+  --glow-indigo-soft: rgba(165, 180, 252, 0.16);
+  --glow-mint: rgba(94, 234, 212, 0.35);
+  --glow-mint-soft: rgba(94, 234, 212, 0.12);
+  --line: rgba(165, 180, 252, 0.22);
+  --line-soft: rgba(165, 180, 252, 0.1);
+  --glass: rgba(25, 30, 44, 0.66);
+  --glass-deep: rgba(13, 17, 28, 0.85);
+  --danger: #ff9d9a;
+  --amber: #ecd9ab;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Mono", "Cascadia Code", Menlo,
+    Consolas, monospace;
 }
 * {
   box-sizing: border-box;
+}
+html {
+  background: var(--bg-deep);
 }
 body {
   margin: 0;
   min-width: 320px;
   font-size: 16px;
   line-height: 1.6;
+  background: var(--bg);
 }
+
+/* Ambient command-deck backdrop: aurora glows + holo grid + scanlines.
+   Painted on fixed pseudo-layers; app content stacks above via #root. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 620px at 10% -12%, rgba(165, 180, 252, 0.11), transparent 62%),
+    radial-gradient(900px 680px at 96% 12%, rgba(94, 234, 212, 0.07), transparent 55%),
+    radial-gradient(820px 900px at 52% 118%, rgba(139, 158, 240, 0.09), transparent 58%),
+    var(--bg);
+}
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(0deg, rgba(165, 180, 252, 0.022) 0 1px, transparent 1px 4px),
+    linear-gradient(rgba(165, 180, 252, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(165, 180, 252, 0.045) 1px, transparent 1px);
+  background-size: auto, 46px 46px, 46px 46px;
+  mask-image: radial-gradient(ellipse 130% 90% at 50% 0%, black 30%, transparent 82%);
+  -webkit-mask-image: radial-gradient(ellipse 130% 90% at 50% 0%, black 30%, transparent 82%);
+}
+#root {
+  position: relative;
+  z-index: 1;
+}
+
 button,
 input,
 textarea,
@@ -51,8 +114,8 @@ button:disabled {
 }
 button:focus-visible,
 a:focus-visible {
-  outline: 2px solid var(--cyan);
-  outline-offset: 5px;
+  outline: 2px solid var(--mint);
+  outline-offset: 3px;
 }
 a {
   color: inherit;
@@ -65,30 +128,34 @@ textarea,
 select {
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: #0b121b;
+  border-radius: 8px;
+  background: rgba(13, 17, 28, 0.75);
   color: var(--text);
   padding: 12px 14px;
   outline: none;
   min-width: 0;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 input:focus,
 textarea:focus,
 select:focus {
-  border-color: var(--cyan);
-  box-shadow: 0 0 0 3px #87e8dc10;
+  border-color: rgba(165, 180, 252, 0.75);
+  box-shadow:
+    0 0 0 3px var(--glow-indigo-soft),
+    0 0 24px -8px var(--glow-indigo);
 }
 textarea {
   resize: vertical;
 }
 input::placeholder,
 textarea::placeholder {
-  color: #7f90a3;
+  color: #7688a8;
 }
 label {
   display: block;
-  font-size: 0.875rem;
-  color: #bac6d4;
+  font-size: 0.8125rem;
+  color: #b6c2dd;
+  letter-spacing: 0.04em;
 }
 label input,
 label textarea,
@@ -103,19 +170,19 @@ p {
 }
 h1 {
   font-size: clamp(1.9rem, 3.1vw, 2.65rem);
-  line-height: 1.2;
-  letter-spacing: -0.055em;
-  font-weight: 560;
+  line-height: 1.15;
+  letter-spacing: -0.04em;
+  font-weight: 620;
   margin-bottom: 12px;
 }
 h2 {
   font-size: 1.2rem;
-  font-weight: 550;
-  letter-spacing: -0.03em;
+  font-weight: 580;
+  letter-spacing: -0.02em;
   margin-bottom: 14px;
 }
 strong {
-  font-weight: 550;
+  font-weight: 560;
 }
 small {
   font-size: 0.8125rem;
@@ -123,8 +190,31 @@ small {
   display: block;
 }
 ::selection {
-  background: #87e8dc40;
+  background: rgba(165, 180, 252, 0.35);
+  color: #fff;
 }
+
+/* Neon scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a3450;
+  border-radius: 8px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(165, 180, 252, 0.55);
+}
+html {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3450 transparent;
+}
+
 .muted {
   color: var(--muted);
   font-size: 0.9375rem;

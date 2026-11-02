@@ -20,7 +20,6 @@ import { enableReminders, reconcileReminders } from "@/lib/mini/reminders";
 import {
   channels,
   notificationHealth,
-  registerPush,
   localTest,
   LocalAlert,
 } from "@/lib/mini/notification-center";
@@ -38,6 +37,7 @@ export default function NotificationsScreen() {
   const [rain, setRain] = useState("60");
   const [heat, setHeat] = useState("32");
   const [wind, setWind] = useState("40");
+  const [now] = useState(() => Date.now());
   const device = m.data?.devices.find((d) => d.id === m.session?.device_id);
   const refresh = useCallback(async () => {
     setHealth(await notificationHealth());
@@ -46,7 +46,7 @@ export default function NotificationsScreen() {
   }, []);
   useFocusEffect(
     useCallback(() => {
-      void refresh();
+      void refresh().catch((e) => setError(String(e)));
     }, [refresh]),
   );
   const run = async (fn: () => Promise<unknown>) => {
@@ -95,7 +95,7 @@ export default function NotificationsScreen() {
         <Text style={s.title}>Your notification center</Text>
         <Text style={s.text}>
           Local reminders work after scheduling, even while Render sleeps.
-          Remote weather updates need the scheduler and push credentials.
+          Weather and routine alerts arrive in your connected Telegram chat.
         </Text>
         {!!error && <Text style={{ color: "#ffaaa5" }}>{error}</Text>}
         <View style={s.card}>
@@ -108,8 +108,10 @@ export default function NotificationsScreen() {
             {"\n"}Permission: {health.permission}
             {"\n"}Scheduled: {health.scheduled}
             {"\n"}Last sync: {health.lastSync}
-            {"\n"}Push registered: {device?.push_registered ? "Yes" : "No"}
-            {"\n"}Scheduler last ran: {m.data?.scheduler_at || "Not yet"}
+            {"\n"}Telegram bot: {m.data?.delivery?.configured ? "Configured" : "Not configured"}
+            {"\n"}Telegram account: {m.data?.delivery?.linked ? "Connected" : "Connect in web Connections"}
+            {"\n"}Telegram alerts: {device?.telegram_alerts_enabled ? "Enabled" : "Off"}
+            {"\n"}Scheduler last completed: {m.data?.scheduler_completed_at || "Not yet"}
             {"\n"}
             {health.channels}
             {"\n"}
@@ -126,25 +128,23 @@ export default function NotificationsScreen() {
             Native.openExactAlarmSettings();
           })}
           {button("Test local notification · 5 seconds", localTest)}
-          {button("Register / repair remote push", async () => {
-            await registerPush();
-            await m.sync();
+          {button("Enable Telegram alerts", async () => {
+            await m.mutate("companion.telegram", {
+              enabled: true,
+              private: await readLocal("privateNotifications", true),
+            });
           })}
-          {button("Disable remote push", async () => {
-            await writeLocal("pushEnabled", false);
-            await m.mutate("companion.push", { token: "" });
-            await writeLocal("pushRegistered", "Disabled");
+          {button("Disable Telegram alerts", async () => {
+            await m.mutate("companion.telegram", { enabled: false });
           })}
-          {button("Queue remote push test", async () => {
-            await m.mutate("companion.push.test", {});
-            setError(
-              "Test queued. The next scheduler run sends it outside quiet hours.",
-            );
+          {button("Queue Telegram test", async () => {
+            await m.mutate("companion.telegram.test", {});
+            setError("Test queued for the next scheduler run outside quiet hours. Open Telegram to see it.");
           })}
           {button("Android notification settings", () =>
             Linking.openSettings(),
           )}
-          <Text style={s.text}>Hide reminder and push contents</Text>
+          <Text style={s.text}>Hide reminder and Telegram alert contents</Text>
           <Switch
             value={privateMode}
             onValueChange={(v) =>
@@ -181,14 +181,15 @@ export default function NotificationsScreen() {
                     }
                   }
                 if (m.data) await reconcileReminders(m.data);
-                if (device?.push_registered) await registerPush();
+                if (device?.telegram_alerts_enabled)
+                  await m.mutate("companion.telegram", { enabled: true, private: v });
               })
             }
           />
           <Text style={s.text}>
             Android can delay delivery in battery saver or after force-stop. A
-            provider receipt confirms handoff, not that you saw the
-            notification.
+            successful Telegram send confirms acceptance, not that you read the
+            message. Alerts need a completed scheduler run; local reminders do not.
           </Text>
         </View>
         <View style={s.card}>
@@ -301,7 +302,7 @@ export default function NotificationsScreen() {
               {a.body}
               {"\n"}
               {new Date(a.created * 1000).toLocaleString()} ·{" "}
-              {a.expires * 1000 < Date.now() ? "expired" : a.delivery}
+              {a.expires * 1000 < now ? "expired" : a.delivery}
               {a.error ? " · " + a.error : ""}
             </Text>
           </Pressable>

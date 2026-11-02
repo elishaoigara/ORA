@@ -69,7 +69,7 @@ export function Button({
 function BrandMark({ size = 32 }: { size?: number }) {
   return (
     <Image
-      source={require("../../assets/images/ora-horus.png")}
+      source={require("../../assets/images/ora-mark.png")}
       accessibilityLabel="ORA"
       style={{ width: size, height: size, borderRadius: size / 2 }}
       resizeMode="contain"
@@ -77,7 +77,7 @@ function BrandMark({ size = 32 }: { size?: number }) {
   );
 }
 export function Orb({ small = false }: { small?: boolean }) {
-  return <BrandMark size={small ? 54 : 160} />;
+  return <BrandMark size={small ? 44 : 112} />;
 }
 function useClock() {
   const [clock, setClock] = useState(() => Date.now());
@@ -411,7 +411,7 @@ export function TodayScreen() {
             day: "numeric",
           })
           .toUpperCase()}
-        title={"Your day, with\na little clarity."}
+        title={"Your day,\nin focus."}
         detail={`Hey ${m.data?.settings.name || "there"}. What’s on your mind?`}
       />
       <View style={s.presence}>
@@ -619,7 +619,7 @@ export function TalkScreen() {
             list.current?.scrollToEnd({ animated: true })
           }
         >
-          {!m.data?.messages.length && (
+          {!m.data?.messages.some((message) => !message.project_id) && (
             <View style={{ paddingVertical: 35 }}>
               <Text style={s.title}>Big idea?{"\n"}Busy mind?</Text>
               <Text style={s.muted}>
@@ -628,6 +628,7 @@ export function TalkScreen() {
             </View>
           )}
           {m.data?.messages
+            .filter((message) => !message.project_id)
             .filter((message) =>
               message.text.toLowerCase().includes(search.toLowerCase()),
             )
@@ -642,6 +643,7 @@ export function TalkScreen() {
                 <Text selectable style={s.body}>
                   {message.text}
                 </Text>
+                <Text style={s.small}>{new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</Text>
                 {message.role === "assistant" && (
                   <Pressable
                     accessibilityLabel="Read reply aloud"
@@ -660,7 +662,7 @@ export function TalkScreen() {
           {busy && (
             <View style={s.row}>
               <ActivityIndicator color={c.cyan} />
-              <Text style={s.small}>ORA is listening to your world…</Text>
+              <Text style={s.small}>ORA is working on your reply…</Text>
             </View>
           )}
           {m.data?.actions
@@ -921,8 +923,32 @@ export function MemoryScreen() {
       {m.data?.documents.map((d) => (
         <Card key={d.id}>
           <Text style={s.body}>{d.name}</Text>
+          <Button
+            title="Delete document"
+            ghost
+            icon="trash-outline"
+            disabled={busy}
+            onPress={() =>
+              Alert.alert(
+                "Delete document?",
+                `Remove "${d.name}" from ORA's knowledge on web and phone? This does not delete the original file on your device or existing chat messages. If offline, deletion takes effect after syncing.`,
+                [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: () =>
+                      run(() => m.mutate("document.delete", { id: d.id })),
+                  },
+                ],
+              )
+            }
+          />
         </Card>
       ))}
+      {m.data && m.data.documents.length === 0 && (
+        <Text style={s.muted}>No uploaded documents.</Text>
+      )}
       <Text style={s.heading}>Recent phone context</Text>
       {m.data?.events.length ? (
         m.data.events.map((e) => (
@@ -948,6 +974,36 @@ const sources = [
   { packageName: "com.whatsapp", appLabel: "WhatsApp" },
   { packageName: "org.telegram.messenger", appLabel: "Telegram" },
 ];
+type Readiness = {
+  ai_configured: boolean;
+  scheduler_configured: boolean;
+  scheduler_last_completed_at: string | null;
+};
+function ConnectionHealth() {
+  const [status, setStatus] = useState<Readiness | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(async () => {
+    setBusy(true);
+    setError("");
+    try { setStatus(await request<Readiness>("/readiness")); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not check the connection."); }
+    finally { setBusy(false); }
+  }, []);
+  useEffect(() => { void refresh(); }, [refresh]);
+  return <Card>
+    <Text style={s.heading}>Connection health</Text>
+    {status && <>
+      <Text style={s.body}>AI: {status.ai_configured ? "Key configured" : "Needs setup"}</Text>
+      <Text style={s.body}>Automation: {status.scheduler_configured ? "Credential configured" : "Needs setup"}</Text>
+      <Text style={s.small}>Last completed run: {status.scheduler_last_completed_at ? new Date(status.scheduler_last_completed_at).toLocaleString() : "No completed run recorded yet"}</Text>
+    </>}
+    {!!error && <Text accessibilityRole="alert" style={s.noticeText}>{error}</Text>}
+    <Text style={s.small}>Send a message to verify the AI connection. Scheduled local reminders work after this phone has synced; weather and routine alerts need Telegram enabled in the notification center.</Text>
+    <Button title={busy ? "Checking…" : "Refresh status"} disabled={busy} ghost onPress={() => void refresh()} />
+  </Card>;
+}
+
 export function SettingsScreen() {
   const m = useMini();
   const { busy, run } = useAction();
@@ -1016,9 +1072,10 @@ export function SettingsScreen() {
     <Frame>
       <Title
         eyebrow="MAKE ORA YOURS"
-        title={"One mind.\nYour world."}
+        title={"Your\nconnections."}
         detail="Choose the voice. Choose what you share. Stay in control."
       />
+      <ConnectionHealth />
       <Card>
         <Button
           title="Notifications, weather and alert inbox"
@@ -1461,7 +1518,7 @@ const s = StyleSheet.create({
     fontSize: 34,
     lineHeight: 40,
     color: c.text,
-    fontWeight: "500",
+    fontWeight: "600",
     letterSpacing: -1.2,
     marginBottom: 12,
   },
@@ -1471,7 +1528,7 @@ const s = StyleSheet.create({
   heading: {
     fontSize: 20,
     color: c.text,
-    fontWeight: "500",
+    fontWeight: "600",
     letterSpacing: -0.5,
     marginBottom: 15,
     marginTop: 8,
@@ -1479,7 +1536,7 @@ const s = StyleSheet.create({
   subheading: {
     fontSize: 17,
     color: c.text,
-    fontWeight: "500",
+    fontWeight: "600",
     marginTop: 24,
     marginBottom: 12,
   },
@@ -1487,7 +1544,7 @@ const s = StyleSheet.create({
     backgroundColor: c.surface,
     borderColor: c.border,
     borderWidth: 1,
-    borderRadius: 14,
+    borderRadius: 20,
     padding: 21,
     marginBottom: 18,
   },
@@ -1496,7 +1553,7 @@ const s = StyleSheet.create({
     backgroundColor: c.background,
     borderColor: c.border,
     borderWidth: 1,
-    borderRadius: 9,
+    borderRadius: 13,
     color: c.text,
     padding: 13,
     fontSize: 16,
@@ -1506,7 +1563,7 @@ const s = StyleSheet.create({
     backgroundColor: c.cyan,
     borderColor: c.cyan,
     borderWidth: 1,
-    borderRadius: 9,
+    borderRadius: 13,
     paddingVertical: 13,
     paddingHorizontal: 18,
     flexDirection: "row",
@@ -1552,9 +1609,9 @@ const s = StyleSheet.create({
   presence: {
     padding: 24,
     borderWidth: 1,
-    borderColor: "#314750",
-    borderRadius: 17,
-    backgroundColor: "#13232d",
+    borderColor: "#414e6b",
+    borderRadius: 24,
+    backgroundColor: "#222b43",
     marginBottom: 25,
     overflow: "hidden",
   },
@@ -1569,7 +1626,7 @@ const s = StyleSheet.create({
     lineHeight: 35,
     letterSpacing: -1,
     color: c.text,
-    fontWeight: "500",
+    fontWeight: "600",
     flex: 1,
   },
   stats: {
@@ -1626,7 +1683,7 @@ const s = StyleSheet.create({
     borderColor: "#706342",
     borderWidth: 1,
     backgroundColor: "#29271e",
-    borderRadius: 9,
+    borderRadius: 13,
   },
   noticeText: { color: "#e6d8b6", fontSize: 14, lineHeight: 21 },
   link: { color: c.cyan, fontSize: 14, marginTop: 8 },
@@ -1638,12 +1695,15 @@ const s = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: c.border,
   },
-  message: { marginBottom: 24, maxWidth: "96%" },
+  message: { marginBottom: 20, maxWidth: "96%", backgroundColor: c.surface, borderColor: c.border, borderWidth: 1, padding: 16, borderRadius: 20, borderBottomLeftRadius: 6 },
   userMessage: {
     alignSelf: "flex-end",
-    backgroundColor: "#1b2a34",
+    backgroundColor: "#29344e",
+    borderColor: "#46587d",
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 6,
     padding: 16,
-    borderRadius: 14,
+    borderRadius: 20,
     maxWidth: "90%",
   },
   messageLabel: {
@@ -1656,9 +1716,9 @@ const s = StyleSheet.create({
     margin: 16,
     marginTop: 0,
     borderWidth: 1,
-    borderColor: "#3b515c",
-    borderRadius: 15,
-    backgroundColor: "#131e29",
+    borderColor: "#46516c",
+    borderRadius: 22,
+    backgroundColor: c.surface,
     padding: 14,
   },
   composeInput: {
@@ -1676,7 +1736,7 @@ const s = StyleSheet.create({
     gap: 6,
   },
   mic: { padding: 8 },
-  send: { backgroundColor: c.cyan, borderRadius: 9, padding: 9 },
+  send: { backgroundColor: c.cyan, borderRadius: 13, padding: 9 },
   voice: {
     width: 155,
     padding: 16,

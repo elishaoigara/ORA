@@ -76,9 +76,10 @@ class ToolTests(unittest.TestCase):
   from unittest.mock import Mock
   first=Mock(ok=True);first.json.return_value={'choices':[{'message':{'role':'assistant','content':None,'tool_calls':[{'id':'call_1','type':'function','function':{'name':'use_tool','arguments':json.dumps({'name':'calculator','arguments':json.dumps({'expression':'2+2'})})}}]}}]}
   last=Mock(ok=True);last.json.return_value={'choices':[{'message':{'role':'assistant','content':'The result is 4.'}}]}
-  with patch.dict(os.environ,{'GROQ_API_KEY':'test'}),patch('mini.intelligence.requests.post',side_effect=[first,last]) as provider:
+  with patch.dict(os.environ,{'DEEPSEEK_API_KEY':'test'}),patch('mini.intelligence.requests.post',side_effect=[first,last]) as provider:
    reply,_=respond(api.db().read(),'What is 2+2?',execute=lambda name,args,call_id:api.tool_runtime().run(name,args,{'id':'test-auth'},call_id))
    self.assertIn('4',reply)
    messages=provider.call_args.kwargs['json']['messages']
    evidence=next(m for m in messages if m['role']=='tool')
    self.assertEqual(json.loads(evidence['content'])['result']['result'],4)
+

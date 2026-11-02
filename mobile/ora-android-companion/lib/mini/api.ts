@@ -28,7 +28,7 @@ export type Action = {
 export type Snapshot = {
   revision: number;
   tasks: Task[];
-  messages: { id: string; role: string; text: string; created_at: string }[];
+  messages: { id: string; role: string; text: string; created_at: string; project_id?: string }[];
   memories: { id: string; text: string; category?: string; pinned?: boolean }[];
   alerts?: {
     id: string;
@@ -40,7 +40,9 @@ export type Snapshot = {
     delivery: string;
     error?: string;
   }[];
+  delivery?: { channel: "telegram"; configured: boolean; linked: boolean; username?: string };
   scheduler_at?: string;
+  scheduler_completed_at?: string;
   actions: Action[];
   documents: { id: string; name: string }[];
   suggestions: { title: string; detail: string; prompt: string }[];
@@ -54,7 +56,7 @@ export type Snapshot = {
   devices: {
     id: string;
     label: string;
-    push_registered?: boolean;
+    telegram_alerts_enabled?: boolean;
     forecast?: Record<string, any>;
     weather?: Record<string, any>;
     paused: boolean;

@@ -40,8 +40,10 @@ Configure these environment variables:
 | `DEEPSEEK_MODEL` | `deepseek-flash` by default; `deepseek-v4-pro` is another supported option |
 | `ORA_AI_PROVIDER` | Optional `deepseek` or `groq` override; otherwise DeepSeek when its key is present, Groq when it is not |
 | `GROQ_API_KEY` | Optional when DeepSeek handles chat; keep it for voice transcription and Groq vision |
+| `DEEPSEEK_API_KEY` | Your DeepSeek API key for chat and tools |
+| `GROQ_API_KEY` | Optional Groq key for voice transcription and image analysis |
 | `CORS_ORIGINS` | Exact Vercel origin; comma-separate any explicitly allowed preview origins |
-| `GROQ_MODEL_PRIMARY` | `llama-3.3-70b-versatile` by default |
+| `DEEPSEEK_MODEL` | `deepseek-flash` by default |
 | `GROQ_STT_MODEL` | `whisper-large-v3-turbo` by default |
 | `ORA_DAILY_AI_REQUESTS` | `100` default; adjust to your provider quota/budget |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather, for the Render backend only |
@@ -133,3 +135,4 @@ For notification awareness: choose apps, enable Android notification access, ret
 Point Render and Vercel back at the original branch/commit and restore the old runtime commands/configuration. Mini's Postgres tables are separate and preserved. Old app credentials and API contracts do not automatically migrate to Mini. Never overwrite the original database with the new development SQLite file.
 
 References: [Render Free](https://render.com/docs/free), [Supabase Postgres connections](https://supabase.com/docs/guides/database/connecting-to-postgres), [Expo notifications](https://docs.expo.dev/versions/v56.0.0/sdk/notifications/), [Expo speech](https://docs.expo.dev/versions/v56.0.0/sdk/speech/).
+

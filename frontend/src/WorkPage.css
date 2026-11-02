@@ -1,9 +1,15 @@
+/* ORA // COMMAND DECK — projects & desktop console.
+   Shares the core palette: deep navy, lavender-indigo, mint. */
 .ora-work {
   max-width: 1100px;
   margin: auto;
 }
 .ora-work h1 {
   font-size: clamp(28px, 4vw, 42px);
+  background: linear-gradient(180deg, #ffffff 20%, #cdd5f6 62%, #93a1d8);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 .ora-work h2 {
   font-size: 22px;
@@ -18,17 +24,41 @@
   margin-top: 24px;
 }
 .work-panel {
-  border: 1px solid #494036;
+  position: relative;
+  border: 1px solid rgba(52, 61, 82, 0.7);
   border-radius: 16px;
   padding: 22px;
   margin-bottom: 20px;
-  background: #121311;
+  background: linear-gradient(
+    165deg,
+    rgba(30, 36, 54, 0.68),
+    rgba(18, 22, 35, 0.72)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    0 26px 55px -38px rgba(0, 0, 0, 0.9);
   min-width: 0;
+}
+.work-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 22px;
+  right: 22px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(165, 180, 252, 0.28),
+    transparent
+  );
+  pointer-events: none;
 }
 .work-panel label {
   display: block;
   margin: 14px 0 8px;
-  color: #dfd7c6;
+  color: #b6c2dd;
+  letter-spacing: 0.04em;
 }
 .work-panel input:not([type="checkbox"]),
 .work-panel textarea,
@@ -38,11 +68,21 @@
   box-sizing: border-box;
   margin-top: 8px;
   padding: 12px;
-  border: 1px solid #5d5342;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #0b0d0c;
-  color: #eee5d6;
+  background: rgba(13, 17, 28, 0.75);
+  color: var(--text);
   font: inherit;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.work-panel input:not([type="checkbox"]):focus,
+.work-panel textarea:focus,
+.work-panel select:focus {
+  border-color: rgba(165, 180, 252, 0.75);
+  box-shadow:
+    0 0 0 3px var(--glow-indigo-soft),
+    0 0 24px -8px var(--glow-indigo);
+  outline: none;
 }
 .work-panel textarea {
   min-height: 90px;
@@ -51,16 +91,29 @@
 .work-panel button,
 .ora-work header button {
   padding: 10px 14px;
-  border: 1px solid #756344;
+  border: 1px solid rgba(165, 180, 252, 0.3);
   border-radius: 8px;
-  background: #28231a;
-  color: #f0d59c;
+  background: rgba(34, 41, 58, 0.6);
+  color: var(--indigo-strong);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   cursor: pointer;
   margin: 6px 8px 6px 0;
+  transition: all 0.2s ease;
+}
+.work-panel button:hover,
+.ora-work header button:hover {
+  border-color: rgba(165, 180, 252, 0.6);
+  box-shadow: 0 0 18px -8px var(--glow-indigo);
 }
 .work-panel button[aria-pressed="true"] {
-  background: #d3ae65;
-  color: #14110b;
+  background: linear-gradient(135deg, #dde2ff, #a5b4fc 60%, #8b9ef0);
+  border-color: transparent;
+  color: #0c1020;
+  font-weight: 700;
+  box-shadow: 0 0 22px -6px rgba(165, 180, 252, 0.6);
 }
 .work-panel button:disabled {
   opacity: 0.5;
@@ -70,9 +123,10 @@
 .work-layout > aside > button {
   display: block;
   width: 100%;
+  text-align: left;
 }
 .work-panel article {
-  border-top: 1px solid #494036;
+  border-top: 1px solid rgba(52, 61, 82, 0.45);
   padding: 15px 0;
 }
 .work-panel pre {
@@ -81,24 +135,34 @@
   font-size: 12px;
   max-height: 340px;
   overflow: auto;
+  background: #0a0e18;
+  border: 1px solid rgba(94, 234, 212, 0.18);
+  border-radius: 8px;
+  padding: 12px;
+  color: #b7c6ff;
 }
 .work-panel .work-check {
   display: flex;
   gap: 10px;
   align-items: center;
 }
+.work-panel .work-check input {
+  accent-color: var(--cyan);
+}
 .work-panel a {
-  color: #ebcc8b;
+  color: var(--indigo-strong);
 }
 .work-panel small {
-  color: #b8b0a1;
+  color: var(--muted);
   line-height: 1.6;
 }
 .work-error {
-  color: #ffaaa0;
+  color: var(--danger);
 }
 .work-panel code {
   overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  color: #9fe8dd;
 }
 @media (max-width: 750px) {
   .work-layout {

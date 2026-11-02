@@ -96,8 +96,9 @@ class OraNotificationListenerModule : Module() {
     }
 
     Function("clearPendingEvents") {
-      val context = appContext.reactContext ?: return@Function
+      val context = appContext.reactContext ?: return@Function false
       OraNotificationListenerStore.clearEvents(context)
+      true
     }
   }
 }

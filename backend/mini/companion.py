@@ -1,10 +1,12 @@
-"""Bounded weather checks and durable Expo push delivery; invoked by external cron."""
-import os
+"""Bounded weather checks and durable Telegram/WhatsApp alert delivery; invoked by external cron."""
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 import requests
+from fastapi import HTTPException
+from mini import whatsapp
+from mini.telegram import bot_call, token
 
 
 def quiet(settings, stamp=None):
@@ -20,7 +22,9 @@ def alert(state, device_id, key, title, body, category='weather'):
         return
     rows.append(dict(id=uuid.uuid4().hex, device_id=device_id, key=key, title=title, body=body,
                      category=category, created=time.time(), expires=time.time()+86400,
-                     read=False, delivery='pending', attempts=0, retry_at=0))
+                     read=False, delivery='pending', attempts=0, retry_at=0, transport='telegram',
+                     telegram_chat_id=(device_for(state, device_id).get('telegram_alerts_chat_id')
+                                       if device_for(state, device_id).get('telegram_alerts_enabled') else None)))
 
 
 def forecast(latitude, longitude):
@@ -65,64 +69,145 @@ def weather_check(db, device_id):
     return result
 
 
-def expo(path, body):
-    headers = {}
-    if os.getenv('EXPO_ACCESS_TOKEN'): headers['Authorization'] = 'Bearer '+os.environ['EXPO_ACCESS_TOKEN']
-    r = requests.post('https://exp.host/--/api/v2/push/'+path, json=body, headers=headers, timeout=12)
-    r.raise_for_status()
-    return r.json()['data']
+def delivery_status(state):
+    telegram = state.get('telegram', {})
+    return {'channel': 'telegram', 'configured': bool(token()),
+            'linked': type(telegram.get('chat_id')) is int and telegram['chat_id'] > 0,
+            'username': telegram.get('username'),
+            # Booleans only: never expose the owner number or sidecar URL to clients.
+            'whatsapp': {'enabled': whatsapp.configured()}}
+
+
+def enabled(device, state):
+    chat_id = state.get('telegram', {}).get('chat_id')
+    return (type(chat_id) is int and chat_id > 0 and device.get('telegram_alerts_enabled') is True
+            and device.get('telegram_alerts_chat_id') == chat_id
+            and not device.get('revoked') and not device.get('paused'))
 
 
 def dispatch(db):
-    # Claim in the database before network I/O to serialize overlapping cron calls.
+    # Claim before network I/O. Delivery is bounded and at-least-once: a timeout
+    # after Telegram accepted a message can cause a retry, never a read receipt.
     def claim(s):
         jobs = []
+        chat_id = s.get('telegram', {}).get('chat_id')
         for a in s.setdefault('alerts', []):
-            d = next((d for d in s['devices'] if d['id'] == a['device_id']), {})
-            if d.get('revoked') or d.get('paused') or not d.get('push_token'): continue
-            if a['category'] == 'weather' and not d.get('weather', {}).get('enabled'): continue
-            if a['delivery'] == 'ticket' and a.get('retry_at', 0) <= time.time():
-                mode = 'receipt'
-            elif a['delivery'] in ('pending', 'retry', 'sending') and a.get('retry_at', 0) <= time.time() and a['attempts'] < 5 and a['expires'] > time.time() and not quiet(s['settings']):
-                mode = 'send'
-                a['attempts'] += 1
-                a['delivery'] = 'sending'
-            else: continue
-            a['retry_at'] = time.time()+300
-            jobs.append((dict(a), dict(d), mode))
-            if len(jobs) >= 10: break
+            if a['delivery'] not in ('pending', 'retry', 'sending', 'ticket'):
+                continue
+            if a.get('transport') != 'telegram':
+                a['delivery'] = 'retired'  # Never replay an old Expo job to Telegram.
+                continue
+            if a['expires'] <= time.time():
+                a['delivery'] = 'expired'
+                continue
+            d = device_for(s, a['device_id'])
+            if not enabled(d, s) or a.get('telegram_chat_id') != chat_id:
+                a['delivery'] = 'cancelled'
+                continue
+            if a['category'] == 'weather' and not d.get('weather', {}).get('enabled'):
+                a['delivery'] = 'cancelled'
+                continue
+            if a.get('retry_at', 0) > time.time():
+                continue
+            if a['attempts'] >= 5:
+                a['delivery'] = 'failed'
+                continue
+            if not token() or quiet(s['settings']):
+                continue
+            # Stamp whatsapp_done at claim time — before any network I/O — so the
+            # WhatsApp mirror below runs at most once per alert even when a Telegram
+            # retry re-claims the row. Alerts dispatched before the sidecar was
+            # configured are never replayed to WhatsApp later.
+            wa_mirror = not a.get('whatsapp_done')
+            a['whatsapp_done'] = True
+            a.update(attempts=a['attempts']+1, delivery='sending',
+                     retry_at=time.time()+300, lease=uuid.uuid4().hex)
+            job = dict(a)
+            job['wa_mirror'] = wa_mirror
+            jobs.append(job)
+            if len(jobs) >= 10:
+                break
         return jobs
     jobs = db.mutate(claim)
-    for a, device, mode in jobs:
+    for a in jobs:
+        # Recheck opt-out/relink and use the latest privacy setting before sending.
+        current = db.read()
+        device = device_for(current, a['device_id'])
+        row = next((x for x in current['alerts'] if x['id'] == a['id']), {})
+        if (not enabled(device, current) or row.get('lease') != a['lease']
+                or row.get('delivery') != 'sending'
+                or current.get('telegram', {}).get('chat_id') != a['telegram_chat_id']):
+            continue
+        accepted = False
+        text = ''
         try:
-            if mode == 'receipt':
-                result = expo('getReceipts', {'ids': [a['ticket']] }).get(a['ticket'])
-                if not result:
-                    result = {'status': 'error', 'details': {'error': 'ReceiptUnavailable'}} if a.get('ticket_at', 0) < time.time()-86400 else None
-            else:
-                private = device.get('private_notifications', True)
-                result = expo('send', {'to': device['push_token'], 'title': 'ORA · New update' if private else a['title'],
-                    'body': 'Open ORA to read your update.' if private else a['body'], 'sound': 'default',
-                    'channelId': 'ora-weather' if a['category'] == 'weather' else 'ora-alerts',
-                    'ttl': max(1, int(a['expires']-time.time())), 'data': {'alert_id': a['id']}})
-        except (requests.RequestException, ValueError, KeyError):
-            result = {'status': 'error', 'details': {'error': 'TransportError'}}
+            private = device.get('private_notifications', True)
+            text = ('ORA · New update\nOpen ORA to read your update.' if private
+                    else (a['title'] + '\n' + a['body'])[:4000])
+            result = bot_call('sendMessage', {'chat_id': a['telegram_chat_id'], 'text': text,
+                                             'link_preview_options': {'is_disabled': True}})
+            accepted = isinstance(result, dict) and type(result.get('message_id')) is int
+        except (HTTPException, requests.RequestException, ValueError, KeyError, TypeError):
+            pass  # Never store exception URLs, bot tokens, or private chat IDs.
+        # Best-effort WhatsApp mirror of the same privacy-safe text. Isolated from the
+        # Telegram result: a sidecar outage must never change telegram delivery state.
+        if a.get('wa_mirror') and text and whatsapp.configured():
+            try:
+                whatsapp.notify(text)
+            except Exception:
+                pass
         def finish(s):
             row = next((x for x in s['alerts'] if x['id'] == a['id']), None)
-            d = next((x for x in s['devices'] if x['id'] == device['id']), {})
-            if not row: return
-            if result is None:
-                row['retry_at'] = time.time()+900
+            if not row or row.get('lease') != a['lease'] or row['delivery'] != 'sending':
                 return
-            error = result.get('details', {}).get('error', 'PushError')
-            if result.get('status') == 'ok':
-                row['delivery'] = 'provider_accepted' if mode == 'receipt' else 'ticket'
-                if mode == 'send': row.update(ticket=result['id'], ticket_at=time.time(), retry_at=time.time()+900)
-            elif mode == 'receipt' and error == 'TransportError' and a.get('ticket_at', 0) > time.time()-86400:
-                row.update(delivery='ticket', retry_at=time.time()+900, error=error)
+            row.pop('lease', None)
+            if accepted:
+                row.update(delivery='sent_to_telegram', sent_at=time.time())
+                row.pop('error', None)
             else:
-                row.update(delivery='failed' if mode == 'receipt' or error == 'DeviceNotRegistered' or row['attempts'] >= 5 else 'retry', error=error, retry_at=time.time()+min(3600, 60*2**row['attempts']))
-                if error == 'DeviceNotRegistered' and d.get('push_token') == device['push_token']:
-                    d.pop('push_token', None)
+                row.update(delivery='failed' if row['attempts'] >= 5 else 'retry',
+                           error='Telegram unavailable. Check the bot connection.',
+                           retry_at=time.time()+min(3600, 60*2**row['attempts']))
         db.mutate(finish)
     return len(jobs)
+
+
+def device_for(state, device_id):
+    if device_id == 'telegram-owner':
+        t = state.get('telegram', {})
+        return {'id': device_id, 'telegram_alerts_enabled': bool(t.get('alerts_enabled')),
+                'telegram_alerts_chat_id': t.get('chat_id'),
+                'private_notifications': t.get('private_alerts', True)}
+    return next((d for d in state['devices'] if d['id'] == device_id), {})
+
+
+def briefing(state):
+    if state.get('telegram', {}).get('private_alerts', True):
+        count = sum(not t.get('done') for t in state['tasks'])
+        return f'Your ORA check-in: {count} open tasks. Use /tasks for details or /privacy off for detailed briefings.'
+    tasks = sorted((t for t in state['tasks'] if not t.get('done')),
+                   key=lambda t: (t.get('due_at') or '9999', t.get('priority', 2)))[:5]
+    lines = [t['title'][:140] for t in tasks]
+    return 'Your ORA check-in. ' + (' Next: ' + '; '.join(lines) if lines else 'You have no open tasks. What would you like to plan?')
+
+
+def telegram_check(db):
+    """One daily briefing independent of Android; optional scheduled phone check-in."""
+    state = db.read()
+    t = state.get('telegram', {})
+    if not token() or not t.get('chat_id') or not t.get('user_id') or quiet(state['settings']):
+        return
+    local = datetime.now(ZoneInfo(state['settings'].get('timezone', 'Africa/Nairobi')))
+    if local.hour < state['settings'].get('briefing_hour', 7):
+        return
+    day = local.date().isoformat()
+    def queue(s):
+        if s.get('telegram', {}).get('alerts_enabled'):
+            alert(s, 'telegram-owner', 'telegram-briefing:' + day, 'ORA · Daily check-in', briefing(s), 'alerts')
+    db.mutate(queue)
+    if t.get('daily_calls'):
+        from mini.calls import call_owner
+        try:
+            call_owner(db, 'daily:' + day, briefing(state), scheduled=True)
+        except HTTPException:
+            pass  # Missing config, quiet hours or the daily cap must not block alerts.

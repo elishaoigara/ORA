@@ -50,9 +50,9 @@ define('memory.save','Remember something','Save a fact explicitly shared by the 
 define('web.search','Research the web','Live search with source URLs; query is sent to Tavily.','query',service='search')
 define('web.read','Read a web page','Extract a public web page through Tavily. No authenticated pages.','url',service='search')
 define('research.sources','Research with sources','Find current public sources with titles, links, dates and short evidence excerpts. ORA can synthesize a cited answer from these results.','query',service='search')
-define('calendar.list','Read calendar','List events in a timezone-aware start/end interval up to 31 days.','start end',service='google')
-define('calendar.free','Find free time','Find free intervals between timezone-aware start/end, up to 31 days.','start end',service='google')
-define('calendar.create','Create calendar event','Prepare an event with exact start/end. No guests added automatically.','title start end description?',True,'google')
+define('calendar.list','Read calendar','List events in a timezone-aware start/end interval up to 31 days.','start end',service='google_workspace')
+define('calendar.free','Find free time','Find free intervals between timezone-aware start/end, up to 31 days.','start end',service='google_workspace')
+define('calendar.create','Create calendar event','Prepare an event with exact start/end. No guests added automatically.','title start end description?',True,'google_workspace')
 define('email.search','Find email','Search Gmail and return subject/from/snippet, max five messages.','query',service='google')
 define('email.read','Read email','Read message headers and plain text content.','id',service='google')
 define('email.draft','Draft email','Create a Gmail draft for review.','to subject body',True,'google')
@@ -75,6 +75,14 @@ define('routines.save','Save routine','steps is a JSON array of {tool,args}; max
 define('routines.list','My routines','List saved routines and last-run status.')
 define('routines.run','Run routine','Run a saved read-only routine with bounded work.','id')
 
+define('google.drive.search','Search Google Drive','Find files by name. Returns IDs and links.','query',service='google_workspace')
+define('google.docs.read','Read Google Doc','Read a Google document using its file ID.','id',service='google_workspace')
+define('google.docs.create','Create Google Doc','Create a document in the connected Google account.','title text',True,'google_workspace')
+define('google.docs.append','Append to Google Doc','Append exact text after approval; rejects stale document revisions.','id text',True,'google_workspace')
+define('google.sheets.read','Read Google Sheet','Read an A1 range, for example Sheet1!A1:F50.','id range',service='google_workspace')
+define('google.sheets.create','Create Google Sheet','Create a Google spreadsheet. rows is a JSON array of arrays; strings stay literal.','title rows',True,'google_workspace')
+define('google.sheets.write','Write Google Sheet cells','Overwrite an explicit A1 range with JSON rows after review. Check range dimensions; no formulas are executed.','id range rows',True,'google_workspace')
+
 BY_NAME={t['name']:t for t in CATALOG}
 
 def fail(message, status=422): raise HTTPException(status,message)
@@ -91,6 +99,9 @@ def json_value(value):
     return value
 
 def connected(service):
+    if service=='google_workspace':
+        from mini.google_workspace import connected as workspace_connected
+        return workspace_connected()
     if service=='github': return bool(os.getenv('GITHUB_TOKEN') and allowed_repos())
     if service=='google': return all(os.getenv(k) for k in ('GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','GOOGLE_REFRESH_TOKEN'))
     if service=='search': return bool(os.getenv('TAVILY_API_KEY'))
@@ -126,6 +137,9 @@ def gh(path,method='GET',body=None,params=None):
 
 def google(path,method='GET',body=None,params=None,gmail=False):
     # Credentials never enter tool arguments, model context or audit results.
+    if not gmail:
+        from mini.google_workspace import access_token
+        return http('https://www.googleapis.com/calendar/v3'+path,method,body,{'Authorization':'Bearer '+access_token()},params)
     try:
         r=requests.post('https://oauth2.googleapis.com/token',data={
             'client_id':os.getenv('GOOGLE_CLIENT_ID'),'client_secret':os.getenv('GOOGLE_CLIENT_SECRET'),
@@ -214,6 +228,9 @@ def calculate(expression):
 
 
 def execute_read(name,a,state,auth):
+    if name.startswith('google.'):
+        from mini.google_tools import read
+        return read(name,a)
     if name.startswith('github.'): return github_read(name,a)
     if name=='tasks.list': return state['tasks']
     if name=='documents.list':
@@ -331,6 +348,9 @@ def execute_read(name,a,state,auth):
 
 def prepare(name,a,state,auth):
     """Resolve exact previews before approval. External content cannot approve itself."""
+    if name.startswith('google.'):
+        from mini.google_tools import prepare as prepare_google
+        return prepare_google(name,a)
     if name.startswith('github.'):
         p=repo_path(a)
         if name=='github.change':
@@ -410,6 +430,9 @@ def prepare(name,a,state,auth):
 
 
 def write_tool(name,a,store,auth,run_id,operation):
+    if name.startswith('google.'):
+        from mini.google_tools import write
+        return write(name,a)
     if name.startswith('tasks.') or name=='memory.save':
         kind='task.'+name.split('.')[1] if name.startswith('tasks.') else name
         payload=dict(a)
@@ -496,7 +519,15 @@ class Runtime:
         if not new:return row
         try:
             if meta['approval']:
-                clean,preview=prepare(name,args,self.store.read(),auth);updates={'status':'awaiting_approval','args':clean,'preview':preview}
+                connection=None
+                if meta['service']=='google_workspace':
+                    from mini.google_workspace import connection_id
+                    connection=connection_id()
+                clean,preview=prepare(name,args,self.store.read(),auth)
+                if meta['service']=='google_workspace':
+                    if not connection or connection!=connection_id():fail('Google connection changed. Prepare again.',409)
+                    clean['_google_connection']=connection
+                updates={'status':'awaiting_approval','args':clean,'preview':preview}
             else:updates={'status':'completed','result':trim(execute_read(name,args,self.store.read(),auth))}
         except HTTPException as e:updates={'status':'failed','error':e.detail}
         except Exception:updates={'status':'failed','error':'Tool could not complete. Check inputs and connection.'}
@@ -517,6 +548,10 @@ class Runtime:
         try:
             if r['tool'] in self.store.read().get('disabled_tools',[]):fail('This tool is disabled.')
             if not connected(BY_NAME[r['tool']]['service']):fail('Connection is no longer available.')
+            if BY_NAME[r['tool']]['service']=='google_workspace':
+                from mini.google_workspace import connection_id
+                if not r['args'].get('_google_connection') or r['args']['_google_connection']!=connection_id():
+                    fail('Google account connection changed. Prepare this action again.',409)
             result=write_tool(r['tool'],r['args'],self.store,auth,run_id,self.operation)
             return self.finish(run_id,{'status':'completed','result':trim(result)})
         except Exception as e:
@@ -528,3 +563,4 @@ def public_run(run, preview=False):
     if preview and run['status']=='awaiting_approval':result['preview']=run.get('preview')
     if run.get('error'):result['error']=run['error']
     return result
+

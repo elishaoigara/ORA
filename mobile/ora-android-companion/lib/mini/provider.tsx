@@ -7,7 +7,8 @@ import React, {
   useState,
 } from "react";
 import { applyLocal, validateTask } from "./offline";
-import { notificationListeners, registerPush } from "./notification-center";
+import { flushEvents } from "./event-upload";
+import { notificationListeners } from "./notification-center";
 import { AppState } from "react-native";
 import {
   ApiError,
@@ -47,10 +48,11 @@ export function MiniProvider({ children }: { children: React.ReactNode }) {
   const [queue, setQueue] = useState<Op[]>([]);
   const syncing = useRef(false);
   const sync = useCallback(async () => {
-    if (syncing.current || !(await session())) return;
+    if (syncing.current) return;
     syncing.current = true;
-    setStatus("Connecting · allow a minute");
     try {
+      if (!(await session())) return;
+      setStatus("Connecting · allow a minute");
       const pending = await readLocal<Op[]>("outbox", []);
       for (const op of [...pending]) {
         try {
@@ -84,15 +86,6 @@ export function MiniProvider({ children }: { children: React.ReactNode }) {
         );
       }
       await writeLocal("lastSync", new Date().toISOString());
-      if (
-        (await readLocal("pushEnabled", false)) &&
-        (await readLocal("pushRetryAt", 0)) < Date.now()
-      ) {
-        await writeLocal("pushRetryAt", Date.now() + 3600000);
-        void registerPush().catch((e) =>
-          writeLocal("notificationError", String(e)),
-        );
-      }
       const device = next.devices.find((d) => d.id === next.device_id);
       if (!device || device.paused || !device.permissions.notifications) {
         NativeListener?.configure(false, []);
@@ -100,17 +93,12 @@ export function MiniProvider({ children }: { children: React.ReactNode }) {
       try {
         if (device && !device.paused && device.permissions.notifications) {
           const events = NativeListener?.getPendingEvents() || [];
-          for (const e of events) {
-            if (Date.now() - Date.parse(e.occurredAt) > 86400000) continue;
-            await request("/events", {
+          await flushEvents(events, (e) => request("/events", {
               request_id: e.id,
               kind: "notifications",
               text: `${e.appLabel}: ${e.title} ${e.body}`.slice(0, 1200),
               observed_at: e.occurredAt,
-            });
-          }
-          // Acknowledge only the events included in this snapshot; preserve new arrivals.
-          NativeListener?.acknowledgeEvents(events.map((e) => e.id));
+            }), (ids) => NativeListener?.acknowledgeEvents(ids));
         }
       } catch {
         setError(
@@ -154,7 +142,11 @@ export function MiniProvider({ children }: { children: React.ReactNode }) {
         setQueue(await readLocal<Op[]>("outbox", []));
         await sync();
       } else setStatus("Pair your phone");
-    })();
+    })().catch((e) => {
+      if (!alive) return;
+      setError(e instanceof Error ? e.message : "Could not open the saved workspace.");
+      setStatus("Unable to open workspace · try reopening ORA");
+    });
     const subscription = AppState.addEventListener("change", (s) => {
       if (s === "active") sync();
     });

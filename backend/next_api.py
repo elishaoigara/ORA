@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import io
+import logging
 import os
 import secrets
 import threading
@@ -16,18 +17,20 @@ from dotenv import load_dotenv
 load_dotenv()
 from fastapi import FastAPI, Depends, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from mini.store import Store, now
 from mini.intelligence import respond, suggestions, ai_provider
 from mini.tools import Runtime, catalog, visible, BY_NAME, public_run, allowed_repos
 from mini.artifacts import metadata as file_metadata, render as render_file
-from mini.companion import weather_check, dispatch, alert
+from mini.companion import weather_check, dispatch, alert, telegram_check, delivery_status, enabled as telegram_alerts_enabled
 import re
 
 store = None
 chat_lock = threading.Lock()
 rate_lock = threading.Lock()
 rates = defaultdict(deque)
+logger = logging.getLogger(__name__)
 
 
 def db():
@@ -49,7 +52,7 @@ async def lifespan(app):
 app = FastAPI(title='ORA Mini', version='2.0.0', lifespan=lifespan,
               docs_url=None if os.getenv('APP_ENV') == 'production' else '/docs')
 app.add_middleware(CORSMiddleware, allow_origins=[s.strip() for s in os.getenv('CORS_ORIGINS', 'http://localhost:5173').split(',') if s.strip()],
-                   allow_methods=['GET', 'POST', 'DELETE'], allow_headers=['Authorization', 'Content-Type'])
+                   allow_methods=['GET', 'HEAD', 'POST', 'DELETE'], allow_headers=['Authorization', 'Content-Type'])
 
 
 def limited(key, limit=15):
@@ -122,12 +125,36 @@ def new_session(state, device_id=None):
     return token
 
 
-@app.get('/api/health')
+@app.api_route('/', methods=['GET', 'HEAD'])
+def root():
+    return {'service': 'ORA', 'health': '/api/health'}
+
+
+@app.api_route('/api/health', methods=['GET', 'HEAD'])
 def health():
     provider = ai_provider()
     return {'ok': store is not None, 'release': 'ora-mini-2', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
             'companion_release': '2.2', 'work_release': '1.0', 'reminders': 'android-local',
             'ai_provider': provider['name'], 'ai_configured': bool(provider['key'])}
+    try:
+        if not db().healthy():
+            raise RuntimeError('Missing workspace')
+    except Exception:
+        raise HTTPException(503, 'Workspace storage is unavailable.') from None
+    return {'ok': True, 'release': 'ora-mini-2.3', 'storage': 'postgres' if os.getenv('DATABASE_URL') else 'local-development',
+            'companion_release': '2.3', 'work_release': '1.0', 'reminders': 'android-local', 'ai_configured': bool(os.getenv('DEEPSEEK_API_KEY')), 'ai_provider': 'deepseek',
+            'ai_model': os.getenv('DEEPSEEK_MODEL', 'deepseek-flash')}
+
+
+@app.get('/api/v2/readiness')
+def readiness(auth=Depends(identity)):
+    state = db().read()
+    return {'ai_configured': bool(os.getenv('DEEPSEEK_API_KEY')),
+            'scheduler_configured': len(os.getenv('ORA_CRON_TOKEN', '')) >= 32,
+            'scheduler_last_started_at': state.get('scheduler_at'),
+            'scheduler_last_completed_at': state.get('scheduler_completed_at'),
+            'scheduler_last_error': state.get('scheduler_error'),
+            'reminders': 'android-local', 'delivery': delivery_status(state)}
 
 
 @app.post('/api/v2/session')
@@ -177,10 +204,13 @@ def pair(payload: Pair, request: Request):
 def snapshot(state, auth):
     data = {k: state[k] for k in ('revision', 'tasks', 'messages', 'memories', 'actions', 'settings')}
     data['documents'] = [file_metadata(d) for d in state['documents']]
-    data['devices'] = [{k: v for k, v in d.items() if k not in ('push_token', 'weather')} | {'push_registered': bool(d.get('push_token')), 'weather': {k: v for k, v in d.get('weather', {}).items() if k not in ('latitude', 'longitude')}} for d in state['devices'] if not d.get('revoked')]
-    data['alerts'] = [{k: v for k, v in a.items() if k not in ('ticket', 'key')} for a in state.get('alerts', []) if not auth.get('device_id') or a['device_id'] == auth['device_id']]
+    data['devices'] = [{k: v for k, v in d.items() if k not in ('push_token', 'weather', 'telegram_alerts_chat_id', 'telegram_alerts_enabled')} | {'telegram_alerts_enabled': telegram_alerts_enabled(d, state), 'weather': {k: v for k, v in d.get('weather', {}).items() if k not in ('latitude', 'longitude')}} for d in state['devices'] if not d.get('revoked')]
+    data['alerts'] = [{k: v for k, v in a.items() if k not in ('ticket', 'key', 'telegram_chat_id', 'lease', 'whatsapp_done')} for a in state.get('alerts', []) if not auth.get('device_id') or a['device_id'] == auth['device_id']]
+    data['delivery'] = delivery_status(state)
     data['scheduler_at'] = state.get('scheduler_at')
-    data['events'] = [e for e in state['events'] if e['expires_at'] > now()][-30:]
+    data['scheduler_completed_at'] = state.get('scheduler_completed_at')
+    data['events'] = [e for e in state['events'] if e['expires_at'] > now()
+                      and (not auth.get('device_id') or e['device_id'] == auth['device_id'])][-30:]
     data['suggestions'] = suggestions(state)
     data['synced_at'] = now()
     data['device_id'] = auth.get('device_id')
@@ -427,6 +457,8 @@ def phone_event(payload: PhoneEvent, auth=Depends(identity)):
     if not auth.get('device_id'):
         raise HTTPException(403, 'Pair an Android device first.')
     observed = due(payload.observed_at)
+    if observed is None:
+        raise HTTPException(422, 'Event time must include a timezone.')
     stamp = datetime.fromisoformat(observed)
     age = (datetime.now(timezone.utc) - stamp).total_seconds()
     if age < -300 or age > 86400:
@@ -507,13 +539,27 @@ def export(auth=Depends(owner)):
 def companion_operation(state, kind, p, auth):
     device = next((d for d in state['devices'] if d['id'] == auth.get('device_id') and not d.get('revoked')), None)
     if not device: raise HTTPException(403, 'Use a paired phone for companion settings.')
-    if kind == 'companion.push':
-        token = p.get('token', '')
-        if token and not re.fullmatch(r'(?:Exponent|Expo)PushToken\[[A-Za-z0-9_-]{10,200}\]', token):
-            raise HTTPException(422, 'Invalid Expo push token.')
-        if token: device['push_token'] = token
-        else: device.pop('push_token', None)
-        device['private_notifications'] = bool(p.get('private', True))
+    if kind in ('companion.push', 'companion.push.test'):
+        if kind == 'companion.push' and not p.get('token'):
+            device.pop('push_token', None)
+        else:
+            raise HTTPException(410, 'Remote alerts now use Telegram. Install the updated ORA app.')
+    elif kind == 'companion.telegram':
+        if type(p.get('enabled')) is not bool or type(p.get('private', True)) is not bool:
+            raise HTTPException(422, 'Choose whether to enable Telegram alerts and private contents.')
+        if p['enabled']:
+            status = delivery_status(state)
+            if not status['configured'] or not status['linked']:
+                raise HTTPException(409, 'Connect your Telegram account in web Connections first, then enable alerts here.')
+            device['telegram_alerts_chat_id'] = state['telegram']['chat_id']
+        else:
+            device.pop('telegram_alerts_chat_id', None)
+            for a in state.get('alerts', []):
+                if a['device_id'] == device['id'] and a['delivery'] in ('pending', 'retry', 'sending'):
+                    a['delivery'] = 'cancelled'
+        device['telegram_alerts_enabled'] = p['enabled']
+        device['private_notifications'] = p.get('private', True)
+        device.pop('push_token', None)
     elif kind == 'companion.weather':
         if not p.get('enabled'):
             device.pop('weather', None); device.pop('forecast', None)
@@ -530,8 +576,10 @@ def companion_operation(state, kind, p, auth):
             if a['device_id'] == device['id'] and (p.get('id') == a['id'] or p.get('all') is True): a['read'] = True
     elif kind == 'companion.alert.clear':
         state['alerts'] = [a for a in state.get('alerts', []) if a['device_id'] != device['id']]
-    elif kind == 'companion.push.test':
-        alert(state, device['id'], 'test:'+uuid.uuid4().hex, 'ORA · Push test', 'Your remote notification reached this phone.', 'alerts')
+    elif kind == 'companion.telegram.test':
+        if not telegram_alerts_enabled(device, state) or not delivery_status(state)['configured']:
+            raise HTTPException(409, 'Connect Telegram and enable alerts on this phone first.')
+        alert(state, device['id'], 'test:'+uuid.uuid4().hex, 'ORA · Telegram test', 'Your ORA Telegram alert connection works.', 'alerts')
     else: raise HTTPException(422, 'Unknown companion operation.')
     return {'ok': True}
 
@@ -547,26 +595,123 @@ def refresh_weather(auth=Depends(identity)):
 @app.post('/api/companion/tick')
 def companion_tick(authorization: str = Header(default='')):
     token = os.getenv('ORA_CRON_TOKEN', '')
-    if len(token) < 32 or not hmac.compare_digest(authorization, 'Bearer '+token):
+    if len(token) < 32 or not hmac.compare_digest(authorization.encode(), ('Bearer '+token).encode()):
         raise HTTPException(401, 'Invalid scheduler credentials.')
     # A persistent lease prevents overlapping jobs, including across process restarts.
+    # The owner token stops a timed-out tick from releasing a newer tick's lease.
+    lease = uuid.uuid4().hex
     def claim(s):
         if s.get('cron_lease', 0) > time.time(): return False
         s['cron_lease'] = time.time()+600
+        s['cron_lease_owner'] = lease
         s['scheduler_at'] = now()
         return True
     if not db().mutate(claim): return {'busy': True}
+
+    result = {'ok': True, 'processed': 0, 'weather_failures': 0,
+              'failed_stages': [], 'error_types': {}}
+    def record_failure(stage, exc):
+        if stage not in result['failed_stages']:
+            result['failed_stages'].append(stage)
+        # Exception strings can contain database URLs, bot tokens or private data.
+        # Only the fixed stage name and exception class are logged/returned.
+        result['error_types'][stage] = type(exc).__name__
+        logger.warning('Companion scheduler stage %s failed (%s)', stage, type(exc).__name__)
+
     try:
-        failures = 0
-        for device in db().read()['devices'][:10]:
-            try: weather_check(db(), device['id'])
-            except Exception: failures += 1
-        from mini.routines import tick_routines
-        tick_routines(db())
-        sent = dispatch(db())
-        return {'processed': sent, 'weather_failures': failures}
+        try:
+            devices = db().read()['devices'][:10]
+        except Exception as exc:
+            record_failure('workspace', exc)
+            devices = []
+        if 'workspace' not in result['failed_stages']:
+            for device in devices:
+                try:
+                    weather_check(db(), device['id'])
+                except Exception as exc:
+                    result['weather_failures'] += 1
+                    record_failure('weather', exc)
+            def run_routines():
+                from mini.routines import tick_routines
+                return tick_routines(db())
+            for stage, operation in (
+                ('routines', run_routines),
+                ('telegram_briefing', lambda: telegram_check(db())),
+                ('dispatch', lambda: dispatch(db())),
+            ):
+                try:
+                    value = operation()
+                    if stage == 'dispatch':
+                        result['processed'] = value
+                except Exception as exc:
+                    record_failure(stage, exc)
     finally:
-        db().mutate(lambda s: s.update(cron_lease=0))
+        def release(s):
+            if s.get('cron_lease_owner') == lease:
+                s['cron_lease'] = 0
+                s.pop('cron_lease_owner', None)
+        try:
+            db().mutate(release)
+        except Exception as exc:
+            record_failure('lease_release', exc)
+
+    if not result['failed_stages']:
+        def complete(s):
+            s['scheduler_completed_at'] = now()
+            s.pop('scheduler_error', None)
+        try:
+            db().mutate(complete)
+        except Exception as exc:
+            record_failure('completion', exc)
+    if result['failed_stages']:
+        result['ok'] = False
+        diagnostic = {'at': now(), 'stages': result['failed_stages'], 'error_types': result['error_types']}
+        try:
+            db().mutate(lambda s: s.update(scheduler_error=diagnostic))
+        except Exception as exc:
+            record_failure('diagnostics', exc)
+        return JSONResponse(status_code=503, content=result)
+    return result
+
+
+_WA_IMPORTANT_WORDS = ('urgent', 'emergency', 'asap', 'help', 'call me', 'important',
+                      'haraka', 'saidia', 'piga simu')
+
+
+@app.post('/api/whatsapp/incoming')
+async def whatsapp_incoming(request: Request):
+    """Privacy-safe callback from whatsapp-sidecar for inbound messages.
+
+    Only messages that read as time-sensitive become a queued alert, so routine
+    WhatsApp traffic never turns into notification noise. The alert text is generic
+    and the queue is durable, so delivery survives a restart.
+    """
+    token = os.getenv('ORA_INTERNAL_TOKEN', '')
+    provided = request.headers.get('x-ora-token', '')
+    if len(token) < 16 or not hmac.compare_digest(provided.encode(), token.encode()):
+        raise HTTPException(401, 'Invalid bridge credentials.')
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, 'Invalid payload.')
+    if not isinstance(payload, dict):
+        raise HTTPException(400, 'Invalid payload.')
+    text = str(payload.get('body') or '')[:500]
+    if not text or not any(word in text.lower() for word in _WA_IMPORTANT_WORDS):
+        return {'ok': True, 'queued': False}
+    message_id = str(payload.get('id') or '')[:120] or digest(text)[:32]
+    sender = str(payload.get('fromName') or payload.get('from') or 'Someone')[:80]
+    source = f"the group {str(payload.get('groupName'))[:80]}" if payload.get('isGroup') else 'WhatsApp'
+    limited('wa-incoming', 20)
+
+    def queue(s):
+        alert(s, 'telegram-owner', f'whatsapp:{message_id}',
+              'ORA · Urgent WhatsApp message',
+              f'{sender} sent a message that reads as time-sensitive on {source}. Open ORA to review it.',
+              category='whatsapp')
+
+    db().mutate(queue)
+    return {'ok': True, 'queued': True}
 
 
 def tool_operation(state, kind, payload, request_id, auth):
@@ -654,3 +799,8 @@ from mini.desktop import install as install_desktop
 install_desktop(app, db, identity, owner, limited)
 from mini.telegram import install as install_telegram
 install_telegram(app, db, owner, chat, Chat, limited)
+
+
+
+from mini.google_workspace import install as install_google_workspace
+install_google_workspace(app, db, identity, owner, limited)

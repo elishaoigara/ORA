@@ -7,20 +7,18 @@ const config: ExpoConfig = {
   scheme: "ora",
   orientation: "portrait",
   userInterfaceStyle: "dark",
-  icon: "./assets/images/ora-horus.png",
+  icon: "./assets/images/ora-launcher.png",
   android: {
     package: "com.app.oraandroidcompanion",
-    ...(process.env.GOOGLE_SERVICES_JSON
-      ? { googleServicesFile: process.env.GOOGLE_SERVICES_JSON }
-      : {}),
     permissions: [
       "POST_NOTIFICATIONS",
       "com.android.alarm.permission.SET_ALARM",
       "SCHEDULE_EXACT_ALARM",
     ],
     adaptiveIcon: {
-      foregroundImage: "./assets/images/ora-adaptive.png",
-      backgroundColor: "#000000",
+      foregroundImage: "./assets/images/ora-adaptive-modern.png",
+      monochromeImage: "./assets/images/ora-monochrome.png",
+      backgroundColor: "#10131d",
     },
   },
   ios: { bundleIdentifier: "com.app.oraandroidcompanion" },
@@ -30,7 +28,7 @@ const config: ExpoConfig = {
     "expo-secure-store",
     [
       "expo-notifications",
-      { color: "#e4bc73", defaultChannel: "ora-reminders" },
+      { color: "#a5b4fc", defaultChannel: "ora-reminders" },
     ],
     [
       "expo-audio",
@@ -55,10 +53,10 @@ const config: ExpoConfig = {
     [
       "expo-splash-screen",
       {
-        image: "./assets/images/ora-horus.png",
+        image: "./assets/images/ora-mark.png",
         imageWidth: 200,
         resizeMode: "contain",
-        backgroundColor: "#000000",
+        backgroundColor: "#10131d",
       },
     ],
     ["expo-build-properties", { android: { minSdkVersion: 26 } }],

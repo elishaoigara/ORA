@@ -30,7 +30,7 @@ Charcoal surfaces, quiet cyan accents, restrained violet, generous spacing and a
 - **Render Free:** one FastAPI worker, demand-driven requests. No always-running inference, cron loop, keep-alive traffic or local production database.
 - **External Postgres:** durable workspace, hashed session/device credentials and mutation receipts. A Supabase session pooler is one compatible option. Enable SSL. The API initializes its two private tables and enables row-level security with no public policies.
 - **Android:** Expo SDK 56, native notification module, local notification scheduling, secure credential storage and a device-local cached workspace/outbox.
-- **AI:** Groq Llama 3.3 70B by default, one bounded inference per chat request. A compact context and limited history control input size. `ORA_DAILY_AI_REQUESTS` provides a durable daily request cap (default 100). This is a request cap, not a guaranteed token or cost ceiling.
+- **AI:** DeepSeek (`deepseek-flash` by default), up to three bounded inference calls per chat request. A compact context and limited history control input size. `ORA_DAILY_AI_REQUESTS` provides a durable daily request cap (default 100). This is a request cap, not a guaranteed token or cost ceiling.
 - **Voice:** Groq Whisper transcription; system text-to-speech playback. Playback availability, offline support and voice quality depend on the device/browser speech engine.
 
 See [setup and migration](docs/ORA_MINI_SETUP.md), [feature boundaries](docs/ORA_MINI_CAPABILITIES.md), and [validation](docs/ORA_MINI_VALIDATION.md).
@@ -48,7 +48,7 @@ python -m venv .venv
 # macOS/Linux: source .venv/bin/activate
 pip install -r requirements-mini.txt
 cp .env.example .env
-# Set ORA_API_TOKEN and GROQ_API_KEY in .env.
+# Set ORA_API_TOKEN and DEEPSEEK_API_KEY in .env.
 uvicorn next_api:app --reload --port 8000
 ```
 
@@ -96,3 +96,6 @@ pnpm build
 ```
 
 The workflow in `.github/workflows/mini.yml` runs these gates. Android export verifies JavaScript packaging; it is not a Kotlin compile, signed APK or physical-device test.
+
+
+See [DeepSeek migration](docs/DEEPSEEK_MIGRATION.md) for backend setup and companion behavior.

@@ -1,8 +1,9 @@
-﻿"""
-ORA Notifier — Phase 3: Dual-channel (Telegram + FCM push)
-Render free-tier safe — no new threads, FCM is a plain HTTP call.
+"""
+ORA Notifier — Phase 3: Multi-channel (Telegram + WhatsApp + FCM push)
+Render free-tier safe — no new threads, WhatsApp/FCM are plain HTTP calls.
 """
 
+import os
 import time
 from datetime import datetime
 
@@ -13,6 +14,30 @@ def telegram_notify(text: str, is_alert: bool = False):
         notify(text, is_alert=is_alert)
     except Exception as e:
         print(f"[NOTIFIER] telegram_notify failed: {e}")
+
+
+def whatsapp_notify(text: str) -> bool:
+    """Send a WhatsApp message to the owner via the WA sidecar. No-op unless configured.
+
+    Requires BOTH ORA_WA_NOTIFY_NUMBER (phone w/ country code, e.g. 2547XXXXXXXX, or an
+    exact contact name) and WA_SIDECAR_URL (reachable sidecar). Checking both here means
+    a deleted/unreachable sidecar never costs a notification cycle a slow HTTP timeout.
+    Never raises — mirrors telegram_notify so WhatsApp can never kill the scheduler.
+    """
+    number = os.getenv("ORA_WA_NOTIFY_NUMBER", "").strip()
+    sidecar = os.getenv("WA_SIDECAR_URL", "").strip()
+    if not number or not sidecar:
+        return False
+    try:
+        from connectors.whatsapp import send_message
+        result = send_message(number, text)
+        if not result.get("ok"):
+            print(f"[NOTIFIER] WhatsApp send failed: {result.get('error', 'unknown error')}")
+            return False
+        return True
+    except Exception as e:
+        print(f"[NOTIFIER] whatsapp_notify failed: {type(e).__name__}")
+        return False
 
 _sent_today: set = set()
 _last_check: float = 0
@@ -29,12 +54,18 @@ def should_send(key: str) -> bool:
 
 
 def dual_notify(title: str, body: str, is_alert: bool = False) -> None:
-    """Send via Telegram AND FCM. Each channel is isolated — one failing won't affect the other."""
+    """Send via Telegram, WhatsApp (if configured) AND FCM. Each channel is isolated — one failing won't affect the others."""
     try:
         full_msg = f"*{title}*\n{body}" if title else body
         telegram_notify(full_msg, is_alert=is_alert)
     except Exception as e:
         print(f"[NOTIFIER] Telegram error: {e}")
+
+    try:
+        wa_msg = f"*{title}*\n{body}" if title else body
+        whatsapp_notify(wa_msg)
+    except Exception as e:
+        print(f"[NOTIFIER] WhatsApp error: {e}")
 
     try:
         from fcm import send_push
@@ -69,11 +100,11 @@ def run_autonomous_notifications() -> None:
 
         if action == "alert" and should_send(ptype):
             dual_notify(title="ORA Alert", body=msg, is_alert=True)
-            print(f"[NOTIFIER] ALERT sent (dual): {ptype}")
+            print(f"[NOTIFIER] ALERT sent (telegram+wa+fcm): {ptype}")
 
         elif action == "notify" and should_send(ptype):
             dual_notify(title="ORA", body=msg, is_alert=False)
-            print(f"[NOTIFIER] Notify sent (dual): {ptype}")
+            print(f"[NOTIFIER] Notify sent (telegram+wa+fcm): {ptype}")
 
         elif action == "brief" and should_send(ptype):
             _send_morning_brief()
@@ -109,7 +140,7 @@ def _send_morning_brief() -> None:
         lines.append(f"\nSystem: CPU {cpu:.0f}% | RAM {ram:.0f}%")
 
         dual_notify(title="ORA Morning Brief", body="\n".join(lines))
-        print("[NOTIFIER] Morning brief sent (dual)")
+        print("[NOTIFIER] Morning brief sent (telegram+wa+fcm)")
 
     except Exception as e:
         print(f"[NOTIFIER] Morning brief error: {e}")
