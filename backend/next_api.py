@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import io
+import logging
 import os
 import secrets
 import threading
@@ -16,6 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from fastapi import FastAPI, Depends, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from mini.store import Store, now
 from mini.intelligence import respond, suggestions
@@ -28,6 +30,7 @@ store = None
 chat_lock = threading.Lock()
 rate_lock = threading.Lock()
 rates = defaultdict(deque)
+logger = logging.getLogger(__name__)
 
 
 def db():
@@ -146,6 +149,7 @@ def readiness(auth=Depends(identity)):
             'scheduler_configured': len(os.getenv('ORA_CRON_TOKEN', '')) >= 32,
             'scheduler_last_started_at': state.get('scheduler_at'),
             'scheduler_last_completed_at': state.get('scheduler_completed_at'),
+            'scheduler_last_error': state.get('scheduler_error'),
             'reminders': 'android-local', 'delivery': delivery_status(state)}
 
 
@@ -587,28 +591,83 @@ def refresh_weather(auth=Depends(identity)):
 @app.post('/api/companion/tick')
 def companion_tick(authorization: str = Header(default='')):
     token = os.getenv('ORA_CRON_TOKEN', '')
-    if len(token) < 32 or not hmac.compare_digest(authorization, 'Bearer '+token):
+    if len(token) < 32 or not hmac.compare_digest(authorization.encode(), ('Bearer '+token).encode()):
         raise HTTPException(401, 'Invalid scheduler credentials.')
     # A persistent lease prevents overlapping jobs, including across process restarts.
+    # The owner token stops a timed-out tick from releasing a newer tick's lease.
+    lease = uuid.uuid4().hex
     def claim(s):
         if s.get('cron_lease', 0) > time.time(): return False
         s['cron_lease'] = time.time()+600
+        s['cron_lease_owner'] = lease
         s['scheduler_at'] = now()
         return True
     if not db().mutate(claim): return {'busy': True}
+
+    result = {'ok': True, 'processed': 0, 'weather_failures': 0,
+              'failed_stages': [], 'error_types': {}}
+    def record_failure(stage, exc):
+        if stage not in result['failed_stages']:
+            result['failed_stages'].append(stage)
+        # Exception strings can contain database URLs, bot tokens or private data.
+        # Only the fixed stage name and exception class are logged/returned.
+        result['error_types'][stage] = type(exc).__name__
+        logger.warning('Companion scheduler stage %s failed (%s)', stage, type(exc).__name__)
+
     try:
-        failures = 0
-        for device in db().read()['devices'][:10]:
-            try: weather_check(db(), device['id'])
-            except Exception: failures += 1
-        from mini.routines import tick_routines
-        tick_routines(db())
-        telegram_check(db())
-        sent = dispatch(db())
-        db().mutate(lambda s: s.update(scheduler_completed_at=now()))
-        return {'processed': sent, 'weather_failures': failures}
+        try:
+            devices = db().read()['devices'][:10]
+        except Exception as exc:
+            record_failure('workspace', exc)
+            devices = []
+        if 'workspace' not in result['failed_stages']:
+            for device in devices:
+                try:
+                    weather_check(db(), device['id'])
+                except Exception as exc:
+                    result['weather_failures'] += 1
+                    record_failure('weather', exc)
+            def run_routines():
+                from mini.routines import tick_routines
+                return tick_routines(db())
+            for stage, operation in (
+                ('routines', run_routines),
+                ('telegram_briefing', lambda: telegram_check(db())),
+                ('dispatch', lambda: dispatch(db())),
+            ):
+                try:
+                    value = operation()
+                    if stage == 'dispatch':
+                        result['processed'] = value
+                except Exception as exc:
+                    record_failure(stage, exc)
     finally:
-        db().mutate(lambda s: s.update(cron_lease=0))
+        def release(s):
+            if s.get('cron_lease_owner') == lease:
+                s['cron_lease'] = 0
+                s.pop('cron_lease_owner', None)
+        try:
+            db().mutate(release)
+        except Exception as exc:
+            record_failure('lease_release', exc)
+
+    if not result['failed_stages']:
+        def complete(s):
+            s['scheduler_completed_at'] = now()
+            s.pop('scheduler_error', None)
+        try:
+            db().mutate(complete)
+        except Exception as exc:
+            record_failure('completion', exc)
+    if result['failed_stages']:
+        result['ok'] = False
+        diagnostic = {'at': now(), 'stages': result['failed_stages'], 'error_types': result['error_types']}
+        try:
+            db().mutate(lambda s: s.update(scheduler_error=diagnostic))
+        except Exception as exc:
+            record_failure('diagnostics', exc)
+        return JSONResponse(status_code=503, content=result)
+    return result
 
 
 def tool_operation(state, kind, payload, request_id, auth):
