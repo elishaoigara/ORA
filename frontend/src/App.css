@@ -597,6 +597,21 @@ button.tool-history:hover { border-color: rgba(165, 180, 252, 0.55); background:
 .pair-code code { color: var(--color-success); font-family: var(--font-mono); font-size: 1.35rem; letter-spacing: 0.15em; overflow-wrap: anywhere; }
 .pair-code a { overflow-wrap: anywhere; }
 .rhythm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 14px; }
+.google-setup { margin-top: 14px; padding: 14px 16px; border: 1px solid rgba(240, 201, 120, 0.34); border-radius: var(--radius-md); background: rgba(240, 201, 120, 0.05); }
+.google-setup > p { margin-bottom: 10px; }
+.google-setup ul { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.google-setup li { display: flex; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--color-border-subtle); }
+.google-setup li:last-child { padding-bottom: 0; border-bottom: 0; }
+.google-setup li > div { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.google-setup li strong { font-weight: 620; }
+.google-setup li code { color: var(--color-text-secondary); font-family: var(--font-mono); font-size: 0.82rem; }
+.google-setup li p { margin: 4px 0 0; color: var(--color-text-secondary); font-size: 0.88rem; line-height: 1.55; }
+.google-setup-redirect { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-inset); }
+.google-setup-redirect small { flex: 1 1 100%; color: var(--color-text-secondary); }
+.google-setup-redirect code { min-width: 0; flex: 1 1 220px; color: var(--color-brand); font-family: var(--font-mono); font-size: 0.82rem; overflow-wrap: anywhere; }
+.google-api-checks { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 10px 0 0; padding: 0; list-style: none; }
+.google-api-checks li { display: flex; align-items: center; gap: 8px; color: var(--color-text-secondary); font-size: 0.86rem; }
+.google-message { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-inset); overflow-wrap: anywhere; }
 .readiness-panel p { margin-bottom: 10px; }
 .share-draft { padding: 14px 0; border-top: 1px solid var(--color-border-subtle); }
 .share-draft blockquote { margin: 10px 0 14px; padding: 12px 14px; border-left: 3px solid var(--color-border); background: var(--color-surface-inset); color: var(--color-text-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
