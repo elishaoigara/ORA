@@ -25,6 +25,14 @@ services:
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      # Optional WhatsApp owner notifications (requires the WA sidecar service).
+      - key: WA_SIDECAR_URL
+        sync: false
+      - key: WA_API_SECRET
+        sync: false
+      # Destination for proactive WhatsApp notifications: phone with country code or contact name.
+      - key: ORA_WA_NOTIFY_NUMBER
+        sync: false
       - key: CORS_ORIGINS
         sync: false
       - key: DEEPSEEK_MODEL
