@@ -1,14 +1,15 @@
-# Optional WhatsApp sidecar — deploy this blueprint ONLY on a paid instance.
+# OPTIONAL standalone WhatsApp sidecar — for a paid plan only.
 #
-# Why it is not part of the root render.yaml: a web service that must stay
-# connected to WhatsApp runs continuously, which costs ~730 instance hours a
-# month. Render Free grants 750 hours per workspace to ALL free services combined,
-# so running this beside the ORA backend would suspend both services before the
-# end of the month. On a paid instance (plan: starter) it does not consume free
-# hours.
+# The default deployment does NOT use this file. Render Free gives 750 instance
+# hours to the whole workspace, and a bridge that stays connected uses ~730 of them
+# on its own, so a second free service suspends the backend. The root Dockerfile
+# therefore embeds the bridge inside the backend service (WA_EMBEDDED=1).
 #
-# Deploy: Render Dashboard -> New -> Blueprint -> point at this directory, or copy
-# this service into the root render.yaml after upgrading the workspace.
+# Deploy this blueprint only when you want WhatsApp live 24/7 regardless of
+# whether ORA is awake, i.e. on plan: starter. Point the backend at it with
+# WA_SIDECAR_URL and leave WA_EMBEDDED unset.
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> point at this directory.
 services:
   - type: web
     name: ora-whatsapp

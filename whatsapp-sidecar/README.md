@@ -2,14 +2,18 @@
 
 A small, authenticated HTTP bridge that lets ORA read and send WhatsApp messages.
 
-ORA's backend never embeds WhatsApp: `backend/connectors/whatsapp.py` talks to this
-service over HTTP using the shared `WA_API_SECRET`, and `backend/mini/whatsapp.py`
-mirrors companion alerts to the owner. The full setup guide is
-[`docs/WHATSAPP_SETUP.md`](../docs/WHATSAPP_SETUP.md).
+The backend talks to this service over HTTP using the shared `WA_API_SECRET`, and
+`backend/mini/whatsapp.py` mirrors companion alerts to the owner. The full setup
+guide is [`docs/WHATSAPP_SETUP.md`](../docs/WHATSAPP_SETUP.md).
+
+On Render Free the bridge is **not** deployed as its own service: it is built into
+the backend's Docker image and supervised by `backend/mini/wa_bridge.py`, so the
+workspace pays for one service instead of two. Run it standalone only on a paid
+plan (or locally); either way the HTTP contract below is identical.
 
 ```bash
 npm install
-npm test                 # 19 tests, no WhatsApp connection required
+npm test                 # 36 tests, no WhatsApp connection required
 WA_API_SECRET=at-least-12-chars npm start
 ```
 
@@ -22,7 +26,8 @@ WhatsApp → Settings → Linked devices → Link a device.
 | --- | --- | --- |
 | GET | `/health` | Liveness for platform health checks (unauthenticated) |
 | GET | `/status` | `{ ok, state, me, pairedAt }` — `state` is `open` when linked |
-| GET | `/qr` | Pairing page (HTML, auto-refreshing) |
+| GET | `/qr` | Pairing page (HTML, auto-refreshing, QR + pairing code) |
+| GET | `/qr.json` | `{ state, linked, qr, code }` for the API's pairing proxy |
 | POST | `/send` | `{ to, message }` — phone with country code, JID, or contact name |
 | GET | `/messages` | `?limit&contact&unread&search&no_groups` |
 | POST | `/mark-read` | `{ ids }` |
@@ -42,12 +47,21 @@ accepts `?secret=` so it can be opened in a browser).
 | `WA_API_SECRET` | yes | Shared secret with the backend. Refuses to boot on the public default or under 12 characters. |
 | `PORT` | no | Defaults to `8080`. |
 | `WA_AUTH_DIR` | no | Session directory, defaults to `./auth_state` (`/data` in Docker). |
-| `ORA_BACKEND_URL` | no | When set with `ORA_INTERNAL_TOKEN`, inbound messages are POSTed to `/api/whatsapp/incoming`. |
-| `ORA_INTERNAL_TOKEN` | with backend URL | Header `X-ORA-Token` for that webhook. |
-| `WA_SESSION_B64` | no | Restores a linked session after a redeploy (see `/session/export`). |
-| `WA_PAIR_NUMBER` | no | If set, logs a pairing code instead of relying on the QR page. |
+| `ORA_BACKEND_URL` | no | With `ORA_INTERNAL_TOKEN`: inbound webhooks go to `/api/whatsapp/incoming`, and the session is mirrored to the backend's database. |
+| `ORA_INTERNAL_TOKEN` | with backend URL | Header `X-ORA-Token` for those calls. |
+| `WA_SESSION_SYNC` | no | `0` keeps credentials on disk only; on by default when the backend URL and token are set. |
+| `WA_SESSION_B64` | no | Explicit session override, restored before anything else (see `/session/export`). |
+| `WA_PAIR_NUMBER` | no | Phone number to request an 8-character pairing code (useful when the QR would have to be scanned by the screen showing it). |
 | `WA_MAX_MESSAGES` | no | Ring-buffer size for the in-memory message cache (default `500`). |
 | `WA_LOG_LEVEL` | no | pino level, default `warn`. |
+
+## Surviving a restart
+
+With `ORA_BACKEND_URL` + `ORA_INTERNAL_TOKEN` set, the bridge saves its credential
+bundle to `PUT /api/whatsapp/session` (debounced, at most every ~15 s, plus once on
+shutdown) and restores it from `GET /api/whatsapp/session` on boot. That is what lets
+a sleeping free instance relink without a new QR scan. The bundle is never logged and
+never leaves the authenticated channel.
 
 ## Privacy and safety
 

@@ -2,28 +2,27 @@
 #
 # Budget reality (Render Free = 750 instance hours per WORKSPACE per month):
 #   * one always-running web service .......... ~730 h/month (all of it)
-#   * the backend + the WhatsApp sidecar ...... ~1460 h/month (over budget)
-#   * a 30-minute scheduler tick ............... ~360 h/month (half the clock)
+#   * the backend + a WhatsApp sidecar ....... ~1460 h/month (over budget)
+#   * a 30-minute scheduler tick .............. ~360 h/month (half the clock)
 #
-# So this blueprint intentionally deploys ONE free service. The WhatsApp sidecar
-# lives in its own blueprint (whatsapp-sidecar/render.yaml) and is meant for a paid
-# instance; adding it to this file spends the whole monthly allowance twice over.
+# So this blueprint deploys ONE service, and that service hosts both processes:
+# the Dockerfile builds the Python API and the WhatsApp bridge into one image and
+# the API supervises the bridge (see backend/mini/wa_bridge.py). WhatsApp therefore
+# costs no extra instance hours: it is live whenever ORA is awake, reconnects from
+# the session stored in Postgres after a sleep, and catches up on queued messages
+# on the next wake-up.
+#
 # See docs/RENDER_FREE_BUDGET.md before adding services, keep-alive pings or
 # sub-15-minute cron schedules.
 services:
   - type: web
     name: ora-backend
-    runtime: python
+    runtime: docker
     plan: free
-    rootDir: backend
-    buildCommand: pip install -r requirements-mini.txt
-    # One worker keeps inference concurrency bounded. The concurrency cap protects
-    # the 512 MB free instance, and the short keep-alive releases idle sockets.
-    startCommand: uvicorn next_api:app --host 0.0.0.0 --port $PORT --workers 1 --limit-concurrency 32 --timeout-keep-alive 5
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /api/health
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.11
       - key: APP_ENV
         value: production
       - key: ORA_FREE_TIER
@@ -43,15 +42,40 @@ services:
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
-      # Optional WhatsApp owner notifications. Only set these when the paid
-      # sidecar in whatsapp-sidecar/render.yaml is deployed and awake.
-      - key: WA_SIDECAR_URL
-        sync: false
+
+      # ── WhatsApp (embedded bridge) ─────────────────────────────────────────
+      # WA_EMBEDDED=1 starts the bridge as a child of this service. It needs both
+      # secrets below; without them it stays off and no process is started.
+      - key: WA_EMBEDDED
+        value: "1"
+      # Shared secret for the loopback bridge. 12+ characters; the bridge refuses
+      # to boot on the public default.
       - key: WA_API_SECRET
         sync: false
-      # Destination for proactive WhatsApp notifications: phone with country code or contact name.
+      # Authenticates the bridge's webhooks and its session saves against this API
+      # (X-ORA-Token). 16+ characters.
+      - key: ORA_INTERNAL_TOKEN
+        sync: false
+      # Destination for proactive WhatsApp notifications: phone with country code
+      # or an exact WhatsApp contact name.
       - key: ORA_WA_NOTIFY_NUMBER
         sync: false
+      # Optional: your number with country code. WhatsApp then issues an 8-character
+      # pairing code, so a phone can link itself without scanning its own screen.
+      - key: WA_PAIR_NUMBER
+        sync: false
+      # Leave empty to use the embedded bridge. Set it only to point ORA at a
+      # separate sidecar service (whatsapp-sidecar/render.yaml) instead.
+      - key: WA_SIDECAR_URL
+        sync: false
+      - key: WA_SIDECAR_PORT
+        value: "8080"
+      # Caps the in-memory message cache so the bridge fits beside the API in 512 MB.
+      - key: WA_MAX_MESSAGES
+        value: "200"
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=160
+
       - key: CORS_ORIGINS
         sync: false
       - key: ORA_DAILY_AI_REQUESTS

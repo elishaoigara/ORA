@@ -33,14 +33,19 @@ function jidFor(value) {
 }
 
 class WhatsAppAdapter {
-  constructor({ config, store, logger = console }) {
+  constructor({ config, store, logger = console, onCreds = null }) {
     this.config = config;
     this.store = store;
     this.logger = logger;
+    // Called after any credential rotation so the session can be mirrored to the
+    // backend. Credentials on an ephemeral disk do not survive a wake-up.
+    this.onCreds = onCreds;
     this.sock = null;
     this.state = 'closed';
     this.me = null;
     this.qrPayload = null;
+    this.pairingCode = null;
+    this.requestedPairing = false;
     this.pairedAt = null;
     this.lastError = null;
     this.stopped = false;
@@ -60,6 +65,24 @@ class WhatsAppAdapter {
 
   qr() {
     return this.qrPayload;
+  }
+
+  /**
+   * Resolve once the socket is usable, or after `timeoutMs`. The default stays
+   * below the backend's loopback HTTP timeout so a caller sees an honest failure
+   * instead of a request that times out while the message is still in flight.
+   *
+   * After a free instance wakes up, the socket needs several seconds to link.
+   * A notification mirrored in that window used to be dropped as "not linked";
+   * waiting briefly turns it into a delivered message.
+   */
+  async whenOpen(timeoutMs = 4000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.state === 'open') return true;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return this.state === 'open';
   }
 
   async start() {
@@ -89,8 +112,21 @@ class WhatsAppAdapter {
     this.sock = sock;
     this.state = 'connecting';
 
-    sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('connection.update', (update) => this.onConnectionUpdate(update, saveCreds));
+    // Save to disk first, then let the owner of the session copy persist it.
+    const persist = () => {
+      Promise.resolve()
+        .then(() => saveCreds?.())
+        .catch(() => {})
+        .finally(() => {
+          try {
+            this.onCreds?.();
+          } catch {
+            // Persisting a backup must never break the socket.
+          }
+        });
+    };
+    sock.ev.on('creds.update', persist);
+    sock.ev.on('connection.update', (update) => this.onConnectionUpdate(update, persist));
     sock.ev.on('messages.upsert', ({ messages }) => {
       for (const message of messages || []) this.ingest(message);
     });
@@ -117,15 +153,41 @@ class WhatsAppAdapter {
 
   onConnectionUpdate(update, saveCreds) {
     const { connection, lastDisconnect, qr } = update || {};
-    if (qr) this.qrPayload = qr;
+    if (qr) {
+      this.qrPayload = qr;
+      // Pairing by phone number lets the owner link a device from the phone
+      // itself, which matters when the only screen available is the one that
+      // would have to scan the QR code.
+      if (this.config.pairNumber && !this.requestedPairing && !this.pairedAt) {
+        this.requestedPairing = true;
+        Promise.resolve()
+          .then(() => this.sock?.requestPairingCode?.(this.config.pairNumber))
+          .then((code) => {
+            if (code) {
+              this.pairingCode = code;
+              this.logger.warn?.('[wa] pairing code issued');
+            }
+          })
+          .catch(() => {
+            this.requestedPairing = false;
+          });
+      }
+    }
     if (connection === 'open') {
       this.state = 'open';
       this.qrPayload = null;
+      this.pairingCode = null;
+      this.requestedPairing = false;
       this.me = this.sock?.user?.id || null;
       this.pairedAt = this.pairedAt || new Date().toISOString();
       this.lastError = null;
       this.logger.warn?.('[wa] linked');
       saveCreds?.();
+      try {
+        this.onCreds?.();
+      } catch {
+        // Best effort: the periodic flush retries.
+      }
       return;
     }
     if (connection !== 'close') return;
@@ -138,6 +200,8 @@ class WhatsAppAdapter {
       // The phone removed this linked device: wipe credentials and require a new pairing.
       this.wipeSession();
       this.pairedAt = null;
+      this.pairingCode = null;
+      this.requestedPairing = false;
     }
     this.scheduleReconnect();
   }
@@ -227,7 +291,9 @@ class WhatsAppAdapter {
   }
 
   async send(to, message) {
-    if (!this.sock || this.state !== 'open') return { ok: false, error: 'WhatsApp is not linked' };
+    if (!this.sock || this.state !== 'open') {
+      if (!(await this.whenOpen())) return { ok: false, error: 'WhatsApp is not linked' };
+    }
     let jid = jidFor(to);
     if (!jid) {
       const resolved = this.store.resolveContact(to);

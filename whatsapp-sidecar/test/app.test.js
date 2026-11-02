@@ -15,7 +15,10 @@ function fakeAdapter(overrides = {}) {
     qr: () => null,
     send: async (to, message) => {
       calls.push({ to, message });
-      return { ok: true };
+      // Mirrors WhatsAppAdapter.send: an unlinked socket reports it, a linked one
+      // is expected to send (the adapter itself waits briefly for a reconnecting
+      // socket before giving up).
+      return adapter.state === 'open' ? { ok: true } : { ok: false, error: 'WhatsApp is not linked' };
     },
     messages: (query) => {
       calls.push({ query });

@@ -7,6 +7,7 @@
  *   GET  /health              -> liveness for platform health checks (no secrets)
  *   GET  /status              -> { ok, state, me, pairedAt }
  *   GET  /qr                  -> pairing page/PNG when the session is not linked
+ *   GET  /qr.json             -> { state, linked, qr } for the API's pairing proxy
  *   POST /send                -> { to, message }
  *   GET  /messages            -> ?limit&contact&unread&search&no_groups
  *   POST /mark-read           -> { ids }
@@ -73,7 +74,8 @@ function createApp({ wa, config, qrcode }) {
   app.get('/qr', requireSecret, guarded(async (req, res) => {
     const status = wa.status();
     const payload = wa.qr();
-    if (status.state === 'open' || !payload) {
+    const code = wa.pairingCode || null;
+    if (status.state === 'open' || (!payload && !code)) {
       return res.status(200).type('text/html').send(
         `<!doctype html><meta charset="utf-8"><title>ORA WhatsApp</title>
          <body style="font:16px system-ui;padding:2rem;max-width:36rem">
@@ -85,17 +87,36 @@ function createApp({ wa, config, qrcode }) {
          <p><a href="?secret=${encodeURIComponent(String(req.query.secret || ''))}">Reload</a></p></body>`,
       );
     }
-    const dataUrl = qrcode ? await qrcode.toDataURL(payload, { margin: 1, width: 320 }) : '';
-    if (!qrcode) return res.status(503).type('text/html').send('qrcode module unavailable');
+    const dataUrl = payload && qrcode ? await qrcode.toDataURL(payload, { margin: 1, width: 320 }) : '';
+    if (payload && !qrcode) return res.status(503).type('text/html').send('qrcode module unavailable');
+    const byNumber = code
+      ? `<p>Or in WhatsApp → Linked devices → <strong>Link with phone number</strong>:<br>
+         <code style="font-size:1.6rem;letter-spacing:.2rem">${code}</code></p>`
+      : '';
+    const byQr = dataUrl ? `<img alt="pairing QR" src="${dataUrl}" width="320" height="320" />` : '';
     return res.type('text/html').send(
       `<!doctype html><meta charset="utf-8"><title>ORA WhatsApp pairing</title>
        <meta http-equiv="refresh" content="20">
        <body style="font:16px system-ui;padding:2rem;text-align:center">
        <h1>Pair ORA WhatsApp</h1>
        <p>WhatsApp → Settings → Linked devices → Link a device</p>
-       <img alt="pairing QR" src="${dataUrl}" width="320" height="320" />
-       <p style="color:#666">Code refreshes automatically. Close this page when paired.</p></body>`,
+       ${byQr}${byNumber}
+       <p style="color:#666">This page refreshes automatically. Close it when paired.</p></body>`,
     );
+  }));
+
+  // The backend proxies pairing to this JSON endpoint when the bridge is embedded
+  // (loopback only), so the sidecar secret never has to reach a browser.
+  app.get('/qr.json', requireSecret, guarded(async (req, res) => {
+    const status = wa.status();
+    const payload = wa.qr();
+    const linked = status.state === 'open';
+    let image = null;
+    if (!linked && payload && qrcode) {
+      image = await qrcode.toDataURL(payload, { margin: 1, width: 320 });
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ ok: true, state: status.state, linked, qr: image, code: linked ? null : wa.pairingCode || null });
   }));
 
   app.post('/send', requireSecret, guarded(async (req, res) => {
@@ -103,10 +124,13 @@ function createApp({ wa, config, qrcode }) {
     const message = String(req.body?.message || '');
     if (!to || !message) return res.status(400).json({ ok: false, error: 'to and message are required' });
     if (message.length > 8000) return res.status(400).json({ ok: false, error: 'message too long' });
-    const status = wa.status();
-    if (status.state !== 'open') return res.status(503).json({ ok: false, error: 'WhatsApp is not linked' });
+    // wa.send() waits briefly for a reconnecting socket, so a message mirrored in
+    // the first seconds after a wake-up is delivered instead of dropped.
     const result = await wa.send(to, message);
-    if (!result.ok) return res.status(502).json({ ok: false, error: result.error || 'send failed' });
+    if (!result.ok) {
+      const unlinked = /not linked/i.test(result.error || '');
+      return res.status(unlinked ? 503 : 502).json({ ok: false, error: result.error || 'send failed' });
+    }
     return res.json({ ok: true });
   }));
 

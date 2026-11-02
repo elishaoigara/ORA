@@ -9,6 +9,11 @@ Render Free gives one 0.1-CPU instance, so the store is tuned for that budget:
   reads the workspace several times (session lookup, endpoint, snapshot); the
   cache turns that into a single database round trip. Every mutation refreshes
   the cache, so the owner never reads stale data.
+* A tiny key/value table holds the WhatsApp bridge session. Render Free wipes the
+  container filesystem on every sleep, so the linked-device credentials live in
+  the database instead: the bridge reconnects on wake without a new QR pairing.
+  Keeping it out of ``ora_mini_workspace`` means it never reaches a client
+  snapshot, an export, or the read cache.
 """
 import json
 import os
@@ -35,6 +40,9 @@ class Store:
     POOL_SIZE = 4
     POOL_IDLE_SECONDS = 120.0
     READ_CACHE_SECONDS = 5.0
+    # WhatsApp credential bundles are tens of kilobytes; refuse anything that would
+    # bloat the row or a free Postgres instance.
+    KV_MAX_BYTES = 512 * 1024
 
     def __init__(self, url=None, path=None):
         self.url = url if url is not None else os.getenv("DATABASE_URL", "")
@@ -127,14 +135,50 @@ class Store:
         try:
             conn.execute("CREATE TABLE IF NOT EXISTS ora_mini_workspace (id INTEGER PRIMARY KEY, data TEXT NOT NULL)")
             conn.execute("CREATE TABLE IF NOT EXISTS ora_mini_receipts (id TEXT PRIMARY KEY, result TEXT NOT NULL, created_at TEXT NOT NULL)")
+            conn.execute("CREATE TABLE IF NOT EXISTS ora_mini_kv (k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at TEXT NOT NULL)")
             placeholder = "%s" if self.url else "?"
             conn.execute(f"INSERT INTO ora_mini_workspace(id,data) VALUES (1,{placeholder}) ON CONFLICT(id) DO NOTHING", (json.dumps(initial()),))
             if self.url:
                 conn.execute("ALTER TABLE ora_mini_workspace ENABLE ROW LEVEL SECURITY")
                 conn.execute("ALTER TABLE ora_mini_receipts ENABLE ROW LEVEL SECURITY")
+                conn.execute("ALTER TABLE ora_mini_kv ENABLE ROW LEVEL SECURITY")
             conn.commit()
         finally:
             self._close(conn)
+
+    def kv_get(self, key):
+        """Read one private value (never part of the workspace snapshot)."""
+        placeholder = "%s" if self.url else "?"
+        conn = self._acquire()
+        try:
+            row = conn.execute(f"SELECT v FROM ora_mini_kv WHERE k={placeholder}", (key,)).fetchone()
+            return row[0] if row else None
+        finally:
+            self._release(conn)
+
+    def kv_put(self, key, value):
+        if not isinstance(value, str) or len(value.encode()) > self.KV_MAX_BYTES:
+            raise ValueError("value exceeds the key/value size limit")
+        placeholder = "%s" if self.url else "?"
+        conn = self._acquire()
+        try:
+            conn.execute(
+                f"INSERT INTO ora_mini_kv(k,v,updated_at) VALUES ({placeholder},{placeholder},{placeholder}) "
+                "ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v, updated_at=EXCLUDED.updated_at",
+                (key, value, now()),
+            )
+            conn.commit()
+        finally:
+            self._release(conn)
+
+    def kv_delete(self, key):
+        placeholder = "%s" if self.url else "?"
+        conn = self._acquire()
+        try:
+            conn.execute(f"DELETE FROM ora_mini_kv WHERE k={placeholder}", (key,))
+            conn.commit()
+        finally:
+            self._release(conn)
 
     @contextmanager
     def transaction(self):
