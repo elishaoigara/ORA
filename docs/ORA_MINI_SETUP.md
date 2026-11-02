@@ -24,7 +24,7 @@ The store uses a serialized single-owner workspace and transactional idempotency
 Keep Root Directory **backend**. Update:
 
 - Build: `pip install -r requirements-mini.txt`
-- Start: `uvicorn next_api:app --host 0.0.0.0 --port $PORT --workers 1`
+- Start: `uvicorn next_api:app --host 0.0.0.0 --port $PORT --workers 1 --limit-concurrency 32 --timeout-keep-alive 5`
 - Health path: `/api/health`
 - Instance: **Free**
 - Remove the old persistent disk declaration. `render.yaml` already describes this setup.
@@ -34,6 +34,7 @@ Configure these environment variables:
 | Variable | Value |
 | --- | --- |
 | `APP_ENV` | `production` |
+| `ORA_FREE_TIER` | `1` marks the free instance so `/api/health` reports it |
 | `DATABASE_URL` | Secret external Postgres URL |
 | `ORA_API_TOKEN` | Long random owner key, generated in your password manager or locally |
 | `DEEPSEEK_API_KEY` | DeepSeek API key for chat and tools; setting it selects DeepSeek by default |
@@ -52,11 +53,13 @@ Configure these environment variables:
 
 Do not add wildcard browser origins. `ORA_API_TOKEN` is not a Google or Supabase token. Keep one worker: it bounds inference concurrency and avoids simultaneous model requests from multiple clients. Durable database transactions still protect task mutations.
 
-Open `/api/health` and check `release: ora-mini-2`, `storage: postgres`, `ai_provider: deepseek`, and `ai_configured: true` after setting a DeepSeek key. This checks that the key is present, not that DeepSeek accepted it; send a chat message to verify the connection. A missing database makes production startup fail deliberately rather than silently losing your data.
+Open `/api/health` and check `release: ora-mini-2.4`, `storage: postgres`, `ai_provider: deepseek`, and `ai_configured: true` after setting a DeepSeek key. This checks that the key is present, not that DeepSeek accepted it; send a chat message to verify the connection. A missing database makes production startup fail deliberately rather than silently losing your data.
 
 DeepSeek chat and tools use the key only on the Render backend. Add `DEEPSEEK_API_KEY` to the Render web service Environment and redeploy; do not add it to Vercel, `VITE_*` variables, source control, or chat. If the key on DeepSeek's API keys page is masked and you did not save its full value when creating it, create a new one and copy it directly into Render. Keep `GROQ_API_KEY` if you want ORA's existing voice transcription and Groq vision features; DeepSeek chat does not change those separate endpoints.
 
-A first request after sleep may take around a minute. The clients wait up to 115 seconds and preserve unsent drafts. They do not generate fake keep-alive traffic. Only visible/foreground clients synchronize every 60 seconds.
+A first request after sleep may take around a minute. The clients wait up to 115 seconds and preserve unsent drafts. They do not generate fake keep-alive traffic. Only visible and recently active clients synchronize: every 60 seconds while you are using the app, every 3 minutes when it is idle, and not at all when the tab is hidden or has been untouched for ten minutes. Unchanged workspaces return an empty `304`, and JSON snapshots are gzipped.
+
+A free workspace shares 750 instance hours a month. Schedule the companion tick a few times a day, not every 30 minutes, and never add a second free service: see [the free-tier budget](RENDER_FREE_BUDGET.md). The WhatsApp sidecar needs a paid instance (`whatsapp-sidecar/render.yaml`) because it must stay connected all the time.
 
 ## 3. Migrate available old data
 

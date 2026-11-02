@@ -63,7 +63,12 @@ export default function ToolsPage({ onAsk }) {
           if (alive) setError(e.message);
         });
     load();
-    const timer = setInterval(load, 15000);
+    // Approval results are also refreshed after every action, so this is only a
+    // safety net. Poll once a minute and never while the tab is hidden: each poll
+    // counts as traffic that keeps the free Render instance awake.
+    const timer = setInterval(() => {
+      if (alive && document.visibilityState === "visible") load();
+    }, 60000);
     return () => {
       alive = false;
       clearInterval(timer);

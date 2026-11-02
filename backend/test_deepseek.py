@@ -24,9 +24,15 @@ class DeepSeekTests(unittest.TestCase):
         self.assertEqual(payload['thinking'], {'type': 'disabled'})
         self.assertIn('tools', payload)
 
-    def test_groq_key_alone_does_not_enable_chat(self):
-        with patch.dict(os.environ, {'GROQ_API_KEY': 'groq-test'}, clear=True), patch('mini.intelligence.requests.post') as call:
-            with self.assertRaisesRegex(RuntimeError, 'DEEPSEEK_API_KEY'):
+    def test_missing_keys_do_not_enable_chat(self):
+        # Documented selection order: an explicit ORA_AI_PROVIDER wins, otherwise
+        # DeepSeek is used when its key exists and Groq is the fallback. With no
+        # key at all, chat must refuse instead of calling a provider.
+        from mini.intelligence import ai_provider
+        with patch.dict(os.environ, {'GROQ_API_KEY': 'groq-test'}, clear=True):
+            self.assertEqual(ai_provider()['name'], 'groq')
+        with patch.dict(os.environ, {}, clear=True), patch('mini.tools.catalog', return_value=[]), patch('mini.intelligence.requests.post') as call:
+            with self.assertRaisesRegex(RuntimeError, 'AI is not configured'):
                 respond(state(), 'Hi')
             call.assert_not_called()
 

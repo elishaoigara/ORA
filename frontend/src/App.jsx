@@ -129,6 +129,15 @@ function dateLabel(value) {
     : "Whenever you’re ready";
 }
 
+// Sync cadence tuned for a free Render instance (750 h/month for the workspace).
+// Active tab: one snapshot a minute. Idle tab: every three minutes. Hidden tab or
+// ten minutes without input: no traffic at all, so Render can spin the service down.
+const ACTIVE_MS = 60 * 1000;
+const SLOW_AFTER_MS = 2 * 60 * 1000;
+const SLOW_MS = 3 * 60 * 1000;
+const IDLE_STOP_MS = 10 * 60 * 1000;
+const MAX_BACKOFF_MS = 4 * 60 * 1000;
+
 export default function App() {
   const [authenticated, setAuthenticated] = useState(Boolean(saved("token")));
   const [data, setData] = useState(saved("snapshot"));
@@ -156,6 +165,10 @@ export default function App() {
   const bottom = useRef(null);
   const syncing = useRef(false);
   const busyRef = useRef(false);
+  const hasData = useRef(Boolean(saved("snapshot")));
+  const lastSyncAt = useRef(0);
+  const lastActivity = useRef(0);
+  const failures = useRef(0);
   const refreshReadiness = useCallback(async () => {
     try {
       setReadiness(await api("/readiness"));
@@ -173,7 +186,7 @@ export default function App() {
   const sync = useCallback(async () => {
     if (syncing.current) return;
     syncing.current = true;
-    setStatus("Connecting · may take a minute");
+    if (!hasData.current) setStatus("Connecting · may take a minute");
     try {
       const queue = saved("outbox", []);
       for (const item of [...queue]) {
@@ -191,10 +204,19 @@ export default function App() {
         setOutbox(remaining);
       }
       const snapshot = await api("/sync");
-      setData(snapshot);
-      save("snapshot", snapshot);
-      setStatus("Synced just now");
+      if (snapshot) {
+        // A 304 means the server sent nothing new: keep the current snapshot.
+        setData(snapshot);
+        save("snapshot", snapshot);
+        hasData.current = true;
+        setStatus("Synced just now");
+      } else {
+        setStatus("Up to date");
+      }
+      failures.current = 0;
+      lastSyncAt.current = Date.now();
     } catch (e) {
+      failures.current += 1;
       setStatus("Offline · showing saved data");
       setError(e.message);
       if (e.status === 401) {
@@ -208,19 +230,62 @@ export default function App() {
   }, []);
   useEffect(() => {
     if (!authenticated) return;
-    sync();
-    const id = setInterval(() => {
-      if (document.visibilityState === "visible" && !busyRef.current) sync();
-    }, 60000);
-    const focus = () => {
-      if (document.visibilityState === "visible" && !busyRef.current) sync();
+    let timer = null;
+    let cancelled = false;
+
+    // Render Free sleeps after 15 minutes without traffic, so a forgotten or
+    // hidden tab must not poll. Polling stops when the tab is hidden or after
+    // ten minutes without user input; any activity wakes it and syncs at once.
+    const gap = () => {
+      if (document.visibilityState !== "visible") return null;
+      const idleFor = Date.now() - lastActivity.current;
+      if (idleFor > IDLE_STOP_MS) return null;
+      const base = idleFor > SLOW_AFTER_MS ? SLOW_MS : ACTIVE_MS;
+      const backoff = Math.min(failures.current * 30000, MAX_BACKOFF_MS);
+      return base + backoff;
     };
-    document.addEventListener("visibilitychange", focus);
-    window.addEventListener("online", focus);
+    const clear = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+    const arm = () => {
+      clear();
+      const wait = gap();
+      if (cancelled || wait === null) return;
+      timer = setTimeout(async () => {
+        if (!cancelled && document.visibilityState === "visible" && !busyRef.current)
+          await sync();
+        arm();
+      }, wait);
+    };
+    const activity = () => {
+      const stopped = gap() === null;
+      lastActivity.current = Date.now();
+      if (document.visibilityState !== "visible") {
+        clear();
+        return;
+      }
+      // Resume after a hidden or idle period, or after a long gap between checks.
+      if (stopped || Date.now() - lastSyncAt.current > ACTIVE_MS) sync();
+      arm();
+    };
+
+    lastActivity.current = Date.now();
+    sync();
+    arm();
+    document.addEventListener("visibilitychange", activity);
+    window.addEventListener("online", activity);
+    window.addEventListener("pointerdown", activity, { passive: true });
+    window.addEventListener("keydown", activity);
+    window.addEventListener("scroll", activity, { passive: true });
     return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", focus);
-      window.removeEventListener("online", focus);
+      cancelled = true;
+      clear();
+      document.removeEventListener("visibilitychange", activity);
+      window.removeEventListener("online", activity);
+      window.removeEventListener("pointerdown", activity);
+      window.removeEventListener("keydown", activity);
+      window.removeEventListener("scroll", activity);
     };
   }, [authenticated, sync]);
   useEffect(() => {
