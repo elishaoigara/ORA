@@ -30,6 +30,22 @@ Missing secrets now fail visibly. Scheduled runs are every 30 minutes, subject t
 GitHub scheduling delays and Render wake-up time. This is not exact-time calling
 or an emergency alert service.
 
+### Scheduler failure diagnostics
+
+The workflow runs `scripts/companion_tick.py`, which validates the backend origin
+and token shape, sends one bounded POST, and reports the HTTP status plus known
+scheduler fields. It does not follow redirects or retry the POST, because either
+could expose credentials or duplicate an alert after an ambiguous timeout.
+
+The backend isolates workspace reads, weather, routines, briefing queueing and
+Telegram dispatch. A failure in one stage no longer cancels queued Telegram
+delivery in the same tick. The endpoint still returns HTTP 503 when any stage
+fails, with `failed_stages` and `error_types` containing only fixed stage names
+and exception classes. Exception messages, database URLs, bot tokens and chat
+contents are not returned. The authenticated readiness endpoint exposes the
+latest safe diagnostic as `scheduler_last_error`; a fully successful tick clears
+it. Deploy the backend change before relying on these diagnostics.
+
 ## Pair and verify
 
 1. Open web Connections → Telegram. Activate/refresh the webhook.
