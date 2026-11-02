@@ -1,1 +1,14 @@
-{"background":"#090e14","surface":"#111922","raised":"#18222e","border":"#26313e","text":"#edf3f6","muted":"#96a6b8","cyan":"#87e8dc","violet":"#aaa1f7","radius":12}
+{
+  "canvas": "#10131d",
+  "surface": "#191e2c",
+  "surfaceRaised": "#22293a",
+  "textPrimary": "#f5f7fc",
+  "textSecondary": "#b9c3d5",
+  "brand": "#a5b4fc",
+  "accent": "#5eead4",
+  "border": "#343d52",
+  "success": "#5eead4",
+  "warning": "#f0c978",
+  "danger": "#ff9691",
+  "radius": 12
+}

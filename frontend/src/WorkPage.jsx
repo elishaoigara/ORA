@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { api, uid } from "./mini-client";
+import { api, uid, saved, save } from "./mini-client";
 import "./WorkPage.css";
 const blank = {
   name: "",
@@ -20,13 +20,40 @@ const fields = {
   blockers: "Blockers",
   branch: "Working branch",
 };
+const jobStatusTone = (status) => status === "completed"
+  ? "success"
+  : ["queued", "running", "awaiting_approval"].includes(status)
+    ? "warning"
+    : ["failed", "needs_review", "expired"].includes(status)
+      ? "danger"
+      : "";
+
+async function workChatStorageKey(fingerprint) {
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(fingerprint));
+    const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return `work-chat-request-${hex}`;
+  } catch {
+    return null;
+  }
+}
+
+function forgetWorkChatRequest(key) {
+  if (!key) return;
+  try {
+    sessionStorage.removeItem(`ora2:${key}`);
+  } catch {
+    // An in-memory request ID still protects retries while this view is open.
+  }
+}
 export default function WorkPage() {
   const [diagnostics, setDiagnostics] = useState(null);
   const [data, setData] = useState(null),
     [desktop, setDesktop] = useState({ workers: [], jobs: [] });
   const [project, setProject] = useState(blank),
     [error, setError] = useState(""),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [loading, setLoading] = useState(true);
   const [fact, setFact] = useState({
       text: "",
       source: "Owner note",
@@ -37,6 +64,7 @@ export default function WorkPage() {
   const [attachments, setAttachments] = useState([]),
     [code, setCode] = useState(""),
     [resume, setResume] = useState(null);
+  const pendingQuestions = useRef(new Map());
   const [job, setJob] = useState({
     worker_id: "",
     repository: "",
@@ -44,26 +72,37 @@ export default function WorkPage() {
     base_sha: "",
     patch: "",
   });
-  async function refresh() {
-    const [w, d] = await Promise.all([api("/work"), api("/desktop")]);
-    setData(w);
-    setDesktop(d);
-  }
-  async function run(fn) {
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [w, d] = await Promise.all([api("/work"), api("/desktop")]);
+      setData(w);
+      setDesktop(d);
+      setError("");
+      return { work: w, desktop: d };
+    } catch (e) {
+      const message = `Refresh failed: ${e.message || "Could not load projects and desktop activity."} Any previously loaded workspace details may be out of date.`;
+      setError(message);
+      throw new Error(message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  async function run(fn, shouldRefresh = true) {
     setBusy(true);
     setError("");
     try {
       await fn();
-      await refresh();
+      if (shouldRefresh) await refresh();
     } catch (e) {
-      setError(e.message);
+      setError(e.message || "That request could not be completed.");
     } finally {
       setBusy(false);
     }
   }
   useEffect(() => {
-    refresh().catch((e) => setError(e.message));
-  }, []);
+    refresh().catch(() => {});
+  }, [refresh]);
   function select(p) {
     setProject(p);
     setResume(null);
@@ -77,7 +116,7 @@ export default function WorkPage() {
   const facts = (data?.facts || []).filter((f) => f.project_id === project.id);
   const worker = desktop.workers.find((w) => w.id === job.worker_id);
   return (
-    <section className="ora-work">
+    <section className="ora-work" aria-busy={loading}>
       <header>
         <p className="eyebrow">YOUR WORK, REMEMBERED</p>
         <h1>Projects & desktop</h1>
@@ -85,7 +124,7 @@ export default function WorkPage() {
           Pick up where you left off. Keep decisions, evidence and next steps
           together.
         </p>
-        <button disabled={busy} onClick={() => run(refresh)}>
+        <button className="button secondary" type="button" disabled={busy || loading} onClick={() => run(refresh, false)}>
           Refresh activity
         </button>
       </header>
@@ -94,15 +133,21 @@ export default function WorkPage() {
           {error}
         </p>
       )}
+      {loading && !data ? (
+        <div className="work-panel"><p role="status">Loading your projects and desktop status…</p></div>
+      ) : !data ? (
+        <div className="work-panel"><p>Projects and desktop activity are not available yet.</p><button type="button" disabled={loading} onClick={() => refresh().catch(() => {})}>Retry</button></div>
+      ) : (
       <div className="work-layout">
         <aside className="work-panel">
           <h2>Your projects</h2>
-          <button disabled={busy} onClick={() => select(blank)}>
+          <button className="button secondary" type="button" disabled={busy} onClick={() => select(blank)}>
             + New project
           </button>
           {(data?.projects || []).map((p) => (
             <button
               key={p.id}
+              type="button"
               aria-pressed={p.id === project.id}
               disabled={busy}
               onClick={() => select(p)}
@@ -113,6 +158,8 @@ export default function WorkPage() {
           ))}
           <h3>Connections</h3>
           <button
+            className="button secondary"
+            type="button"
             disabled={busy}
             onClick={() =>
               run(async () =>
@@ -124,9 +171,8 @@ export default function WorkPage() {
           </button>
           {diagnostics?.checks.map((check) => (
             <p key={check.name}>
-              <strong>
-                {check.name}: {check.status}
-              </strong>
+              <strong>{check.name}: </strong>
+              <span className={`status-pill ${jobStatusTone(check.status)}`}>{check.status}</span>
               <br />
               {check.detail}
             </p>
@@ -209,13 +255,15 @@ export default function WorkPage() {
               />
               Archive project
             </label>
-            <button disabled={busy}>Save project</button>
+            <button className="button primary" type="submit" disabled={busy}>Save project</button>
           </form>
           {project.id && (
             <>
               <div className="work-panel">
                 <h2>Resume my work</h2>
                 <button
+                  className="button secondary"
+                  type="button"
                   disabled={busy}
                   onClick={() =>
                     run(async () =>
@@ -309,7 +357,7 @@ export default function WorkPage() {
                       }
                     />
                   </label>
-                  <button disabled={busy}>
+                  <button className="button primary" type="submit" disabled={busy}>
                     {fact.id ? "Save correction" : "Remember this"}
                   </button>
                 </form>
@@ -324,6 +372,8 @@ export default function WorkPage() {
                     </small>
                     <div>
                       <button
+                        className="button secondary"
+                        type="button"
                         disabled={busy}
                         onClick={() =>
                           setFact({
@@ -343,16 +393,17 @@ export default function WorkPage() {
                         Correct
                       </button>
                       <button
+                        className="button destructive"
+                        type="button"
                         disabled={busy}
-                        onClick={() =>
-                          run(() =>
-                            api("/work/facts", {
-                              ...f,
-                              deleted: true,
-                              request_id: uid(),
-                            }),
-                          )
-                        }
+                        onClick={() => {
+                          if (!window.confirm("Forget this project fact? It will be removed from future project context.")) return;
+                          run(() => api("/work/facts", {
+                            ...f,
+                            deleted: true,
+                            request_id: uid(),
+                          }));
+                        }}
                       >
                         Forget
                       </button>
@@ -376,6 +427,11 @@ export default function WorkPage() {
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (!file) return;
+                      if (file.size > 2 * 1024 * 1024) {
+                        setError("Files must be 2 MB or smaller. The attachment was not uploaded.");
+                        e.target.value = "";
+                        return;
+                      }
                       run(async () => {
                         const f = new FormData();
                         f.append("file", file);
@@ -412,8 +468,11 @@ export default function WorkPage() {
                         : ""}
                     </label>
                     <button
+                      className="button destructive"
+                      type="button"
                       disabled={busy}
-                      onClick={() =>
+                      onClick={() => {
+                        if (!window.confirm(`Remove “${d.name}” from this project? This deletes the saved attachment.`)) return;
                         run(async () => {
                           await api("/operations", {
                             kind: "document.delete",
@@ -421,8 +480,8 @@ export default function WorkPage() {
                             request_id: uid(),
                           });
                           setAttachments((a) => a.filter((x) => x !== d.id));
-                        })
-                      }
+                        });
+                      }}
                     >
                       Remove document
                     </button>
@@ -431,15 +490,30 @@ export default function WorkPage() {
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
+                    const question = { text: prompt, project_id: project.id, document_ids: attachments };
+                    const fingerprint = JSON.stringify(question);
                     run(async () => {
-                      const r = await api("/chat", {
-                        request_id: uid(),
-                        text: prompt,
-                        project_id: project.id,
-                        document_ids: attachments,
-                      });
-                      setReply(r.reply);
-                      setPrompt("");
+                      const storageKey = await workChatStorageKey(fingerprint);
+                      const request_id = pendingQuestions.current.get(fingerprint)
+                        || (storageKey ? saved(storageKey) : null)
+                        || uid();
+                      pendingQuestions.current.set(fingerprint, request_id);
+                      if (storageKey) {
+                        try { save(storageKey, request_id); } catch { /* Keep the in-memory retry ID if storage is unavailable. */ }
+                      }
+                      try {
+                        const r = await api("/chat", { request_id, ...question });
+                        pendingQuestions.current.delete(fingerprint);
+                        forgetWorkChatRequest(storageKey);
+                        setReply(r.reply);
+                        setPrompt("");
+                      } catch (requestError) {
+                        if (requestError.status && requestError.status < 500) {
+                          pendingQuestions.current.delete(fingerprint);
+                          forgetWorkChatRequest(storageKey);
+                        }
+                        throw requestError;
+                      }
                     });
                   }}
                 >
@@ -452,7 +526,7 @@ export default function WorkPage() {
                       onChange={(e) => setPrompt(e.target.value)}
                     />
                   </label>
-                  <button disabled={busy}>Ask ORA</button>
+                  <button className="button primary" type="submit" disabled={busy}>Ask ORA</button>
                 </form>
                 {reply && <ReactMarkdown>{reply}</ReactMarkdown>}
                 <small>
@@ -487,6 +561,8 @@ export default function WorkPage() {
           <div className="work-panel">
             <h2>Your computers</h2>
             <button
+              className="button primary"
+              type="button"
               disabled={busy}
               onClick={() =>
                 run(async () =>
@@ -506,19 +582,18 @@ export default function WorkPage() {
             {desktop.workers.map((w) => (
               <article key={w.id}>
                 <strong>{w.label}</strong>
-                <p>
-                  {w.revoked
-                    ? "Revoked"
-                    : w.online
-                      ? "Online"
-                      : "Offline — queued work waits"}
-                </p>
+                <p><span className={`status-pill ${w.revoked ? "danger" : w.online ? "success" : "warning"}`}>
+                  {w.revoked ? "Revoked" : w.online ? "Online" : "Offline — queued work waits"}
+                </span></p>
                 {!w.revoked && (
                   <button
+                    className="button destructive"
+                    type="button"
                     disabled={busy}
-                    onClick={() =>
-                      run(() => api("/desktop/revoke", { id: w.id }))
-                    }
+                    onClick={() => {
+                      if (!window.confirm(`Revoke ${w.label}? This stops future ORA desktop jobs for that computer. Existing local files are not removed.`)) return;
+                      run(() => api("/desktop/revoke", { id: w.id }));
+                    }}
                   >
                     Revoke worker
                   </button>
@@ -531,13 +606,14 @@ export default function WorkPage() {
               className="work-panel"
               onSubmit={(e) => {
                 e.preventDefault();
-                run(() =>
-                  api("/desktop/jobs", {
-                    ...job,
-                    project_id: project.id,
-                    request_id: uid(),
-                  }),
-                );
+                const workerLabel = worker?.label || "the selected computer";
+                const patchSummary = job.patch ? ` A ${job.patch.length}-character patch (base ${job.base_sha || "not specified"}) is attached; inspect the exact diff on the computer before approving.` : " No patch is attached.";
+                if (!window.confirm(`Queue “${job.check}” for ${job.repository} on ${workerLabel}?${patchSummary} This creates a queued request only; the local owner must review and approve it before any code runs.`)) return;
+                run(() => api("/desktop/jobs", {
+                  ...job,
+                  project_id: project.id,
+                  request_id: uid(),
+                }));
               }}
             >
               <h2>Queue a desktop check</h2>
@@ -617,7 +693,7 @@ export default function WorkPage() {
                   />
                 </label>
               </details>
-              <button disabled={busy}>Queue for local approval</button>
+              <button className="button primary" type="submit" disabled={busy}>Queue for local approval</button>
             </form>
           )}
           <div className="work-panel">
@@ -627,12 +703,13 @@ export default function WorkPage() {
               .reverse()
               .map((j) => (
                 <article key={j.id}>
-                  <strong>
-                    {j.repository} · {j.check} · {j.status}
-                  </strong>
+                  <strong>{j.repository} · {j.check}</strong>
+                  <p><span className={`status-pill ${jobStatusTone(j.status)}`}>{j.status}</span></p>
                   <small>Job: {j.id}</small>
                   {j.has_result && (
                     <button
+                      className="button secondary"
+                      type="button"
                       disabled={busy}
                       onClick={async () => {
                         setBusy(true);
@@ -668,10 +745,13 @@ export default function WorkPage() {
                   )}
                   {j.status === "queued" && (
                     <button
+                      className="button destructive"
+                      type="button"
                       disabled={busy}
-                      onClick={() =>
-                        run(() => api("/desktop/cancel", { id: j.id }))
-                      }
+                      onClick={() => {
+                        if (!window.confirm("Cancel this queued desktop job? The computer will no longer receive this request.")) return;
+                        run(() => api("/desktop/cancel", { id: j.id }));
+                      }}
                     >
                       Cancel queued job
                     </button>
@@ -681,6 +761,7 @@ export default function WorkPage() {
           </div>
         </div>
       </div>
+      )}
     </section>
   );
 }

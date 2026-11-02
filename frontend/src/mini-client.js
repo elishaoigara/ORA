@@ -1,7 +1,6 @@
-const base = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(
-  /\/$/,
-  "",
-);
+// Use same-origin requests by default so Vite can proxy /api to the backend and
+// deployed clients never ask the user's browser to reach its own localhost.
+const base = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 // The last ETag served for /sync. Re-syncing an unchanged workspace then costs a
 // bodyless 304 instead of the whole snapshot, which is the difference between a
 // few hundred bytes and a few hundred kilobytes on every poll.
