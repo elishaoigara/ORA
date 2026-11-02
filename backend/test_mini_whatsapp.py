@@ -143,5 +143,76 @@ class CompanionWhatsAppTests(unittest.TestCase):
         self.assertEqual(delivery_status(api.db().read())["whatsapp"], {"enabled": False})
 
 
+
+class WhatsAppIncomingTests(unittest.TestCase):
+    """The sidecar -> next_api callback must be authenticated and noise-free."""
+
+    setUp = fixtures.MiniTests.setUp
+    tearDown = fixtures.MiniTests.tearDown
+    op = fixtures.MiniTests.op
+    state = fixtures.MiniTests.state
+    phone = fixtures.MiniTests.phone
+
+    BRIDGE_TOKEN = "bridge-token-for-tests-1234"
+
+    def setUp(self):  # noqa: F811
+        fixtures.MiniTests.setUp(self)
+        self._old_token = os.environ.get("ORA_INTERNAL_TOKEN")
+        os.environ["ORA_INTERNAL_TOKEN"] = self.BRIDGE_TOKEN
+
+    def tearDown(self):  # noqa: F811
+        if self._old_token is None:
+            os.environ.pop("ORA_INTERNAL_TOKEN", None)
+        else:
+            os.environ["ORA_INTERNAL_TOKEN"] = self._old_token
+        fixtures.MiniTests.tearDown(self)
+
+    def link(self):
+        phone, device_id, _ = self.phone()
+        api.db().mutate(lambda s: s.update(telegram={"chat_id": 12345, "user_id": 12345}))
+        with patch("mini.telegram.token", return_value="test-bot"), \
+             patch("mini.companion.token", return_value="test-bot"):
+            self.assertEqual(self.op("companion.telegram", {"enabled": True}, phone).status_code, 200)
+        return phone, device_id
+
+    def post(self, payload, token=None):
+        headers = {"X-ORA-Token": self.BRIDGE_TOKEN if token is None else token}
+        return self.client.post("/api/whatsapp/incoming", json=payload, headers=headers)
+
+    def test_requires_bridge_token(self):
+        self.assertEqual(self.client.post("/api/whatsapp/incoming", json={"body": "urgent"}).status_code, 401)
+        self.assertEqual(self.post({"body": "urgent"}, token="wrong-token").status_code, 401)
+        os.environ["ORA_INTERNAL_TOKEN"] = "short"
+        self.assertEqual(self.post({"body": "urgent"}).status_code, 401)
+
+    def test_urgent_message_queues_generic_alert(self):
+        phone, _ = self.link()
+        response = self.post({"id": "254712345678@s.whatsapp.net", "fromName": "Alice",
+                              "body": "Please call me, it is urgent", "isGroup": False})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["queued"])
+        alerts = api.db().read()["alerts"]
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["title"], "ORA · Urgent WhatsApp message")
+        self.assertIn("Alice", alerts[0]["body"])
+        self.assertNotIn("Please call me", alerts[0]["body"])
+        self.assertNotIn("Please call me", str(self.state(phone)))
+
+    def test_routine_message_is_ignored(self):
+        self.link()
+        response = self.post({"id": "254712345678@s.whatsapp.net", "fromName": "Alice",
+                              "body": "see you at six"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["queued"])
+        self.assertEqual(api.db().read().get("alerts", []), [])
+
+    def test_duplicate_delivery_is_deduped(self):
+        self.link()
+        payload = {"id": "254712345678@s.whatsapp.net", "fromName": "Alice", "body": "saidia haraka"}
+        self.post(payload)
+        self.post(payload)
+        self.assertEqual(len(api.db().read()["alerts"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

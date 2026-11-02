@@ -670,6 +670,46 @@ def companion_tick(authorization: str = Header(default='')):
     return result
 
 
+_WA_IMPORTANT_WORDS = ('urgent', 'emergency', 'asap', 'help', 'call me', 'important',
+                      'haraka', 'saidia', 'piga simu')
+
+
+@app.post('/api/whatsapp/incoming')
+async def whatsapp_incoming(request: Request):
+    """Privacy-safe callback from whatsapp-sidecar for inbound messages.
+
+    Only messages that read as time-sensitive become a queued alert, so routine
+    WhatsApp traffic never turns into notification noise. The alert text is generic
+    and the queue is durable, so delivery survives a restart.
+    """
+    token = os.getenv('ORA_INTERNAL_TOKEN', '')
+    provided = request.headers.get('x-ora-token', '')
+    if len(token) < 16 or not hmac.compare_digest(provided.encode(), token.encode()):
+        raise HTTPException(401, 'Invalid bridge credentials.')
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, 'Invalid payload.')
+    if not isinstance(payload, dict):
+        raise HTTPException(400, 'Invalid payload.')
+    text = str(payload.get('body') or '')[:500]
+    if not text or not any(word in text.lower() for word in _WA_IMPORTANT_WORDS):
+        return {'ok': True, 'queued': False}
+    message_id = str(payload.get('id') or '')[:120] or digest(text)[:32]
+    sender = str(payload.get('fromName') or payload.get('from') or 'Someone')[:80]
+    source = f"the group {str(payload.get('groupName'))[:80]}" if payload.get('isGroup') else 'WhatsApp'
+    limited('wa-incoming', 20)
+
+    def queue(s):
+        alert(s, 'telegram-owner', f'whatsapp:{message_id}',
+              'ORA · Urgent WhatsApp message',
+              f'{sender} sent a message that reads as time-sensitive on {source}. Open ORA to review it.',
+              category='whatsapp')
+
+    db().mutate(queue)
+    return {'ok': True, 'queued': True}
+
+
 def tool_operation(state, kind, payload, request_id, auth):
     return apply_operation(state, Operation(kind=kind,payload=payload,request_id=request_id), auth)
 

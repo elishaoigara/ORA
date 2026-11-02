@@ -1,0 +1,21 @@
+{
+  "name": "ora-whatsapp-sidecar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal, authenticated WhatsApp bridge for ORA. Exposes the sidecar HTTP contract consumed by backend/connectors/whatsapp.py.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "baileys": "6.7.24",
+    "express": "^4.21.2",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4"
+  }
+}
