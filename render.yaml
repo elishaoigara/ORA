@@ -26,6 +26,7 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       # Optional WhatsApp owner notifications (requires the WA sidecar service).
+      # Points at the ora-whatsapp sidecar service below.
       - key: WA_SIDECAR_URL
         sync: false
       - key: WA_API_SECRET
@@ -40,3 +41,27 @@ services:
       - key: ORA_DAILY_AI_REQUESTS
         value: "100"
 
+
+  - type: web
+    name: ora-whatsapp
+    runtime: node
+    plan: free
+    rootDir: whatsapp-sidecar
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.22.3
+      # Must match the backend's WA_API_SECRET; the sidecar refuses weak or default values.
+      - key: WA_API_SECRET
+        sync: false
+      # Enables the inbound webhook back into the backend (X-ORA-Token).
+      - key: ORA_BACKEND_URL
+        sync: false
+      - key: ORA_INTERNAL_TOKEN
+        sync: false
+      # Optional: restores a linked session after a redeploy on an ephemeral disk.
+      - key: WA_SESSION_B64
+        sync: false
+      # Set to /data only when a persistent disk is mounted there.

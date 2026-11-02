@@ -1,10 +1,11 @@
-"""Bounded weather checks and durable Telegram alert delivery; invoked by external cron."""
+"""Bounded weather checks and durable Telegram/WhatsApp alert delivery; invoked by external cron."""
 import time
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import requests
 from fastapi import HTTPException
+from mini import whatsapp
 from mini.telegram import bot_call, token
 
 
@@ -72,7 +73,9 @@ def delivery_status(state):
     telegram = state.get('telegram', {})
     return {'channel': 'telegram', 'configured': bool(token()),
             'linked': type(telegram.get('chat_id')) is int and telegram['chat_id'] > 0,
-            'username': telegram.get('username')}
+            'username': telegram.get('username'),
+            # Booleans only: never expose the owner number or sidecar URL to clients.
+            'whatsapp': {'enabled': whatsapp.configured()}}
 
 
 def enabled(device, state):
@@ -111,9 +114,17 @@ def dispatch(db):
                 continue
             if not token() or quiet(s['settings']):
                 continue
+            # Stamp whatsapp_done at claim time — before any network I/O — so the
+            # WhatsApp mirror below runs at most once per alert even when a Telegram
+            # retry re-claims the row. Alerts dispatched before the sidecar was
+            # configured are never replayed to WhatsApp later.
+            wa_mirror = not a.get('whatsapp_done')
+            a['whatsapp_done'] = True
             a.update(attempts=a['attempts']+1, delivery='sending',
                      retry_at=time.time()+300, lease=uuid.uuid4().hex)
-            jobs.append(dict(a))
+            job = dict(a)
+            job['wa_mirror'] = wa_mirror
+            jobs.append(job)
             if len(jobs) >= 10:
                 break
         return jobs
@@ -128,6 +139,7 @@ def dispatch(db):
                 or current.get('telegram', {}).get('chat_id') != a['telegram_chat_id']):
             continue
         accepted = False
+        text = ''
         try:
             private = device.get('private_notifications', True)
             text = ('ORA · New update\nOpen ORA to read your update.' if private
@@ -137,6 +149,13 @@ def dispatch(db):
             accepted = isinstance(result, dict) and type(result.get('message_id')) is int
         except (HTTPException, requests.RequestException, ValueError, KeyError, TypeError):
             pass  # Never store exception URLs, bot tokens, or private chat IDs.
+        # Best-effort WhatsApp mirror of the same privacy-safe text. Isolated from the
+        # Telegram result: a sidecar outage must never change telegram delivery state.
+        if a.get('wa_mirror') and text and whatsapp.configured():
+            try:
+                whatsapp.notify(text)
+            except Exception:
+                pass
         def finish(s):
             row = next((x for x in s['alerts'] if x['id'] == a['id']), None)
             if not row or row.get('lease') != a['lease'] or row['delivery'] != 'sending':

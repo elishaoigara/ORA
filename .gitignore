@@ -25,6 +25,10 @@ backend/uploads/
 frontend/node_modules/
 frontend/dist/
 
+# WhatsApp sidecar
+whatsapp-sidecar/node_modules/
+whatsapp-sidecar/auth_state/
+
 # Logs and local tooling output
 *.log
 .pytest_cache/
