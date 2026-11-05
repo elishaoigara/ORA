@@ -72,7 +72,7 @@ pnpm install --frozen-lockfile
 pnpm android
 ```
 
-A native development/standalone build is required for the custom notification listener. Expo Go cannot validate it. Minimum Android version is 8 (API 26). A build recipe for an installable APK is included in `eas.json`; it requires your Expo account/project and Android signing credentials.
+A native development/standalone build is required for the custom notification listener. Expo Go cannot validate it. Minimum Android version is 8 (API 26). A build recipe for an installable APK is included in `eas.json`; it requires your Expo account/project and Android signing credentials. For the full step-by-step — prerequisites, building the APK, pairing it with a backend, first-run permissions and troubleshooting — see [build, install and pair the companion](docs/COMPANION_BUILD_AND_INSTALL.md).
 
 ## Checks
 

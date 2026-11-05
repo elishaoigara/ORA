@@ -2,7 +2,8 @@ import type { ExpoConfig } from "expo/config";
 const config: ExpoConfig = {
   name: "ORA Mini AI",
   slug: "ora-android-companion",
-  owner: "leo333",
+  // Override with EXPO_OWNER to build under a different Expo account.
+  owner: process.env.EXPO_OWNER || "leo333",
   version: "2.2.0",
   scheme: "ora",
   orientation: "portrait",
@@ -80,7 +81,14 @@ const config: ExpoConfig = {
   ],
   experiments: { typedRoutes: true },
   extra: {
-    eas: { projectId: "eeb08070-cabe-47bb-b2bb-3e9ef6533240" },
+    // Set EXPO_PUBLIC_EAS_PROJECT_ID in .env (local builds) or as an EAS
+    // environment variable to link a different Expo project. It feeds both EAS
+    // and the push-token project id read by lib/awareness-controls.ts.
+    eas: {
+      projectId:
+        process.env.EXPO_PUBLIC_EAS_PROJECT_ID ||
+        "eeb08070-cabe-47bb-b2bb-3e9ef6533240",
+    },
   },
 };
 export default config;
